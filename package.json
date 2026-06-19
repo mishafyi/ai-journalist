@@ -1,0 +1,56 @@
+{
+  "name": "ai-journalist",
+  "version": "0.1.0",
+  "description": "A domain-agnostic AI journalist / blog-generation engine behind hexagonal ports.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mishafyi/ai-journalist.git"
+  },
+  "homepage": "https://github.com/mishafyi/ai-journalist#readme",
+  "exports": {
+    ".": "./index.ts",
+    "./ports": "./ports.ts",
+    "./sources": "./sources/index.ts",
+    "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
+    "./clients/firecrawl-search": "./clients/firecrawl-search.ts"
+  },
+  "files": [
+    "*.ts",
+    "*.json",
+    "sources",
+    "clients",
+    "testing",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test:checks": "for f in $(find . -name '*.checks.ts' -not -path './node_modules/*'); do npx tsx \"$f\" || exit 1; done",
+    "test:example": "vitest run",
+    "test": "npm run test:checks && npm run test:example",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@openrouter/sdk": "^0.12.79",
+    "date-fns": "^4.1.0",
+    "firecrawl": "^4.25.2",
+    "p-limit": "^7.3.0",
+    "remark": "^15.0.1",
+    "remark-gfm": "^4.0.1",
+    "rss-parser": "^3.13.0",
+    "unist-util-visit": "^5.1.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^25.5.0",
+    "tsx": "latest",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
+  }
+}
