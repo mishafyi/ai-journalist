@@ -99,14 +99,14 @@ carrier — see [`examples/basic.ts`](./examples/basic.ts) (`npx tsx examples/ba
 ### Search backends
 
 The default `createFirecrawlSearch` client talks to a [Firecrawl](https://firecrawl.dev)
-instance. Point it at **Firecrawl Cloud**, or **self-host Firecrawl** — optionally
-backed by [**SearXNG**](https://github.com/searxng/searxng) as a free, self-hosted
-metasearch engine — and set the host via `FIRECRAWL_API_URL` (`apiUrl` is required;
-there is no baked-in default, so the engine ships brand-clean). SearXNG is **not** a
-dependency — just one backend option behind Firecrawl. Search is fully swappable: the
+instance, which provides its own web search. Point it at **Firecrawl Cloud** or a
+**self-hosted Firecrawl** via `FIRECRAWL_API_URL` (`apiUrl` is required; there is no
+baked-in default, so the engine ships brand-clean). Search is fully swappable: the
 client is only a reference adapter, so implementing the `SearchClient` port
-([`ports.ts`](./ports.ts)) lets you back search with anything (a different SaaS, an
-internal index, a static fixture for tests).
+([`ports.ts`](./ports.ts)) lets you back search with anything — a different SaaS, an
+internal index, a separate self-hosted metasearch like
+[**SearXNG**](https://github.com/searxng/searxng) (its own service, *not* a Firecrawl
+backend), or a static fixture for tests.
 
 ## "Plug any data in" — three layers of effort
 
