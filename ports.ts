@@ -1,5 +1,5 @@
 /**
- * blog-engine — the entire customization contract (hexagonal ports).
+ * ai-journalist — the entire customization contract (hexagonal ports).
  *
  * The engine is DOMAIN-AGNOSTIC: given a SIGNAL ("what's happening"), it
  * discovers a story, researches + writes it through the LLM/gate pipeline, and
@@ -317,7 +317,7 @@ export interface EngineInternals {
    *  these). Board generic resolved adapter-side, so this stays non-generic. */
   generate: (plan: Plan) => Promise<GeneratedArticle>;
   /** Slugify the chosen story title → the stable publish slug (the adapter's
-   *  `slugifyText`). Engine-pure: a pure `(s) => s` transform, no `@/`. */
+   *  `slugifyText`). Engine-pure: a pure `(s) => s` transform, host-free. */
   slugify: (title: string) => string;
   /** Wrap the finished GeneratedArticle → the engine's GeneratedPost envelope
    *  (byline + the run's gate telemetry). `topic` is the DISCOVERY story title
@@ -333,8 +333,8 @@ export interface EngineInternals {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// The pure entrypoint — (source, sink, config) → post. Imports no `@/`, no
-// prisma, no pathFor, no next. This signature is the engine's whole surface.
+// The pure entrypoint — (source, sink, config) → post. Imports nothing from a
+// host app, ORM, or framework. This signature is the engine's whole surface.
 // ───────────────────────────────────────────────────────────────────────────
 
 export interface RunInput {

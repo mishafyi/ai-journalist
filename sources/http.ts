@@ -21,7 +21,7 @@
  * body that itself fails to read doesn't mask the real status), not a swallow.
  *
  * Imports only `./ports` + `./schemas` + Node built-ins (`fetch`,
- * `AbortSignal`) — no `@/`, no `process.env`, no SDKs.
+ * `AbortSignal`) — nothing from a host app, no `process.env`, no SDKs.
  */
 import type {
   CoveredTopic,

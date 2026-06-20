@@ -7,7 +7,7 @@
  *  2. The shared antibot/paywall host skip-list — hosts that always reject the
  *     scraper (paywalled majors + `.mil`), so callers can skip them up front
  *     instead of burning scrape attempts. Mirrors `CHASE_SKIP_HOSTS` in
- *     generate.ts but extended to ALL news fetches, not just the primary-chase.
+ *     the host adapter but extended to ALL news fetches, not just the primary-chase.
  *
  * Google News RSS carries NO article body — only the headline + a redirect link
  * (the `<description>` is just the headline as an `<a>`). So RSS gives discovery
@@ -17,7 +17,7 @@ import Parser from "rss-parser";
 
 /**
  * The engine's STABLE default blocked-host list (paywalled majors). Suffix match
- * covers subdomains. The engine reads NO env: the adapter (generate.ts) owns the
+ * covers subdomains. The engine reads NO env: the adapter owns the
  * `BLOG_BLOCKED_HOSTS` override and passes the resolved list into `isBlockedHost`.
  */
 export const DEFAULT_BLOCKED_HOSTS: readonly string[] = [

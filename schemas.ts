@@ -1,5 +1,5 @@
 /**
- * blog-engine — Zod schemas validating the wire DTOs from `ports.ts` at the
+ * ai-journalist — Zod schemas validating the wire DTOs from `ports.ts` at the
  * boundary. HttpSource/FileSource run external JSON through these before it
  * reaches the engine, so a malformed signal/facts payload fails loud at the
  * seam instead of corrupting the pipeline.

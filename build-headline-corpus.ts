@@ -1,7 +1,7 @@
 /**
  * Build a corpus of real, editor-crafted headlines from top frontier-tech
  * publications — raw material + style exemplars for the generator's Title pass
- * (generate.ts `runTitle`). Writes headlines.json next to this script.
+ * (the headline pass's `runTitle`). Writes headlines.json next to this script.
  *
  * Two source kinds:
  *   - Publication RSS/Atom feeds — headlines written by professional desk
@@ -126,7 +126,7 @@ function isGood(t: string): boolean {
 
 async function fetchText(url: string): Promise<string> {
   const res = await fetch(url, {
-    headers: { "user-agent": "Mozilla/5.0 (blog-engine headline corpus)" },
+    headers: { "user-agent": "Mozilla/5.0 (headline corpus builder)" },
     signal: AbortSignal.timeout(20000),
   });
   if (!res.ok) throw new Error(`${res.status}`);

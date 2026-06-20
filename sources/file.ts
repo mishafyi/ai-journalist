@@ -10,8 +10,8 @@
  * `gatherFacts` is only exposed when `factsPath` is set, so a signal-only file
  * yields a signal-only Source.
  *
- * Imports only `./ports` + `./schemas` + the `node:fs/promises` built-in — no
- * `@/`, no `process.env`, no SDKs.
+ * Imports only `./ports` + `./schemas` + the `node:fs/promises` built-in —
+ * nothing from a host app, no `process.env`, no SDKs.
  */
 import { readFile } from "node:fs/promises";
 import type { DiscoverySignal, GroundingFacts, Source } from "../ports";

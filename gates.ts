@@ -1,23 +1,23 @@
 /**
- * blog-engine — the surgical gate / edit passes that run AFTER assembly, on the
+ * ai-journalist — the surgical gate / edit passes that run AFTER assembly, on the
  * finished article: the two editor reads (runEdit line-edit, runFinalEdit
  * managing-editor — also injected into assembly.ts's tieTogether), fact-guard,
  * the informational fact-check audit, the headline pass (with its full title-gate
  * suite), and SEO metadata derivation.
  *
- * Engine-pure: imports NOTHING from `@/`, prisma, or next — only sibling engine
- * modules (`./primitives`, `./ports`, `./run-context`). Every coupling these
- * passes had to `generate.ts`/`@/lib/openrouter` is injected through `GateDeps`:
- *   - `chatCompletion` → `deps.llm.complete` (the SAME wrapper-around-
- *     `@/lib/openrouter` generate.ts builds, so the shared usage meter + per-call
- *     BlogRunArtifact capture are preserved). The messages array the wrapper
+ * Engine-pure: imports NOTHING from a host app, ORM, or framework — only sibling
+ * engine modules (`./primitives`, `./ports`, `./run-context`). Every coupling these
+ * passes had to the host adapter / the host's LLM client is injected through `GateDeps`:
+ *   - `chatCompletion` → `deps.llm.complete` (the SAME wrapper-around-the-host's-
+ *     LLM-client the adapter builds, so the shared usage meter + per-call
+ *     artifact capture are preserved). The messages array the wrapper
  *     rebuilds is byte-identical to the old direct `chatCompletion([{role:"user",
  *     content:prompt}], {model, temperature})` call sites.
  *   - the `MODEL` constant → `deps.model`.
  *   - `withRetry` / the run telemetry carrier `ctx` → injected (`withRetry` stays
- *     a generate.ts primitive bound to that file's OpenRouter usage diff + ctx).
+ *     an adapter primitive bound to that file's LLM usage diff + ctx).
  *   - runTitle's extra couplings (the HEADLINES-backed exemplar sampler, the
- *     prisma prior-titles read, `embedDedupSurvivors`, its numeric knobs) →
+ *     host's prior-titles read, `embedDedupSurvivors`, its numeric knobs) →
  *     injected so the engine never reaches the headline corpus, the DB, or the
  *     embedding service directly.
  *
@@ -33,7 +33,7 @@ import { type RunContext } from "./run-context";
 import { trigramSimilarity } from "./primitives";
 
 /**
- * The minimal angle shape runTitle reads (generate.ts's richer `Angle` —
+ * The minimal angle shape runTitle reads (the adapter's richer `Angle` —
  * category/angle/hook/searchSeed/researchQueries — is structurally assignable).
  * Kept local so the engine doesn't depend on the orchestrator's interface.
  */
@@ -61,16 +61,16 @@ export const SeoMetaSchema = z.object({
 export type SeoMeta = z.infer<typeof SeoMetaSchema>;
 
 /**
- * The couplings the gate passes need, injected by the orchestrator (generate.ts)
- * so this module imports nothing back from it or from `@/`. `llm`/`model`/
- * `withRetry`/`ctx` serve every pass; the rest are runTitle-only.
+ * The couplings the gate passes need, injected by the orchestrator (the host
+ * adapter) so this module imports nothing back from it or from the host. `llm`/
+ * `model`/`withRetry`/`ctx` serve every pass; the rest are runTitle-only.
  */
 export interface GateDeps {
-  /** The shared OpenRouter-backed client (wraps generate.ts's own chatCompletion). */
+  /** The shared OpenRouter-backed client (wraps the adapter's own chatCompletion). */
   llm: LlmClient;
-  /** The BLOG_LLM_MODEL value (generate.ts's `MODEL`). */
+  /** The BLOG_LLM_MODEL value (the adapter's `MODEL`). */
   model: string;
-  /** generate.ts's retry+telemetry wrapper — exact signature, bound to its ctx. */
+  /** The adapter's retry+telemetry wrapper — exact signature, bound to its ctx. */
   withRetry: <T>(
     label: string,
     fn: () => Promise<T>,
@@ -78,10 +78,10 @@ export interface GateDeps {
   ) => Promise<T>;
   /** The per-run telemetry/artifact carrier (title-gate flags are written here). */
   ctx: RunContext;
-  /** Headline-corpus exemplars for a category (generate.ts folds corpusDomain +
+  /** Headline-corpus exemplars for a category (the adapter folds corpusDomain +
    *  sampleExemplars over its HEADLINES module data). runTitle-only. */
   gatherExemplars: (category: string, count: number) => string[];
-  /** Recent published titles (the prisma prior-titles read). runTitle-only. */
+  /** Recent published titles (the host's prior-titles read). runTitle-only. */
   fetchPriorTitles: () => Promise<string[]>;
   /** Embedding near-paraphrase dedup. Returns null when EMBEDDING_URL is unset.
    *  runTitle-only. */
@@ -211,7 +211,7 @@ ${article}`;
  * rates every factual claim in the FINISHED article against the raw research:
  * FOUND (in the research), DERIVABLE (follows by reasoning/arithmetic — e.g. a
  * total that is the sum of sourced awards), or NOT FOUND. Recorded to
- * BlogRunArtifact (stage "fact-check-audit") + a telemetry flag for human
+ * the host's artifact store (stage "fact-check-audit") + a telemetry flag for human
  * review after publish. Replaced the deterministic figure-grounding gate,
  * which could not tell a derived total ($627M = three sourced awards) from a
  * fabrication and so false-blocked publishes. Best-effort; never blocks.

@@ -1,5 +1,5 @@
 /**
- * blog-engine — the PUBLIC entry: `runPipeline(input: RunInput) → GeneratedPost`.
+ * ai-journalist — the PUBLIC entry: `runPipeline(input: RunInput) → GeneratedPost`.
  *
  * This is the engine's whole usable surface for an adopter. Given the four ports
  * (Source / Sink / Linker / EngineConfig — see ./ports), it runs BOTH phases

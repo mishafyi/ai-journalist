@@ -18,7 +18,7 @@
  * The `parser` is exposed on the returned object so callers (and tests) can
  * reach the configured instance; feeds are concatenated in order.
  *
- * Imports only `./ports` + the pure `rss-parser` lib — no `@/`, no SDKs.
+ * Imports only `./ports` + the pure `rss-parser` lib — nothing from a host app, no SDKs.
  */
 import Parser from "rss-parser";
 import type { DiscoverySignal, SignalItem, Source } from "../ports";

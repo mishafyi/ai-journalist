@@ -1,15 +1,15 @@
 /**
  * Pure text/markdown parsing utilities for the blog generator.
  *
- * This module is the PARSING layer extracted from generate.ts (2026-06-11
+ * This module is the PARSING layer extracted from the host adapter (2026-06-11
  * de-handroll pivot): sentence segmentation via Intl.Segmenter and markdown
  * structure via remark/mdast replace the bespoke regex NLP that accreted over
- * 17 review cycles. Decision logic stays in generate.ts — only the parsing
+ * 17 review cycles. Decision logic stays in the adapter — only the parsing
  * moved here.
  *
  * Contract: pure functions only — no side effects, no env reads, no DB, no
- * network. generate.ts runs main() on import, so tests import THIS module
- * directly (see text.checks.ts) and must never import generate.ts.
+ * network. The adapter runs main() on import, so tests import THIS module
+ * directly (see text.checks.ts) and must never import the adapter.
  */
 import { parse as parseDateFns, isValid } from "date-fns";
 import type { Heading, Link, Root } from "mdast";
@@ -113,7 +113,7 @@ export function countHeadings(md: string, depth: Heading["depth"]): number {
 /**
  * True when a depth-1 heading exists AFTER the document's first node — i.e.
  * an H1 that is not a document-leading title. A leading H1 is the draft-shape
- * title; any later H1 is in-body. NOTE: generate.ts's pre-persist assertion
+ * title; any later H1 is in-body. NOTE: the adapter's pre-persist assertion
  * deliberately uses `countHeadings(final, 1) > 0` instead — post-title-strip,
  * a LEADING H1 is also a failure (a sanitizer can promote a reintroduced H1
  * to position 0), so the lead-exempting form would weaken that gate.
@@ -180,7 +180,7 @@ function inQuotedSpan(line: string, index: number): boolean {
 
 // ─── Numeric figures (round-8 redesign) ─────────────────────────────────────
 // Numeric NORMALIZATION replaces the substring-needle equivalence classes that
-// accreted in generate.ts's findUngroundedFigures over 10 review cycles
+// accreted in the adapter's findUngroundedFigures over 10 review cycles
 // (k-suffix, percent-ranges, magnitude-ranges, M/B roundings both directions,
 // thousands-decimals, trailing zeros, comma forms — and still false-positived
 // in 5 of 10 cycles, each fix opening the mirrored direction). Every figure on
@@ -532,7 +532,7 @@ export function figureGrounded(fig: Figure, corpusFigures: Figure[]): boolean {
 
 /**
  * Raw strings of `article` figures with no grounded corpus counterpart,
- * dedup'd, in first-appearance order. The pure core of generate.ts's
+ * dedup'd, in first-appearance order. The pure core of the adapter's
  * findUngroundedFigures (which adds per-corpus caching).
  *
  * Rules beyond per-figure grounding:
@@ -646,7 +646,7 @@ export function dropRepeatedClauses(
 /**
  * Cosine similarity between two equal-length vectors — the similarity
  * primitive for the embedding meaning-cousin dedup (round-8 #8). Pure math,
- * no I/O (the vectors come from src/lib/embedding.ts in generate.ts); kept
+ * no I/O (the vectors come from the host's embedding client in the adapter); kept
  * here so the checks suite can pin its behavior with synthetic vectors.
  * Throws on length mismatch, empty, or zero-magnitude input — a degenerate
  * vector means the embedding service misbehaved; surfacing beats a silent 0.

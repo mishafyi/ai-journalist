@@ -1,10 +1,10 @@
 /**
  * Default `LlmClient` — OpenRouter via the official `@openrouter/sdk`.
  *
- * Faithful in-engine replica of the proprietary `src/lib/openrouter.ts`
+ * Faithful in-engine replica of the host's proprietary LLM client
  * (`chatCompletion` + `getOpenRouterUsage`/`recordUsage`). The engine is
- * domain-agnostic and imports NOTHING from `@/`, so this re-implements that
- * behaviour rather than importing it. `engine/clients/**` is the one area
+ * domain-agnostic and imports NOTHING from a host app, so this re-implements that
+ * behaviour rather than importing it. `clients/**` is the one area
  * permitted to touch the SDK + `process.env` (the API key).
  *
  * Three behaviours are load-bearing and replicated VERBATIM:
@@ -18,7 +18,7 @@
  *      "\n" runs). Returning "" would silently ship a no-op; throwing makes the
  *      blank retryable by the caller's `withRetry` wrapper.
  *
- * Usage accounting mirrors `openrouter.ts` (`requests` + the five token
+ * Usage accounting mirrors the host's LLM client (`requests` + the five token
  * counters), but is held PER CLIENT INSTANCE and exposed via `usage()` — the
  * golden test diffs a single run's telemetry, so a per-process global would
  * leak counts across runs.
@@ -30,7 +30,7 @@ import type { ZodType } from "zod";
 import type { LlmClient } from "../ports";
 
 /**
- * Default model — a STABLE id, matching `openrouter.ts`'s `DEFAULT_MODEL`.
+ * Default model — a STABLE id, matching the host's LLM client `DEFAULT_MODEL`.
  * Llama 3.3 70B Instruct (free): high-quality instruction-following for content
  * generation. Never `owl-alpha` (an unstable alias that returns "\n" runs).
  * @see https://openrouter.ai/meta-llama/llama-3.3-70b-instruct:free
@@ -57,7 +57,7 @@ export interface OpenRouterLlmClient extends LlmClient {
 
 /**
  * Accumulate the SDK's usage report (`ChatUsage`) into the running totals —
- * mirrors `recordUsage()` in `openrouter.ts`. Never discard observability data.
+ * mirrors `recordUsage()` in the host's LLM client. Never discard observability data.
  */
 function recordUsage(totals: OpenRouterUsageTotals, data: ChatResult): void {
   totals.requests += 1;
@@ -74,7 +74,7 @@ function recordUsage(totals: OpenRouterUsageTotals, data: ChatResult): void {
 
 /**
  * Replace raw control characters (code point < 0x20) with a space — mirrors
- * `stripJsonControlChars()` in `openrouter.ts`. Some models (owl-alpha) emit a
+ * `stripJsonControlChars()` in the host's LLM client. Some models (owl-alpha) emit a
  * literal newline/tab INSIDE a JSON string value, which `JSON.parse` rejects
  * even when the structure is valid; properly-escaped `\n` is ordinary
  * two-character text and is unaffected. Done without a regex to avoid the
@@ -88,7 +88,7 @@ function stripControlChars(s: string): string {
 
 /**
  * Build the default OpenRouter-backed `LlmClient`. `apiKey` falls back to
- * `OPENROUTER_API_KEY` (env access is permitted in `engine/clients/**`);
+ * `OPENROUTER_API_KEY` (env access is permitted in `clients/**`);
  * `defaultModel` must be a stable id and is used when a call omits `model`.
  */
 export function createOpenRouterLlm(opts: {

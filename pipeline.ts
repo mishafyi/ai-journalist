@@ -1,7 +1,7 @@
 /**
- * blog-engine — the section-research → gate-chain → finished-article ORCHESTRATOR.
+ * ai-journalist — the section-research → gate-chain → finished-article ORCHESTRATOR.
  *
- * `runGeneration(plan, deps)` is the carved body of generate.ts's old
+ * `runGeneration(plan, deps)` is the carved body of the host adapter's old
  * `runPipeline(plan)` (the ~705-line orchestration): synthesize the title Angle →
  * enrich (first-party board data) → write each section (research + write) →
  * assemble + editor tie-together → the deterministic gate chain (fact-guard →
@@ -10,8 +10,8 @@
  * persist live in the adapter's main(), unchanged — this returns the Article.
  *
  * Engine-pure: imports ONLY sibling engine modules (./assembly, ./section-writer,
- * ./gates, ./planning, ./ports, ./run-context, ./text) — NOTHING from `@/`,
- * prisma, pathFor, or next. Every proprietary coupling is injected through
+ * ./gates, ./planning, ./ports, ./run-context, ./text) — NOTHING from a host app,
+ * ORM, or framework. Every proprietary coupling is injected through
  * `PipelineDeps`:
  *   - The single LLM client (`deps.llm`, wrapping the adapter's chatCompletion) +
  *     `deps.withRetry` drive the 9 inline surgical-fix passes (em-dash / table /
@@ -19,11 +19,12 @@
  *     prompts (locked by pipeline.checks.ts).
  *   - `deps.gateDeps` carries the gate passes already moved into ./gates (8c);
  *     this calls runFactGuard/runTitle/runSeo/runFactCheckAudit through it.
- *   - The `@/`-coupled DATA + LINK + TELEMETRY tail stays adapter-side and is
- *     injected: the enrich gathers, the DataGod block, entity-resolve, the three
- *     linkers (linkEntities / withInternalLinks / enforceLinkIntegrity), the
- *     artifact + IngestLog writers, and the pure text/format helpers generate.ts
- *     still owns (lengthSafe / stripPreambleAndFence / boardJobsLine / …).
+ *   - The host's DATA + LINK + TELEMETRY tail stays adapter-side and is
+ *     injected: the first-party data gathers, the US-government primary block,
+ *     entity-resolve, the three linkers (linkEntities / withInternalLinks /
+ *     enforceLinkIntegrity), the artifact + run-log writers, and the pure
+ *     text/format helpers the adapter still owns (lengthSafe /
+ *     stripPreambleAndFence / boardJobsLine / …).
  *   - `deps.ctx` is a per-run telemetry carrier exposed via a getter on the
  *     adapter side (resetRunState swaps it between scheduler runs).
  *
@@ -61,24 +62,24 @@ import {
 } from "./text";
 
 // ───────────────────────────────────────────────────────────────────────────
-// Structural data shapes the orchestrator reads. The adapter's concrete enrich
-// types (CompanyFreshJobs / LinkEntity / SiteData — which carry the prisma
-// CompanyIndustry enum) structurally satisfy these, so the engine never imports
-// the enum.
+// Structural data shapes the orchestrator reads. The adapter's concrete
+// first-party-data types (CompanyFreshJobs / LinkEntity / SiteData — which carry
+// the adapter's own industry enum) structurally satisfy these, so the engine
+// never imports the enum.
 // ───────────────────────────────────────────────────────────────────────────
 
-/** A linkable on-site entity (the adapter's enrich `LinkEntity`). */
+/** A linkable on-site entity (the adapter's first-party-data `LinkEntity`). */
 export interface PipelineLinkEntity {
   name: string;
   url: string;
 }
 
 /** One company's live board data — the FIELDS the orchestrator reads (the
- *  adapter's enrich `CompanyFreshJobs` carries these plus `companySlug`,
+ *  adapter's first-party-data `CompanyFreshJobs` carries these plus `companySlug`,
  *  `industry`, and `jobs[].slug`). `PipelineDeps`/`runGeneration` are generic
  *  over the adapter's concrete board type (`TBoard extends PipelineBoardCompany`)
  *  so the richer type round-trips through the board-typed deps WITHOUT a cast or
- *  the engine importing the prisma `CompanyIndustry` enum; `boardJobsLine`
+ *  the engine importing the adapter's industry enum; `boardJobsLine`
  *  (injected) formats the fields the engine doesn't read. */
 export interface PipelineBoardCompany {
   company: string;
@@ -91,7 +92,7 @@ export interface PipelineBoardCompany {
   }[];
 }
 
-/** First-party site inventory totals (the adapter's enrich `SiteData`). */
+/** First-party site inventory totals (the adapter's first-party-data `SiteData`). */
 export interface PipelineSiteData {
   companies: PipelineLinkEntity[];
   people: PipelineLinkEntity[];
@@ -119,10 +120,10 @@ export interface GeneratedArticle {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// The injected couplings. Everything `@/`-coupled or generate.ts-resident that
-// the orchestration body touches, plus the env knobs + the three meta-prose
-// regexes (shared with the adapter's pure helpers). The engine calls each as an
-// opaque reference, so the private side can never leak into this module.
+// The injected couplings. Everything host-resident that the orchestration body
+// touches, plus the env knobs + the three meta-prose regexes (shared with the
+// adapter's pure helpers). The engine calls each as an opaque reference, so the
+// private side can never leak into this module.
 // ───────────────────────────────────────────────────────────────────────────
 export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
   // ── LLM + retry (the 9 inline surgical-fix passes) ──
@@ -145,7 +146,7 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
   /** Per-run telemetry/artifact carrier (a getter on the adapter — always LIVE). */
   ctx: RunContext;
 
-  // ── first-party DATA (the `@/`-coupled enrich gathers + DataGod) ──
+  // ── first-party DATA (the host's first-party data gathers) ──
   gatherSiteData: (
     category: string,
     limit: number,
@@ -170,7 +171,7 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
     companies: string[],
   ) => Promise<string>;
 
-  // ── entity-linking + integrity tail (the `@/`/pathFor/prisma side) ──
+  // ── entity-linking + integrity tail (the host's data/link/telemetry side) ──
   resolveArticleEntities: (
     article: string,
     boardData: TBoard[],
@@ -192,7 +193,7 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
     stats: unknown;
   }>;
 
-  // ── pure text/format helpers the adapter still owns (no `@/`) ──
+  // ── pure text/format helpers the adapter still owns (host-free) ──
   /** Format one company's board line (adapter's boardJobsLine). */
   boardJobsLine: (b: TBoard) => string;
   /** US-lean location filter (adapter's usLeanLocations). */
@@ -219,7 +220,7 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
   /** Short corporate-suffix form of a name, or null (adapter's shortForm). */
   shortForm: (name: string) => string | null;
 
-  // ── artifact + IngestLog telemetry (the prisma/IngestLog side) ──
+  // ── artifact + run-log telemetry (the host's telemetry side) ──
   /** Record a per-stage artifact (adapter's recordArtifact → ctx). */
   recordArtifact: (
     stage: string,
@@ -227,7 +228,7 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
     output: string,
     stat?: { promptTokens?: number; completionTokens?: number; ms?: number },
   ) => void;
-  /** Persist a run event (adapter's logIngestEvent). Best-effort. Reuses the
+  /** Persist a run event (adapter's run-event logger). Best-effort. Reuses the
    *  engine's `BlogRunEvent` (the same shape discovery.ts/section-writer emit). */
   onEvent: (event: BlogRunEvent) => Promise<void>;
 
@@ -281,7 +282,7 @@ type BlogOnError = (
  *
  * Generic over the adapter's concrete board-company type (`TBoard`) so its
  * richer `CompanyFreshJobs` round-trips through the board-typed deps without a
- * cast or the engine importing the prisma enum (inferred from `deps`).
+ * cast or the engine importing the adapter's industry enum (inferred from `deps`).
  */
 export async function runGeneration<TBoard extends PipelineBoardCompany>(
   plan: Plan,
@@ -344,8 +345,8 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   );
   // Companies named in the PLAN (title + angle + section headings/intents) get
   // their live postings fed to the sections as citable first-party data — an
-  // article about SpaceX hiring should cite our own fresh postings, not only
-  // third-party counts. Case-sensitive proper-noun match over the plan's
+  // article about a company's hiring should cite the site's own fresh postings,
+  // not only third-party counts. Case-sensitive proper-noun match over the plan's
   // sentence-case text; matched companies feed the section board-facts AND the
   // closing CTA, so prose-colliding short names are excluded via the same
   // stoplist the entity-linker uses (R6C9: "Boom" matched "…Automation Boom…").
@@ -407,9 +408,9 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
         .join(", ")}\n`,
     );
   }
-  // US-government primary data (DataGod gateway: USAspending federal awards
-  // for the named companies + the category's verified BLS labor series) —
-  // tier-1 grounding for the contract and wage figures the press re-tells.
+  // US-government primary data (the host's primary-source gateway: USAspending
+  // federal awards for the named companies + the category's verified BLS labor
+  // series) — tier-1 grounding for the contract and wage figures the press re-tells.
   // Best-effort: "" when keyless or failed; appended to BOTH the verified
   // facts (so outline + draft can use it) and the ground truth (so citing it
   // passes the figure gate and the fact-guard's primary-source rule).
@@ -472,7 +473,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   process.stdout.write(
     "  [4/6] fact-guard (strip unsupported individuals)...\n",
   );
-  // The guard's ground truth must include our OWN board data — without it the
+  // The guard's ground truth must include the brand's OWN board data — without it the
   // guard strips first-party citations ("<brand>'s board lists 215
   // Anduril roles") as unsupported numbers (it did exactly that in cycle 5).
   // Formatting goes through boardJobsLine — field parity with the draft's
@@ -484,7 +485,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
         .join("\n")}`
     : "";
   // Site-inventory totals are first-party too, and ALWAYS in the draft prompt
-  // ("We track N open roles across M companies") — drafts cite them
+  // ("<brand> tracks N open roles across M companies") — drafts cite them
   // legitimately, but they were absent from groundTruth, so the grounding
   // gate flagged e.g. "11,475" as ungrounded.
   const boardTruth = `${boardFactsTruth}\n\n## FIRST-PARTY SITE INVENTORY (${brandName}'s own totals — verified): ${brandName} tracks ${site.jobCount} open ${site.domain.label} roles across ${site.companyCount} companies; the site features ${site.companies.length} companies and ${site.people.length} notable people in this domain.`;
@@ -923,9 +924,9 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
     }
   }
   // First-party claim verifier (R7C5: Levels.fyi widget rows shipped as
-  // "<brand>'s job board data" with ranges OUR OWN DB contradicts —
+  // "<brand>'s job board data" with ranges the brand's OWN DB contradicts —
   // brand-falsifying provenance no other gate covers). Every $-figure in a
-  // sentence naming our brand must trace to boardTruth alone.
+  // sentence naming the brand must trace to boardTruth alone.
   {
     const boardNorm = boardTruth.replace(/[,\s]/g, "").toLowerCase();
     const brandNameRe = new RegExp(
@@ -1268,7 +1269,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   recordArtifact("final-article", linkedFinal, linkGate.content);
   // Soft fact-check audit (informational, NEVER a gate): rate every claim in
   // the published article against the research for manual review. The full
-  // table is captured to BlogRunArtifact (stage "fact-check-audit") via
+  // table is captured to the host's artifact store (stage "fact-check-audit") via
   // withRetry's input hook; here we just flag that it ran. Best-effort — a
   // failure must never block or fail the run.
   try {

@@ -1,13 +1,13 @@
 /**
- * blog-engine — per-run telemetry / artifact state, held in a passed object
+ * ai-journalist — per-run telemetry / artifact state, held in a passed object
  * instead of module globals.
  *
  * Every full blog run accumulates three things: a stable run id (groups the
- * run's IngestLog rows in the admin Logs tab), a `RunTelemetry` record
+ * run's log rows in the host's logging UI), a `RunTelemetry` record
  * (discovery decisions, per-call LLM usage, retries, final article metrics),
- * and a list of per-stage `RunArtifact`s (provenance, flushed to BlogRunArtifact
- * at run end). Previously these lived as module-level globals in
- * `generate.ts`; threading them through a `RunContext` is the prerequisite for
+ * and a list of per-stage `RunArtifact`s (provenance, flushed to the host's
+ * artifact store at run end). Previously these lived as module-level globals in
+ * the host adapter; threading them through a `RunContext` is the prerequisite for
  * moving the gate passes into the engine (they write to this state).
  *
  * Engine-pure: imports nothing from a host app, ORM, or framework. The run id is
@@ -25,7 +25,7 @@ export interface LlmCallStat {
 }
 
 /**
- * The run's telemetry record. One IngestLog row per run carries this verbatim
+ * The run's telemetry record. One log row per run carries this verbatim
  * (runId-grouped) — discovery decisions, per-call LLM usage (the SDK's usage
  * field — never discarded), every retry, and final article metrics.
  */
@@ -42,8 +42,8 @@ export interface RunTelemetry {
 
 /**
  * One per-stage artifact (provenance). Accumulated like `telemetry.llmCalls`
- * and flushed to BlogRunArtifact at run end. runId + slug are stamped at write
- * time (persist step), so capture sites stay decoupled from run identity.
+ * and flushed to the host's artifact store at run end. runId + slug are stamped
+ * at write time (persist step), so capture sites stay decoupled from run identity.
  */
 export interface RunArtifact {
   stage: string;
@@ -61,7 +61,7 @@ export interface RunArtifact {
  * write closures every site uses; the same data is produced, just stored here.
  */
 export interface RunContext {
-  /** Current run id — for phase modules that share this run's IngestLog rows. */
+  /** Current run id — for phase modules that share this run's log rows. */
   readonly runId: string;
   /** The mutable telemetry record (read + field writes both go through this). */
   readonly telemetry: RunTelemetry;

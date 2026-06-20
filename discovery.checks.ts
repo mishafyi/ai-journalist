@@ -3,9 +3,9 @@
  *
  * Covers:
  *  - the PURE anti-repetition decision (titleCollidesLexically), and
- *  - the BYTE-LOCK that severs the engine↔scripts (enrich) coupling: discovery
+ *  - the BYTE-LOCK that severs the engine↔host data-gathering coupling: discovery
  *    now reads the domain-agnostic `DiscoverySignal` via `buildSignalText`,
- *    while generate.ts's adapter folds BoardSignal+JobsCorpus into it. The
+ *    while the host adapter folds BoardSignal+JobsCorpus into it. The
  *    golden guard replays LLM *outputs* by call-order, so it does NOT catch a
  *    changed query-gen PROMPT. This check does: it reconstructs the OLD
  *    `buildJobsSignal(board, corpus)` string verbatim (the byte reference),
@@ -178,9 +178,9 @@ SAMPLE POSTINGS (raw, truncated):
 ${excerpt}`;
 }
 
-// ADAPTER — `boardToSignal(board, corpus)` reproduced (generate.ts is `@/`-bound
-// and runs main() on import, so it can't be imported here; this replica mirrors
-// it 1:1 and the check locks engine(replica) === old-prompt).
+// ADAPTER — `boardToSignal(board, corpus)` reproduced (the host adapter is
+// host-bound and runs main() on import, so it can't be imported here; this replica
+// mirrors it 1:1 and the check locks engine(replica) === old-prompt).
 function refBoardToSignal(board: RefBoard, corpus: RefCorpus): DiscoverySignal {
   const items: SignalItem[] = board.topCompanies.map((c) => ({
     title: c.name,

@@ -3,8 +3,8 @@
  * ports — the injectable seam the golden guard (Task 5) depends on.
  *
  * No record/replay library exists in the repo, so this is a thin port-level
- * wrapper over `node:crypto` (mirroring `src/lib/contentHash.ts`'s
- * `createHash("sha256")` usage). The engine is deterministic given fixed LLM +
+ * wrapper over `node:crypto` (the standard `createHash("sha256")`
+ * primitive). The engine is deterministic given fixed LLM +
  * search outputs, so a recorded fixture lets the golden test run the WHOLE
  * pipeline with zero network and assert byte-stable output.
  *
@@ -14,7 +14,7 @@
  *          (a new prompt, a changed query) surfaces loudly instead of silently
  *          hitting the network or returning stale data.
  *
- * `engine/testing/**` shares `engine/clients/**`'s SDK/env exemption — but this
+ * `testing/**` shares `clients/**`'s SDK/env exemption — but this
  * file touches neither; it only wraps the ports.
  */
 import { createHash } from "node:crypto";

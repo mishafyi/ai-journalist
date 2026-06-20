@@ -5,7 +5,7 @@
  * REQUIRED — pass it explicitly or set `FIRECRAWL_API_URL` (e.g. the public
  * Firecrawl cloud, or your self-hosted host / keyed proxy). There is no built-in
  * default host, so the engine ships brand-clean.
- * `engine/clients/**` is the one area permitted to touch the SDK + `process.env`.
+ * `clients/**` is the one area permitted to touch the SDK + `process.env`.
  *
  * Response mapping (the SDK's field names differ from the port's):
  *   SDK `SearchResultWeb.description` → port `SearchResult.snippet`
@@ -34,7 +34,7 @@ interface FirecrawlWebHit {
  * Build the default Firecrawl-backed `SearchClient`. `apiKey` falls back to
  * `FIRECRAWL_API_KEY`; `apiUrl` falls back to `FIRECRAWL_API_URL` and is
  * REQUIRED — throws if neither is set (env access is permitted in
- * `engine/clients/**`). No host is hardcoded, so the engine ships brand-clean.
+ * `clients/**`). No host is hardcoded, so the engine ships brand-clean.
  */
 export function createFirecrawlSearch(opts: {
   apiKey?: string;

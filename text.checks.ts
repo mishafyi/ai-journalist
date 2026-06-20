@@ -1,7 +1,7 @@
 /**
  * Behavioral checks for text.ts — the blog generator's parsing layer.
  *
- * Run directly (no test framework — generate.ts runs main() on import, so the
+ * Run directly (no test framework — the host adapter runs main() on import, so the
  * suite imports text.ts ONLY; deliberately named *.checks.ts, NOT *.test.ts,
  * so vitest's `**​/*.test.ts` CI glob never picks it up):
  *
@@ -390,7 +390,7 @@ eq(
 // The figure-gate incident regression matrix (round-8 redesign): one labeled
 // check per real incident the old substring-needle gate mishandled. These
 // labels ARE the institutional record — the needle-expansion blocks that
-// carried the R5-R7 comments in generate.ts were deleted in favor of numeric
+// carried the R5-R7 comments in the adapter were deleted in favor of numeric
 // normalization, and this matrix pins every behavior they encoded.
 
 // Compact figure signature: "unit:value" with "~" marking range endpoints.
@@ -398,7 +398,7 @@ const figs = (text: string): string[] =>
   extractFigures(text).map(
     (f) => `${f.unit}:${String(f.value)}${f.approx === true ? "~" : ""}`,
   );
-// Mirrors generate.ts findUngroundedFigures (which adds per-corpus caching +
+// Mirrors the adapter's findUngroundedFigures (which adds per-corpus caching +
 // article-side URL stripping) with the production 200-char USD-range window.
 const ungrounded = (article: string, corpus: string): string[] =>
   findUngroundedFigureRaws(article, extractFigureSpans(corpus), 200);

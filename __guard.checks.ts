@@ -1,12 +1,12 @@
 /**
- * Domain-leak / purity AST guard for the blog engine CORE.
+ * Domain-leak / purity AST guard for the engine CORE.
  * Run: npx tsx __guard.checks.ts
  *
  * A portable purity check (no external tooling needed) that FAILS CI if the
  * engine core re-acquires either of:
  *
  *   1. a `process.env` read — the core must be env-free; the host adapter
- *      supplies config via `EngineConfig.knobs`. (`engine/clients/**` may read
+ *      supplies config via `EngineConfig.knobs`. (`clients/**` may read
  *      env for SDK API keys, so it is excluded.)
  *   2. an `owl-alpha` MODEL-ID LITERAL — a quoted string such as
  *      `"openrouter/owl-alpha"`. owl-alpha is an unstable alias that returns

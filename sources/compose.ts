@@ -12,7 +12,7 @@
  * authoritative to a single owner; the signal is the one thing it makes sense
  * to pool across sources.
  *
- * Imports only `./ports` — no `@/`, no SDKs.
+ * Imports only `./ports` — nothing from a host app, no SDKs.
  */
 import type {
   CoveredTopic,

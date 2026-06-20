@@ -18,10 +18,10 @@
  * a placeholder + an injected onError log — one bad section never sinks the
  * whole article.
  *
- * This module is engine-local and `@/`-free: the LLM client, research /
+ * This module is engine-local and host-free: the LLM client, research /
  * system-prompt / retry helpers, and the error logger are INJECTED through
- * `SectionWriterDeps` (built by generate.ts), so this module imports nothing
- * back from generate.ts — no import cycle.
+ * `SectionWriterDeps` (built by the host adapter), so this module imports nothing
+ * back from the adapter — no import cycle.
  */
 import pLimit from "p-limit";
 import { type Plan, type PlanSection } from "./planning";
@@ -29,8 +29,8 @@ import { type LlmClient } from "./ports";
 
 /**
  * The research / system-prompt / retry helpers Phase 2 needs, injected by the
- * orchestrator (generate.ts) so this module stays off the `./generate` import
- * graph. Each is generate.ts's own function/client, unchanged. `gatherResearch`'s
+ * orchestrator (the host adapter) so this module stays off the adapter's import
+ * graph. Each is the adapter's own function/client, unchanged. `gatherResearch`'s
  * return is typed to the `block` field this module reads (its full shape carries
  * `sources` too, structurally compatible).
  *
@@ -39,7 +39,7 @@ import { type LlmClient } from "./ports";
  * reads. `onError` is a thin wrapper over the run error logger.
  *
  * The tunable knobs (model + per-section snippet budget + section concurrency)
- * are INJECTED — the engine reads no env; the adapter (generate.ts) binds the
+ * are INJECTED — the engine reads no env; the adapter binds the
  * `BLOG_*` env vars to these (defaults in parens) so behavior is unchanged.
  * `sectionConcurrency` is passed from here into `writeAllSections` (its only use).
  */
@@ -190,7 +190,7 @@ type SectionErrorLogger = (
  * becomes a placeholder + onError log — never crashes the article. `write` is
  * injected (a closure over writeOneSection in production) so the order/failure
  * behavior is unit-testable without network; `onError` is the injected run error
- * logger (generate.ts wraps logBlogError). `concurrency` is injected too — the
+ * logger (the adapter wraps its own error logger). `concurrency` is injected too — the
  * engine reads no env.
  */
 export async function writeAllSections(

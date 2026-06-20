@@ -11,15 +11,15 @@
  *               NOT wrapped in lengthSafe — that ratio guard is for the surgical
  *               gate passes that follow, which must stay ~1:1.
  *
- * The two editor passes are INJECTED through `AssemblyDeps` (built by
- * generate.ts) so this module imports nothing back from generate.ts — no cycle.
+ * The two editor passes are INJECTED through `AssemblyDeps` (built by the host
+ * adapter) so this module imports nothing back from the adapter — no cycle.
  */
 import { type Plan } from "./planning";
 
 /**
- * The editor passes Phase 3 needs, injected by the orchestrator (generate.ts) so
- * this module stays off the `./generate` import graph. Each is generate.ts's own
- * function, unchanged.
+ * The editor passes Phase 3 needs, injected by the orchestrator (the host
+ * adapter) so this module stays off the adapter's import graph. Each is the
+ * adapter's own function, unchanged.
  */
 export interface AssemblyDeps {
   runEdit: (draft: string) => Promise<string>;
