@@ -1,8 +1,8 @@
 /**
  * ai-journalist — pure, brand-free text primitives (no singletons, no clients,
  * no DB, no prompts). These are the anti-repetition adjudicators shared by the
- * discovery flow; they import NOTHING (an ESLint boundary keeps the engine free
- * of host-app, ORM, and framework imports), so the engine and any host-side
+ * discovery flow; they import NOTHING (the AST purity guard keeps the engine
+ * free of host-app, ORM, and framework imports), so the engine and any host-side
  * orchestrator can share one implementation.
  */
 

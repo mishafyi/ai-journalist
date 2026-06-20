@@ -14,8 +14,8 @@ data source.
 
 Engine code imports **nothing** from a host app, ORM, or framework — everything
 domain-specific is injected through the ports in [`ports.ts`](./ports.ts). An
-ESLint boundary rule + an AST purity guard enforce this in CI, so a host's
-private side can never leak into the engine.
+AST purity guard enforces this in CI, so a host's private side can never leak
+into the engine.
 
 ## Install
 

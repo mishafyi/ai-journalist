@@ -4,9 +4,9 @@
  * The engine is DOMAIN-AGNOSTIC: given a SIGNAL ("what's happening"), it
  * discovers a story, researches + writes it through the LLM/gate pipeline, and
  * emits a finished post. Everything proprietary is injected through the ports
- * below. Engine code imports NOTHING from `@/`, `prisma`, `pathFor`, or `next`
- * — an ESLint boundary rule enforces it, so the private side can never leak
- * into the OSS engine.
+ * below. Engine code imports NOTHING from a host app, ORM, or framework — an
+ * AST purity guard (`__guard.checks.ts`) enforces it, so the private side can
+ * never leak into the engine.
  *
  * ── "Plug any data in" — the primary requirement, three layers of effort ──
  *

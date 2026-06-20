@@ -2,9 +2,8 @@
  * Domain-leak / purity AST guard for the blog engine CORE.
  * Run: npx tsx __guard.checks.ts
  *
- * Companion to the ESLint boundary override in eslint.config.mjs. This is a
- * portable check (no ESLint needed) that FAILS CI if the engine core
- * re-acquires either of:
+ * A portable purity check (no external tooling needed) that FAILS CI if the
+ * engine core re-acquires either of:
  *
  *   1. a `process.env` read — the core must be env-free; the host adapter
  *      supplies config via `EngineConfig.knobs`. (`engine/clients/**` may read
