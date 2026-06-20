@@ -4,12 +4,33 @@
   "description": "A domain-agnostic AI journalist / blog-generation engine behind hexagonal ports.",
   "type": "module",
   "license": "MIT",
+  "author": "Zero G Talent",
   "main": "./index.ts",
+  "keywords": [
+    "ai",
+    "llm",
+    "blog",
+    "content-generation",
+    "journalism",
+    "article-writing",
+    "hexagonal-architecture",
+    "ports-and-adapters",
+    "openrouter",
+    "firecrawl",
+    "typescript",
+    "esm"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mishafyi/ai-journalist.git"
   },
+  "bugs": {
+    "url": "https://github.com/mishafyi/ai-journalist/issues"
+  },
   "homepage": "https://github.com/mishafyi/ai-journalist#readme",
+  "engines": {
+    "node": ">=20"
+  },
   "exports": {
     ".": "./index.ts",
     "./ports": "./ports.ts",
@@ -32,8 +53,7 @@
     "typecheck": "tsc --noEmit",
     "test:checks": "for f in $(find . -name '*.checks.ts' -not -path './node_modules/*'); do npx tsx \"$f\" || exit 1; done",
     "test:example": "vitest run",
-    "test": "npm run test:checks && npm run test:example",
-    "lint": "eslint ."
+    "test": "npm run test:checks && npm run test:example"
   },
   "dependencies": {
     "@openrouter/sdk": "^0.12.79",

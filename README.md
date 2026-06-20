@@ -1,5 +1,10 @@
 # AI Journalist
 
+[![CI](https://github.com/mishafyi/ai-journalist/actions/workflows/ci.yml/badge.svg)](https://github.com/mishafyi/ai-journalist/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-43853d.svg)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.0-3178c6.svg)](https://www.typescriptlang.org/)
+
 **An AI journalist behind hexagonal ports — plug in any data source, get a finished article out.**
 
 A **domain-agnostic** blog-generation pipeline: given a _signal_ ("what's
@@ -14,12 +19,17 @@ private side can never leak into the engine.
 
 ## Install
 
+Not yet published to npm — install from GitHub (or clone the repo):
+
 ```bash
-npm i ai-journalist
+npm i github:mishafyi/ai-journalist
+# once published to npm:
+# npm i ai-journalist
 ```
 
-Peer runtime: Node 22+. The engine is ESM (`"type": "module"`) and ships as
-TypeScript source — consume it via `tsx`, or your own bundler. Its npm deps are
+Peer runtime: Node 20+ (CI tests Node 20 + 22). The engine is ESM
+(`"type": "module"`) and ships as TypeScript source — consume it via `tsx`, or
+your own bundler. Its npm deps are
 `zod`, `p-limit`, `@openrouter/sdk`, `firecrawl`, `rss-parser`, `date-fns`,
 `remark` + `remark-gfm` + `unist-util-visit` (plus `node:` built-ins).
 `npm run build` type-checks (`tsc --noEmit`); `npm test` runs the byte-lock +
@@ -85,6 +95,18 @@ await runPipeline({
 for inspection without publishing). For a complete, **offline, runnable** wiring
 — a fake `LlmClient`, an inline `Source`, a no-op `Sink`, and the `internals`
 carrier — see [`examples/basic.ts`](./examples/basic.ts) (`npx tsx examples/basic.ts`).
+
+### Search backends
+
+The default `createFirecrawlSearch` client talks to a [Firecrawl](https://firecrawl.dev)
+instance. Point it at **Firecrawl Cloud**, or **self-host Firecrawl** — optionally
+backed by [**SearXNG**](https://github.com/searxng/searxng) as a free, self-hosted
+metasearch engine — and set the host via `FIRECRAWL_API_URL` (`apiUrl` is required;
+there is no baked-in default, so the engine ships brand-clean). SearXNG is **not** a
+dependency — just one backend option behind Firecrawl. Search is fully swappable: the
+client is only a reference adapter, so implementing the `SearchClient` port
+([`ports.ts`](./ports.ts)) lets you back search with anything (a different SaaS, an
+internal index, a static fixture for tests).
 
 ## "Plug any data in" — three layers of effort
 
