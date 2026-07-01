@@ -76,16 +76,36 @@ export const FALLBACK_FREE_MODELS: string[] = (
   .map((s) => s.trim())
   .filter(Boolean);
 
-/** Per-model chat retry budget (env-overridable). */
-const MAX_ATTEMPTS_PER_MODEL = Number(
-  process.env.OPENROUTER_AUTO_MAX_RETRIES ?? "3",
-);
-const BASE_DELAY_MS = Number(process.env.OPENROUTER_AUTO_BASE_DELAY_MS ?? "500");
+/**
+ * Parse an integer env knob with a floor, falling back to `dflt` for a missing,
+ * non-numeric, or below-floor value. Guards the retry budgets: `Number("")` is 0
+ * and `Number("x")` is NaN, either of which would make `withRetry` run ZERO
+ * iterations and throw WITHOUT ever calling the target — silently marking a
+ * healthy model dead, or skipping the list fetch. Counts floor at 1; delays and
+ * the TTL floor at 0.
+ */
+function envInt(name: string, dflt: number, min: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return dflt;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= min ? Math.floor(n) : dflt;
+}
+
+/** Per-model chat retry budget (env-overridable, floor 1). */
+const MAX_ATTEMPTS_PER_MODEL = envInt("OPENROUTER_AUTO_MAX_RETRIES", 3, 1);
+const BASE_DELAY_MS = envInt("OPENROUTER_AUTO_BASE_DELAY_MS", 500, 0);
 /** Retry budget for the `models.list` fetch itself (distinct from the chat retry). */
-const LIST_MAX_ATTEMPTS = Number(process.env.OPENROUTER_LIST_MAX_ATTEMPTS ?? "2");
-const LIST_BASE_DELAY_MS = Number(
-  process.env.OPENROUTER_LIST_BASE_DELAY_MS ?? "300",
-);
+const LIST_MAX_ATTEMPTS = envInt("OPENROUTER_LIST_MAX_ATTEMPTS", 2, 1);
+const LIST_BASE_DELAY_MS = envInt("OPENROUTER_LIST_BASE_DELAY_MS", 300, 0);
+/**
+ * How long a SUCCESSFUL ranking is reused before a long-lived process re-fetches
+ * the live list (env-overridable, floor 0 = always re-fetch). Bounds staleness: a
+ * persistent scheduler (a long-lived process reused across cron runs) that
+ * fetched the ranking once would otherwise freeze it for its whole (multi-day)
+ * lifetime, so a later wave of delistings could exhaust the stale list with no
+ * re-check — defeating the point of dynamic selection. Default 1 hour.
+ */
+const LIST_TTL_MS = envInt("OPENROUTER_LIST_TTL_MS", 3_600_000, 0);
 
 /**
  * Minimal exponential-backoff retry. The engine's own `withRetry` is a dependency
@@ -116,13 +136,18 @@ async function withRetry<T>(
 
 /**
  * Per-process memoized ranking promise. Holds only a SUCCESSFULLY-resolved live
- * ranking, reused for the life of the process so the `models.list` request runs
- * at most once per launch. A fetch that exhausts its retries is NOT stored — that
- * call returns the hardcoded fallback and the cache stays `null`, so a later call
- * re-attempts the live list (a transient blip must not become the permanent
- * per-process answer). Reset only by the test-only `resetModelCache()`.
+ * ranking, reused for up to `LIST_TTL_MS` so the `models.list` request runs at
+ * most once per TTL window — NOT frozen for the whole (potentially multi-day)
+ * life of a long-lived process, which would let a later wave of delistings
+ * exhaust the stale list with no re-check. A fetch that exhausts its retries is
+ * NOT stored — that call returns the hardcoded fallback and the cache stays
+ * `null`, so a later call re-attempts the live list (a transient blip must not
+ * become the permanent per-process answer). Reset early by `resetModelCache()`.
  */
 let rankedModelsPromise: Promise<string[]> | null = null;
+/** Epoch-ms when `rankedModelsPromise` was last set — paired with `LIST_TTL_MS`
+ *  to expire a stale success memo in a long-lived process. */
+let rankedModelsFetchedAt = 0;
 
 /** One live `models.list` fetch → ranked ids. Throws on an empty/failed fetch. */
 async function fetchRankedModels(client: OpenRouter): Promise<string[]> {
@@ -153,7 +178,9 @@ async function fetchRankedModels(client: OpenRouter): Promise<string[]> {
  * one built from `OPENROUTER_API_KEY`, so an adopter can call this standalone.
  */
 export function getTopFreeTextModels(client?: OpenRouter): Promise<string[]> {
-  if (rankedModelsPromise) return rankedModelsPromise;
+  if (rankedModelsPromise && Date.now() - rankedModelsFetchedAt < LIST_TTL_MS) {
+    return rankedModelsPromise;
+  }
   const c = client ?? new OpenRouter({ apiKey: process.env.OPENROUTER_API_KEY });
   const attempt = withRetry(
     () => fetchRankedModels(c),
@@ -171,12 +198,14 @@ export function getTopFreeTextModels(client?: OpenRouter): Promise<string[]> {
     return [...FALLBACK_FREE_MODELS];
   });
   rankedModelsPromise = attempt;
+  rankedModelsFetchedAt = Date.now();
   return attempt;
 }
 
 /** Test-only: reset the per-process ranking cache so a fresh `models.list` fires. */
 export function resetModelCache(): void {
   rankedModelsPromise = null;
+  rankedModelsFetchedAt = 0;
 }
 
 /** Cumulative LLM usage for one client, accumulated per successful call. */

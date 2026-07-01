@@ -15,6 +15,7 @@ import {
   createOpenRouterLlm,
   DEFAULT_MODEL,
   getTopFreeTextModels,
+  resetModelCache,
 } from "./openrouter-llm";
 
 async function main(): Promise<void> {
@@ -39,6 +40,10 @@ async function main(): Promise<void> {
   // model being down (it advances past it), so this is the PRIMARY check, and it
   // also carries the usage-accounting assertions.
   try {
+    // resetModelCache() exercises the test-only reset (proving it clears the
+    // memo) and guarantees a FRESH ranking here rather than a memo left by an
+    // earlier in-process caller.
+    resetModelCache();
     const ranked = await getTopFreeTextModels();
     ok(
       "models.list returns at least one free text model",
