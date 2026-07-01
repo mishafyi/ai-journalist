@@ -1,27 +1,45 @@
 /**
- * Default `LlmClient` — OpenRouter via the official `@openrouter/sdk`.
+ * Default `LlmClient` — OpenRouter via the official `@openrouter/sdk`, with
+ * DYNAMIC top-weekly-free model selection.
  *
  * Faithful in-engine replica of the host's proprietary LLM client
- * (`chatCompletion` + `getOpenRouterUsage`/`recordUsage`). The engine is
- * domain-agnostic and imports NOTHING from a host app, so this re-implements that
- * behaviour rather than importing it. `clients/**` is the one area
- * permitted to touch the SDK + `process.env` (the API key).
+ * (`chatCompletion*` + dynamic model selection + `getOpenRouterUsage`/`recordUsage`).
+ * The engine is domain-agnostic and imports NOTHING from a host app, so this
+ * re-implements that behaviour rather than importing it. `clients/**` is the one
+ * area permitted to touch the SDK + `process.env` (the API key + selection knobs).
+ *
+ * MODEL SELECTION. When `createOpenRouterLlm` is given no `defaultModel` and a
+ * call passes no `model`, the client picks the current best free model at
+ * runtime from OpenRouter's live "top-weekly, zero-price, text-in/text-out"
+ * ranking (`models.list`), trying each ranked candidate with a short retry
+ * budget and advancing to the next once one is exhausted (a per-instance
+ * dead-set). A delisted model can therefore never silently break generation:
+ * the ranking is re-checked once per process and a dead model is skipped. An
+ * explicit `defaultModel` (or a per-call `model`) pins a single id and bypasses
+ * selection — the original, deterministic behaviour, preserved VERBATIM.
  *
  * Three behaviours are load-bearing and replicated VERBATIM:
  *   1. The `chatRequest` envelope — `client.chat.send({ chatRequest: {...} })`.
- *      The installed `@openrouter/sdk@0.12.79` uses this nested shape, NOT the
- *      flat `{ model, messages }` of a newer SDK.
+ *      Verified unchanged from `@openrouter/sdk@0.12.79` through `0.13.21`: the
+ *      nested shape, NOT the flat `{ model, messages }`.
  *   2. The non-stream guard — `if (!("choices" in res)) throw`. The streaming
  *      overload returns an `EventStream`, which has no `choices`.
  *   3. The empty-completion throw. A structurally valid but whitespace-only
- *      completion is a provider glitch (`owl-alpha` intermittently returns pure
- *      "\n" runs). Returning "" would silently ship a no-op; throwing makes the
- *      blank retryable by the caller's `withRetry` wrapper.
+ *      completion is a provider glitch (some free models intermittently return
+ *      pure "\n" runs). Returning "" would silently ship a no-op; throwing makes
+ *      the blank retryable — by the per-model retry here AND by a caller's own
+ *      `withRetry` wrapper.
  *
  * Usage accounting mirrors the host's LLM client (`requests` + the five token
- * counters), but is held PER CLIENT INSTANCE and exposed via `usage()` — the
- * golden test diffs a single run's telemetry, so a per-process global would
- * leak counts across runs.
+ * counters), held PER CLIENT INSTANCE and exposed via `usage()` — the golden
+ * test diffs a single run's telemetry, so a per-process global would leak counts
+ * across runs. The dead-model set is likewise per-instance.
+ *
+ * NOTE on the SDK params: `models.list` takes `sort` (a `GetModelsSort` enum
+ * whose value is `"top-weekly"`), NOT `order`; plus `maxPrice` (number) and
+ * `inputModalities` + `outputModalities` (comma-separated strings). These filter
+ * params require `@openrouter/sdk@>=0.13` — an older SDK silently ignores them
+ * and returns PAID models, so the dependency floor is `^0.13.21`.
  */
 import { OpenRouter } from "@openrouter/sdk";
 import type { ChatResult } from "@openrouter/sdk/models";
@@ -30,12 +48,136 @@ import type { ZodType } from "zod";
 import type { LlmClient } from "../ports";
 
 /**
- * Default model — a STABLE id, matching the host's LLM client `DEFAULT_MODEL`.
- * Llama 3.3 70B Instruct (free): high-quality instruction-following for content
- * generation. Never `owl-alpha` (an unstable alias that returns "\n" runs).
+ * Default model — a STABLE id. Consulted ONLY when a caller explicitly pins it
+ * via `createOpenRouterLlm({ defaultModel: DEFAULT_MODEL })` or a per-call
+ * `model`. With dynamic selection (the default when `defaultModel` is omitted),
+ * the live `models.list` ranking is preferred and this id is not used.
  * @see https://openrouter.ai/meta-llama/llama-3.3-70b-instruct:free
  */
 export const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+
+/**
+ * Known-free models used ONLY when the live `models.list` ranking can't be
+ * fetched (transient list outage) — so dynamic selection degrades instead of
+ * hard-failing. Current `:free` ids present in the live top-weekly free list;
+ * the live ranking is always preferred when reachable. Env-overridable
+ * (comma-separated `OPENROUTER_FALLBACK_FREE_MODELS`) without a code change if
+ * the free tier churns.
+ */
+export const FALLBACK_FREE_MODELS: string[] = (
+  process.env.OPENROUTER_FALLBACK_FREE_MODELS ??
+  [
+    "openai/gpt-oss-120b:free",
+    "openai/gpt-oss-20b:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+  ].join(",")
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+/** Per-model chat retry budget (env-overridable). */
+const MAX_ATTEMPTS_PER_MODEL = Number(
+  process.env.OPENROUTER_AUTO_MAX_RETRIES ?? "3",
+);
+const BASE_DELAY_MS = Number(process.env.OPENROUTER_AUTO_BASE_DELAY_MS ?? "500");
+/** Retry budget for the `models.list` fetch itself (distinct from the chat retry). */
+const LIST_MAX_ATTEMPTS = Number(process.env.OPENROUTER_LIST_MAX_ATTEMPTS ?? "2");
+const LIST_BASE_DELAY_MS = Number(
+  process.env.OPENROUTER_LIST_BASE_DELAY_MS ?? "300",
+);
+
+/**
+ * Minimal exponential-backoff retry. The engine's own `withRetry` is a dependency
+ * the pure core injects and is not importable here, so `clients/**` inlines this.
+ * Tries `fn` up to `attempts` times, sleeping `baseDelayMs * 2**i` between tries;
+ * rethrows the last error when all attempts are exhausted.
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  attempts: number,
+  baseDelayMs: number,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, baseDelayMs * 2 ** i),
+        );
+      }
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Per-process memoized ranking promise. Holds only a SUCCESSFULLY-resolved live
+ * ranking, reused for the life of the process so the `models.list` request runs
+ * at most once per launch. A fetch that exhausts its retries is NOT stored — that
+ * call returns the hardcoded fallback and the cache stays `null`, so a later call
+ * re-attempts the live list (a transient blip must not become the permanent
+ * per-process answer). Reset only by the test-only `resetModelCache()`.
+ */
+let rankedModelsPromise: Promise<string[]> | null = null;
+
+/** One live `models.list` fetch → ranked ids. Throws on an empty/failed fetch. */
+async function fetchRankedModels(client: OpenRouter): Promise<string[]> {
+  const res = await client.models.list({
+    // `sort` (enum "top-weekly"), NOT `order`; requires @openrouter/sdk >=0.13.
+    sort: "top-weekly",
+    maxPrice: 0,
+    // Admit only models that both accept AND emit text.
+    inputModalities: "text",
+    outputModalities: "text",
+  });
+  const ids = res.data
+    .map((m) => m.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  if (ids.length === 0) {
+    throw new Error("models.list returned no free text models");
+  }
+  return ids;
+}
+
+/**
+ * Fetch the ranked ids of top-weekly, zero-price, text-in/text-out OpenRouter
+ * models (highest-ranked first). Wrapped in `withRetry` so a transient blip is
+ * retried before falling back. Memoizes only a SUCCESSFUL live ranking
+ * per-process; on retry-exhaustion it logs to stderr and returns
+ * `FALLBACK_FREE_MODELS` for THIS call WITHOUT caching it (the next call
+ * re-attempts the live list). Selection never hard-fails. `client` defaults to
+ * one built from `OPENROUTER_API_KEY`, so an adopter can call this standalone.
+ */
+export function getTopFreeTextModels(client?: OpenRouter): Promise<string[]> {
+  if (rankedModelsPromise) return rankedModelsPromise;
+  const c = client ?? new OpenRouter({ apiKey: process.env.OPENROUTER_API_KEY });
+  const attempt = withRetry(
+    () => fetchRankedModels(c),
+    LIST_MAX_ATTEMPTS,
+    LIST_BASE_DELAY_MS,
+  ).catch((e: unknown) => {
+    // Retries exhausted → drop the cached promise so a later call re-fetches,
+    // log once, and hand this caller the hardcoded fallback.
+    rankedModelsPromise = null;
+    process.stderr.write(
+      `openrouter models.list failed after retries; using hardcoded free-model fallback: ${
+        e instanceof Error ? e.message : String(e)
+      }\n`,
+    );
+    return [...FALLBACK_FREE_MODELS];
+  });
+  rankedModelsPromise = attempt;
+  return attempt;
+}
+
+/** Test-only: reset the per-process ranking cache so a fresh `models.list` fires. */
+export function resetModelCache(): void {
+  rankedModelsPromise = null;
+}
 
 /** Cumulative LLM usage for one client, accumulated per successful call. */
 export interface OpenRouterUsageTotals {
@@ -74,11 +216,10 @@ function recordUsage(totals: OpenRouterUsageTotals, data: ChatResult): void {
 
 /**
  * Replace raw control characters (code point < 0x20) with a space — mirrors
- * `stripJsonControlChars()` in the host's LLM client. Some models (owl-alpha) emit a
- * literal newline/tab INSIDE a JSON string value, which `JSON.parse` rejects
- * even when the structure is valid; properly-escaped `\n` is ordinary
- * two-character text and is unaffected. Done without a regex to avoid the
- * no-control-regex lint.
+ * `stripJsonControlChars()` in the host's LLM client. Some models emit a literal
+ * newline/tab INSIDE a JSON string value, which `JSON.parse` rejects even when
+ * the structure is valid; properly-escaped `\n` is ordinary two-character text
+ * and is unaffected. Done without a regex to avoid the no-control-regex lint.
  */
 function stripControlChars(s: string): string {
   return Array.from(s, (ch) =>
@@ -88,12 +229,18 @@ function stripControlChars(s: string): string {
 
 /**
  * Build the default OpenRouter-backed `LlmClient`. `apiKey` falls back to
- * `OPENROUTER_API_KEY` (env access is permitted in `clients/**`);
- * `defaultModel` must be a stable id and is used when a call omits `model`.
+ * `OPENROUTER_API_KEY` (env access is permitted in `clients/**`).
+ *
+ * `defaultModel` is OPTIONAL:
+ *   - set (or a per-call `model`) → pins that id, single attempt, VERBATIM the
+ *     original deterministic behaviour;
+ *   - omitted → the client DYNAMICALLY selects the current top-weekly free model,
+ *     giving each ranked candidate `OPENROUTER_AUTO_MAX_RETRIES` (default 3) tries
+ *     and advancing past any that exhaust (a per-instance dead-set).
  */
 export function createOpenRouterLlm(opts: {
   apiKey?: string;
-  defaultModel: string;
+  defaultModel?: string;
 }): OpenRouterLlmClient {
   const client = new OpenRouter({
     apiKey: opts.apiKey ?? process.env.OPENROUTER_API_KEY,
@@ -108,37 +255,147 @@ export function createOpenRouterLlm(opts: {
     totalTokens: 0,
   };
 
-  return {
-    async complete({ system, prompt, model, temperature }) {
-      const response = await client.chat.send({
-        chatRequest: {
-          model: model ?? opts.defaultModel,
-          messages: [
-            ...(system ? [{ role: "system" as const, content: system }] : []),
-            { role: "user" as const, content: prompt },
-          ],
-          temperature,
-        },
-      });
+  /** Ids that burned their full retry budget on THIS client — skipped + advanced past. */
+  const deadModels = new Set<string>();
 
-      // The streaming overload returns an EventStream (no `choices`). A
-      // non-stream request should never hit this, but guard rather than crash
-      // on an `undefined` index below.
-      if (!("choices" in response)) {
-        throw new Error(
-          "OpenRouter returned a streaming response where a completion was expected",
+  /**
+   * Resolve the model, then run `send`. When `pinned` is set → one call on that
+   * id (the original deterministic path). Otherwise iterate the live ranked free
+   * models minus the dead-set, giving each `MAX_ATTEMPTS_PER_MODEL` tries; on a
+   * model's exhaustion mark it dead, log, and advance. Throws only when every
+   * candidate is exhausted.
+   */
+  async function runWithSelection<T>(
+    send: (model: string) => Promise<T>,
+    pinned: string | undefined,
+  ): Promise<T> {
+    if (pinned) return send(pinned);
+    const ranked = await getTopFreeTextModels(client);
+    const candidates = ranked.filter((m) => !deadModels.has(m));
+    if (candidates.length === 0) {
+      throw new Error(
+        "OpenRouter dynamic selection: all free candidate models are exhausted",
+      );
+    }
+    let lastErr: unknown;
+    for (const candidate of candidates) {
+      try {
+        return await withRetry(
+          () => send(candidate),
+          MAX_ATTEMPTS_PER_MODEL,
+          BASE_DELAY_MS,
+        );
+      } catch (e) {
+        lastErr = e;
+        deadModels.add(candidate);
+        process.stderr.write(
+          `openrouter model exhausted, advancing: ${candidate}\n`,
         );
       }
-      recordUsage(totals, response);
-      const content = response.choices[0]?.message?.content;
-      const text = typeof content === "string" ? content : "";
-      // A structurally valid but EMPTY/whitespace completion is a provider
-      // glitch. Returning "" silently lets callers ship no-ops; throwing makes
-      // the blank retryable by the caller's retry wrapper.
-      if (!text.trim()) {
-        throw new Error("OpenRouter returned an empty completion");
-      }
-      return text;
+    }
+    throw new Error(
+      `OpenRouter dynamic selection: all free candidate models exhausted (${candidates.join(
+        ", ",
+      )}); last error: ${
+        lastErr instanceof Error ? lastErr.message : String(lastErr)
+      }`,
+    );
+  }
+
+  /** One free-text completion on a concrete model — the original `complete` body. */
+  async function sendComplete(
+    model: string,
+    system: string | undefined,
+    prompt: string,
+    temperature: number | undefined,
+  ): Promise<string> {
+    const response = await client.chat.send({
+      chatRequest: {
+        model,
+        messages: [
+          ...(system ? [{ role: "system" as const, content: system }] : []),
+          { role: "user" as const, content: prompt },
+        ],
+        temperature,
+      },
+    });
+
+    // The streaming overload returns an EventStream (no `choices`). A non-stream
+    // request should never hit this, but guard rather than crash on an
+    // `undefined` index below.
+    if (!("choices" in response)) {
+      throw new Error(
+        "OpenRouter returned a streaming response where a completion was expected",
+      );
+    }
+    recordUsage(totals, response);
+    const content = response.choices[0]?.message?.content;
+    const text = typeof content === "string" ? content : "";
+    // A structurally valid but EMPTY/whitespace completion is a provider glitch.
+    // Returning "" silently lets callers ship no-ops; throwing makes the blank
+    // retryable (by the per-model retry here and the caller's retry wrapper).
+    if (!text.trim()) {
+      throw new Error("OpenRouter returned an empty completion");
+    }
+    return text;
+  }
+
+  /** One structured (json_schema) completion on a concrete model — original body. */
+  async function sendStructured<T>(
+    model: string,
+    args: {
+      messages: Array<{
+        role: "system" | "user" | "assistant";
+        content: string;
+      }>;
+      schema: ZodType<T>;
+      schemaName: string;
+      temperature?: number;
+    },
+  ): Promise<T> {
+    const response = await client.chat.send({
+      chatRequest: {
+        model,
+        messages: args.messages,
+        temperature: args.temperature,
+        responseFormat: {
+          type: "json_schema",
+          jsonSchema: {
+            name: args.schemaName,
+            strict: true,
+            schema: z.toJSONSchema(args.schema),
+          },
+        },
+      },
+    });
+    if (!("choices" in response)) {
+      throw new Error(
+        "OpenRouter returned a streaming response where a completion was expected",
+      );
+    }
+    recordUsage(totals, response);
+    const content = response.choices[0]?.message?.content;
+    const text = typeof content === "string" ? content : "";
+    if (!text.trim()) {
+      throw new Error("OpenRouter returned an empty completion");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stripControlChars(text));
+    } catch {
+      throw new Error(
+        `OpenRouter structured response was not valid JSON: ${text.slice(0, 200)}`,
+      );
+    }
+    return args.schema.parse(parsed);
+  }
+
+  return {
+    async complete({ system, prompt, model, temperature }) {
+      return runWithSelection(
+        (m) => sendComplete(m, system, prompt, temperature),
+        model ?? opts.defaultModel,
+      );
     },
     async completeStructured<T>(args: {
       messages: Array<{
@@ -150,41 +407,16 @@ export function createOpenRouterLlm(opts: {
       model?: string;
       temperature?: number;
     }): Promise<T> {
-      const response = await client.chat.send({
-        chatRequest: {
-          model: args.model ?? opts.defaultModel,
-          messages: args.messages,
-          temperature: args.temperature,
-          responseFormat: {
-            type: "json_schema",
-            jsonSchema: {
-              name: args.schemaName,
-              strict: true,
-              schema: z.toJSONSchema(args.schema),
-            },
-          },
-        },
-      });
-      if (!("choices" in response)) {
-        throw new Error(
-          "OpenRouter returned a streaming response where a completion was expected",
-        );
-      }
-      recordUsage(totals, response);
-      const content = response.choices[0]?.message?.content;
-      const text = typeof content === "string" ? content : "";
-      if (!text.trim()) {
-        throw new Error("OpenRouter returned an empty completion");
-      }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(stripControlChars(text));
-      } catch {
-        throw new Error(
-          `OpenRouter structured response was not valid JSON: ${text.slice(0, 200)}`,
-        );
-      }
-      return args.schema.parse(parsed);
+      return runWithSelection(
+        (m) =>
+          sendStructured(m, {
+            messages: args.messages,
+            schema: args.schema,
+            schemaName: args.schemaName,
+            temperature: args.temperature,
+          }),
+        args.model ?? opts.defaultModel,
+      );
     },
     usage() {
       return { ...totals };

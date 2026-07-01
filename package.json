@@ -56,7 +56,7 @@
     "test": "npm run test:checks && npm run test:example"
   },
   "dependencies": {
-    "@openrouter/sdk": "^0.12.79",
+    "@openrouter/sdk": "^0.13.21",
     "date-fns": "^4.1.0",
     "firecrawl": "^4.25.2",
     "p-limit": "^7.3.0",
