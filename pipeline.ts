@@ -119,33 +119,16 @@ export interface GeneratedArticle {
   content: string;
 }
 
-// ───────────────────────────────────────────────────────────────────────────
-// The injected couplings. Everything host-resident that the orchestration body
-// touches, plus the env knobs + the three meta-prose regexes (shared with the
-// adapter's pure helpers). The engine calls each as an opaque reference, so the
-// private side can never leak into this module.
-// ───────────────────────────────────────────────────────────────────────────
-export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
-  // ── LLM + retry (the 9 inline surgical-fix passes) ──
-  /** The shared OpenRouter-backed client (wraps the adapter's chatCompletion). */
-  llm: LlmClient;
-  /** BLOG_LLM_MODEL — the adapter's `MODEL`. */
-  model: string;
-  /** The adapter's retry+telemetry wrapper — exact signature. */
-  withRetry: <T>(
-    label: string,
-    fn: () => Promise<T>,
-    opts?: { input?: string; maxAttempts?: number },
-  ) => Promise<T>;
-
-  // ── the moved gate passes (8c) + the per-run telemetry carrier ──
-  /** The gate-pass couplings (./gates); runFactGuard/runTitle/runSeo use it. */
-  gateDeps: GateDeps;
-  /** The section/discovery/assembly children's deps (writeOneSection uses it). */
-  blogDeps: SectionWriterDeps & AssemblyDeps & { onError: BlogOnError };
-  /** Per-run telemetry/artifact carrier (a getter on the adapter — always LIVE). */
-  ctx: RunContext;
-
+/**
+ * OPTIONAL domain enrichment — the host's first-party data gathers, the
+ * entity-link tail, and the jobs-flavored formatting helpers, grouped so the
+ * CORE writing pipeline (section research → draft → gate chain) runs without
+ * any of it. Omit `PipelineDeps.enrichment` and `runGeneration` binds
+ * `neutralEnrichment()`: empty site data, no fresh-hirer/board block, identity
+ * linking, pass-through integrity gate. Supply it and behavior is byte-for-byte
+ * what the pre-split engine did.
+ */
+export interface PipelineEnrichment<TBoard extends PipelineBoardCompany> {
   // ── first-party DATA (the host's first-party data gathers) ──
   gatherSiteData: (
     category: string,
@@ -193,11 +176,92 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
     stats: unknown;
   }>;
 
-  // ── pure text/format helpers the adapter still owns (host-free) ──
+  // ── jobs-flavored format helpers (host-free) ──
   /** Format one company's board line (adapter's boardJobsLine). */
   boardJobsLine: (b: TBoard) => string;
   /** US-lean location filter (adapter's usLeanLocations). */
   usLeanLocations: (locations: string[]) => boolean;
+  /** Short corporate-suffix form of a name, or null (adapter's shortForm). */
+  shortForm: (name: string) => string | null;
+
+  // ── name stoplist ──
+  /** Short ambiguous names never linked/matched (adapter's LINK_NAME_STOPLIST). */
+  linkNameStoplist: ReadonlySet<string>;
+
+  // ── env knobs (the BLOG_* enrichment/linking tuning values) ──
+  enrichLimit: number;
+  linkCompanyLimit: number;
+  linkPeopleLimit: number;
+  topicCompanies: number;
+  topicCompanyJobs: number;
+  topicJobsWindowHours: number;
+}
+
+/** The no-op enrichment `runGeneration` uses when `deps.enrichment` is omitted. */
+export function neutralEnrichment<
+  TBoard extends PipelineBoardCompany,
+>(): PipelineEnrichment<TBoard> {
+  return {
+    gatherSiteData: async () => ({
+      companies: [],
+      people: [],
+      jobCount: 0,
+      companyCount: 0,
+      domain: { label: "" },
+    }),
+    gatherLinkableEntities: async () => ({ companies: [], people: [] }),
+    gatherIndustryFreshHirers: async () => [],
+    gatherCompanyFreshJobs: async () => [],
+    gatherDatagodFacts: async () => "",
+    resolveArticleEntities: async () => [],
+    linkEntities: (content) => content,
+    withInternalLinks: (article) => article,
+    enforceLinkIntegrity: async (content) => ({ content, stats: null }),
+    boardJobsLine: () => "",
+    usLeanLocations: () => true,
+    shortForm: () => null,
+    linkNameStoplist: new Set<string>(),
+    enrichLimit: 0,
+    linkCompanyLimit: 0,
+    linkPeopleLimit: 0,
+    topicCompanies: 0,
+    topicCompanyJobs: 0,
+    topicJobsWindowHours: 0,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// The injected couplings. Everything host-resident that the orchestration body
+// touches, plus the env knobs + the three meta-prose regexes (shared with the
+// adapter's pure helpers). The engine calls each as an opaque reference, so the
+// private side can never leak into this module.
+// ───────────────────────────────────────────────────────────────────────────
+export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
+  // ── LLM + retry (the 9 inline surgical-fix passes) ──
+  /** The shared OpenRouter-backed client (wraps the adapter's chatCompletion). */
+  llm: LlmClient;
+  /** BLOG_LLM_MODEL — the adapter's `MODEL`. */
+  model: string;
+  /** The adapter's retry+telemetry wrapper — exact signature. */
+  withRetry: <T>(
+    label: string,
+    fn: () => Promise<T>,
+    opts?: { input?: string; maxAttempts?: number },
+  ) => Promise<T>;
+
+  // ── the moved gate passes (8c) + the per-run telemetry carrier ──
+  /** The gate-pass couplings (./gates); runFactGuard/runTitle/runSeo use it. */
+  gateDeps: GateDeps;
+  /** The section/discovery/assembly children's deps (writeOneSection uses it). */
+  blogDeps: SectionWriterDeps & AssemblyDeps & { onError: BlogOnError };
+  /** Per-run telemetry/artifact carrier (a getter on the adapter — always LIVE). */
+  ctx: RunContext;
+
+  /** Optional domain enrichment (data gathers + link tail + jobs helpers).
+   *  Omitted → `neutralEnrichment()`: the core pipeline writes without it. */
+  enrichment?: PipelineEnrichment<TBoard>;
+
+  // ── pure text/format helpers the adapter still owns (host-free) ──
   /** Strip a surgical pass's preamble/bulk-fence (adapter's stripPreambleAndFence). */
   stripPreambleAndFence: (text: string) => string;
   /** Is the candidate still article-shaped vs its reference (adapter's isArticleShaped). */
@@ -217,8 +281,6 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
   shingleOccurrences: (text: string, shingle: string, pad: number) => string[];
   /** Sentences carrying ≥3 em-dashes (adapter's emdashClusteredLines). */
   emdashClusteredLines: (text: string) => number;
-  /** Short corporate-suffix form of a name, or null (adapter's shortForm). */
-  shortForm: (name: string) => string | null;
 
   // ── artifact + run-log telemetry (the host's telemetry side) ──
   /** Record a per-stage artifact (adapter's recordArtifact → ctx). */
@@ -232,9 +294,7 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
    *  engine's `BlogRunEvent` (the same shape discovery.ts/section-writer emit). */
   onEvent: (event: BlogRunEvent) => Promise<void>;
 
-  // ── name stoplist + meta-prose regexes ──
-  /** Short ambiguous names never linked/matched (adapter's LINK_NAME_STOPLIST). */
-  linkNameStoplist: ReadonlySet<string>;
+  // ── meta-prose regexes ──
   /** Meta-prose ("here are the checks…") signature. */
   metaProseRe: RegExp;
   /** Chain-of-thought prefix signature ("Let me identify…"). */
@@ -248,12 +308,6 @@ export interface PipelineDeps<TBoard extends PipelineBoardCompany> {
   brandName: string;
 
   // ── env knobs (the BLOG_* tuning values the body reads) ──
-  enrichLimit: number;
-  linkCompanyLimit: number;
-  linkPeopleLimit: number;
-  topicCompanies: number;
-  topicCompanyJobs: number;
-  topicJobsWindowHours: number;
   researchPersistChars: number;
   repeatShingleWords: number;
   repeatTrigger: number;
@@ -289,12 +343,14 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   deps: PipelineDeps<TBoard>,
 ): Promise<GeneratedArticle> {
   const ctx = deps.ctx;
+  // Optional domain enrichment — omitted → the no-op preset, so the CORE
+  // writing pipeline runs without any first-party data / link tail / jobs helpers.
+  const enr = deps.enrichment ?? neutralEnrichment<TBoard>();
   const {
     llm,
     withRetry,
     gateDeps,
     blogDeps,
-    boardJobsLine,
     stripPreambleAndFence,
     isArticleShaped,
     lengthSafe,
@@ -303,16 +359,15 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
     findRepeatedShingles,
     shingleOccurrences,
     emdashClusteredLines,
-    usLeanLocations,
-    shortForm,
     recordArtifact,
     brandName,
   } = deps;
+  const { boardJobsLine, usLeanLocations, shortForm } = enr;
   const MODEL = deps.model;
   const META_PROSE_RE = deps.metaProseRe;
   const COT_PREFIX_RE = deps.cotPrefixRe;
   const PREAMBLE_LINE_RE = deps.preambleLineRe;
-  const LINK_NAME_STOPLIST = deps.linkNameStoplist;
+  const LINK_NAME_STOPLIST = enr.linkNameStoplist;
   const topic = plan.title;
   const category = plan.category ?? "frontier";
   // Synthesize the Angle the downstream title + CTA passes still consume (the
@@ -332,11 +387,11 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
     "  [1/6] enrich (real site data + link candidates)...\n",
   );
   const [site, linkable] = await Promise.all([
-    deps.gatherSiteData(category, deps.enrichLimit),
-    deps.gatherLinkableEntities(
+    enr.gatherSiteData(category, enr.enrichLimit),
+    enr.gatherLinkableEntities(
       category,
-      deps.linkCompanyLimit,
-      deps.linkPeopleLimit,
+      enr.linkCompanyLimit,
+      enr.linkPeopleLimit,
     ),
   ]);
   process.stdout.write(
@@ -371,7 +426,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
         short !== null && !LINK_NAME_STOPLIST.has(short) && matchesPlan(short)
       );
     })
-    .slice(0, deps.topicCompanies);
+    .slice(0, enr.topicCompanies);
   // Fallback: when the topic names no board company (cycle 6's drone-delivery
   // piece named none), feed the article-category's top fresh hirers instead —
   // every article gets citable first-party data, not just company-named ones.
@@ -379,17 +434,17 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   // locations (cycle 7: a French care startup ranked #2 in "frontier").
   const usingFallback = namedCompanies.length === 0;
   const companiesForBoard = usingFallback
-    ? await deps.gatherIndustryFreshHirers(
+    ? await enr.gatherIndustryFreshHirers(
         angle.category,
-        deps.topicCompanies + 2,
-        deps.topicJobsWindowHours,
+        enr.topicCompanies + 2,
+        enr.topicJobsWindowHours,
       )
     : namedCompanies;
   let boardData = companiesForBoard.length
-    ? await deps.gatherCompanyFreshJobs(
+    ? await enr.gatherCompanyFreshJobs(
         companiesForBoard,
-        deps.topicCompanyJobs,
-        deps.topicJobsWindowHours,
+        enr.topicCompanyJobs,
+        enr.topicJobsWindowHours,
       )
     : [];
   if (usingFallback) {
@@ -399,7 +454,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
           b.jobs.map((j) => j.location ?? "").filter((l) => l !== ""),
         ),
       )
-      .slice(0, deps.topicCompanies);
+      .slice(0, enr.topicCompanies);
   }
   if (boardData.length) {
     process.stdout.write(
@@ -414,7 +469,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   // Best-effort: "" when keyless or failed; appended to BOTH the verified
   // facts (so outline + draft can use it) and the ground truth (so citing it
   // passes the figure gate and the fact-guard's primary-source rule).
-  const datagodBlock = await deps.gatherDatagodFacts(
+  const datagodBlock = await enr.gatherDatagodFacts(
     category,
     // The US-lean-FILTERED board companies, not the raw candidate list
     // (R7C3: fallback-mode fed ASML/Ouihelp → exact-but-irrelevant awards).
@@ -487,8 +542,14 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   // Site-inventory totals are first-party too, and ALWAYS in the draft prompt
   // ("<brand> tracks N open roles across M companies") — drafts cite them
   // legitimately, but they were absent from groundTruth, so the grounding
-  // gate flagged e.g. "11,475" as ungrounded.
-  const boardTruth = `${boardFactsTruth}\n\n## FIRST-PARTY SITE INVENTORY (${brandName}'s own totals — verified): ${brandName} tracks ${site.jobCount} open ${site.domain.label} roles across ${site.companyCount} companies; the site features ${site.companies.length} companies and ${site.people.length} notable people in this domain.`;
+  // gate flagged e.g. "11,475" as ungrounded. Skipped when the host supplies no
+  // site data (neutral enrichment): an all-zeros "tracks 0 open roles across 0
+  // companies" line would inject a false "verified" fact into the ground truth.
+  const siteInventoryTruth =
+    site.jobCount > 0 || site.companyCount > 0
+      ? `\n\n## FIRST-PARTY SITE INVENTORY (${brandName}'s own totals — verified): ${brandName} tracks ${site.jobCount} open ${site.domain.label} roles across ${site.companyCount} companies; the site features ${site.companies.length} companies and ${site.people.length} notable people in this domain.`
+      : "";
+  const boardTruth = `${boardFactsTruth}${siteInventoryTruth}`;
   // Validate the guard's output IS still the article (R6C3: it returned its
   // own QA report — "Here are the specific checks I performed: 1..." — and the
   // 343-word checklist published as the body). Retry once; if still
@@ -1033,7 +1094,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   // named fusion companies, zero links).
   // Augment the deterministic linker with LLM-resolved long-tail entities
   // (companies/people/positions the top-N candidate set misses). Best-effort.
-  const resolved = await deps.resolveArticleEntities(
+  const resolved = await enr.resolveArticleEntities(
     titled,
     boardData,
     withRetry,
@@ -1041,7 +1102,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   process.stdout.write(
     `        entity-resolve: +${resolved.length} resolved link candidates\n`,
   );
-  const linked = deps.linkEntities(titled, [
+  const linked = enr.linkEntities(titled, [
     ...linkable.companies,
     ...companiesForBoard.filter(
       (c) => !linkable.companies.some((l) => l.name === c.name),
@@ -1240,7 +1301,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   }
   const seo: SeoMeta = await runSeo(linkedFinal, gateDeps);
 
-  const assembled = deps.withInternalLinks(
+  const assembled = enr.withInternalLinks(
     {
       // The chosen NYT/WSJ headline, used verbatim as the post title (the SEO
       // pass still supplies the keyword-led seoTitle for search).
@@ -1260,7 +1321,7 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   );
   // Final gate: every relative link must resolve to a real route — covers both
   // model-written body links and the appended CTA footer.
-  const linkGate = await deps.enforceLinkIntegrity(assembled.content);
+  const linkGate = await enr.enforceLinkIntegrity(assembled.content);
   if (ctx.telemetry.article)
     ctx.telemetry.article.linkIntegrity = linkGate.stats;
   // Final stage: the deterministic post-processing block's net effect (entity

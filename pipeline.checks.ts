@@ -32,7 +32,12 @@
  *   - stale-date-fix — its prompt interpolates `new Date()` (run-clock);
  *   - first-party-fix — niche; its prompt is plain (no inline detector counts).
  */
-import { runGeneration, type PipelineDeps } from "./pipeline";
+import {
+  runGeneration,
+  neutralEnrichment,
+  type PipelineDeps,
+  type PipelineBoardCompany,
+} from "./pipeline";
 import { type GateDeps } from "./gates";
 import { type Plan } from "./planning";
 import { type RunContext } from "./run-context";
@@ -92,14 +97,14 @@ const ARTICLE = [
 ].join("\n");
 
 // Research blocks the body builds: datagodBlock = "" (stub), boardData = [] so
-// boardFactsTruth = "" and boardTruth = just the site-inventory line (all zeros),
-// research = the section writer's pooled string (stubbed empty → "").
+// boardFactsTruth = "", and the site-inventory line is EMPTY here — this fixture
+// feeds all-zeros site data (jobCount/companyCount = 0), which trips the
+// empty-guard that skips the "tracks 0 open roles across 0 companies" block (it
+// would inject a false "verified" fact into the ground truth). So boardTruth =
+// "". research = the section writer's pooled string (stubbed empty → "").
 const DATAGOD = "";
 const RESEARCH = "";
-const BOARD_TRUTH =
-  "\n\n## FIRST-PARTY SITE INVENTORY (Example News's own totals — verified): " +
-  "Example News tracks 0 open frontier tech roles across 0 companies; the site " +
-  "features 0 companies and 0 notable people in this domain.";
+const BOARD_TRUTH = "";
 
 // The exact interpolated counts the inline detectors report on the fixture.
 const VAGUE_COUNT = 5; // dep-rigged
@@ -218,23 +223,35 @@ const deps: PipelineDeps<MinBoard> = {
   gateDeps: makeGateDeps(),
   blogDeps,
   ctx,
-  gatherSiteData: async () => ({
-    companies: [],
-    people: [],
-    jobCount: 0,
-    companyCount: 0,
-    domain: { label: "frontier tech" },
-  }),
-  gatherLinkableEntities: async () => ({ companies: [], people: [] }),
-  gatherIndustryFreshHirers: async () => [],
-  gatherCompanyFreshJobs: async () => [],
-  gatherDatagodFacts: async () => DATAGOD,
-  resolveArticleEntities: async () => [],
-  linkEntities: (content) => content,
-  withInternalLinks: (article) => article,
-  enforceLinkIntegrity: async (content) => ({ content, stats: {} }),
-  boardJobsLine: () => "",
-  usLeanLocations: () => true,
+  // Domain enrichment (data gathers + link tail + jobs helpers) — the fields
+  // that moved out of PipelineDeps into PipelineEnrichment. Values unchanged.
+  enrichment: {
+    gatherSiteData: async () => ({
+      companies: [],
+      people: [],
+      jobCount: 0,
+      companyCount: 0,
+      domain: { label: "frontier tech" },
+    }),
+    gatherLinkableEntities: async () => ({ companies: [], people: [] }),
+    gatherIndustryFreshHirers: async () => [],
+    gatherCompanyFreshJobs: async () => [],
+    gatherDatagodFacts: async () => DATAGOD,
+    resolveArticleEntities: async () => [],
+    linkEntities: (content) => content,
+    withInternalLinks: (article) => article,
+    enforceLinkIntegrity: async (content) => ({ content, stats: {} }),
+    boardJobsLine: () => "",
+    usLeanLocations: () => true,
+    shortForm: () => null,
+    linkNameStoplist: new Set<string>(),
+    enrichLimit: 6,
+    linkCompanyLimit: 500,
+    linkPeopleLimit: 100,
+    topicCompanies: 3,
+    topicCompanyJobs: 6,
+    topicJobsWindowHours: 168,
+  },
   // Immutable article: every surgical pass's `input`/output stays the fixture.
   stripPreambleAndFence: (t) => t,
   isArticleShaped: () => true,
@@ -245,22 +262,14 @@ const deps: PipelineDeps<MinBoard> = {
   findRepeatedShingles: () => (repeatFired.n++ === 0 ? REPEAT_PHRASES : []),
   shingleOccurrences: () => [],
   emdashClusteredLines: () => (clusterFired.n++ === 0 ? CLUSTERED : 0),
-  shortForm: () => null,
   recordArtifact: () => {},
   onEvent: async () => {},
-  linkNameStoplist: new Set<string>(),
   metaProseRe: /__never__/,
   cotPrefixRe: /__never__/,
   preambleLineRe: /__never__/,
   // Brand name = the exact generic short form, so boardTruth + the first-party-fix
   // prompt resolve to the byte-identical reference strings (BOARD_TRUTH above).
   brandName: "Example News",
-  enrichLimit: 6,
-  linkCompanyLimit: 500,
-  linkPeopleLimit: 100,
-  topicCompanies: 3,
-  topicCompanyJobs: 6,
-  topicJobsWindowHours: 168,
   researchPersistChars: 200000,
   repeatShingleWords: 6,
   repeatTrigger: 3,
@@ -365,6 +374,57 @@ async function run(): Promise<void> {
         `This article uses inline attribution tags ("according to X", "per X") ${ATTRIB_COUNT} times; at most ${ATTRIB_TAG_MAX} may remain.`,
       ),
     attribCap?.prompt.slice(0, 90),
+  );
+
+  // ── enrichment split: neutralEnrichment shape + optionality ──────────────────
+  {
+    const neutral = neutralEnrichment<PipelineBoardCompany>();
+    ok(
+      "neutralEnrichment: empty site data",
+      (await neutral.gatherSiteData("any", 6)).companies.length === 0 &&
+        (await neutral.gatherSiteData("any", 6)).jobCount === 0,
+      "expected empty PipelineSiteData",
+    );
+    ok(
+      "neutralEnrichment: linkEntities is identity",
+      neutral.linkEntities("body text", [{ name: "X", url: "/x" }]) ===
+        "body text",
+      "content must pass through unchanged",
+    );
+    const gate = await neutral.enforceLinkIntegrity("## H2\ncontent");
+    ok(
+      "neutralEnrichment: enforceLinkIntegrity passes content through",
+      gate.content === "## H2\ncontent" && gate.stats === null,
+      JSON.stringify(gate),
+    );
+    ok(
+      "neutralEnrichment: withInternalLinks is identity on the article",
+      (() => {
+        const a = {
+          title: "T",
+          description: "D",
+          category: "c",
+          tags: [],
+          keywords: [],
+          content: "body",
+        };
+        return neutral.withInternalLinks(a, []) === a;
+      })(),
+      "article object must be returned as-is",
+    );
+  }
+
+  // ── site-inventory empty-guard (Step 3d): the all-zeros site data this fixture
+  // feeds must NOT inject a "verified" FIRST-PARTY SITE INVENTORY block into the
+  // gates' ground truth. banding-fix's prompt embeds the body's `boardTruth`
+  // (research region), so its capture proves the guard fired end-to-end.
+  const bandingGround = captures.get("banding-fix");
+  ok(
+    "site-inventory empty-guard: no inventory block on all-zeros site data",
+    !!bandingGround &&
+      !bandingGround.prompt.includes("FIRST-PARTY SITE INVENTORY") &&
+      !bandingGround.prompt.includes(" 0 open "),
+    bandingGround?.prompt.slice(0, 120),
   );
 
   log(`\n${passed} passed, ${failed} failed\n`);
