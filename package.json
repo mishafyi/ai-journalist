@@ -34,6 +34,7 @@
   "exports": {
     ".": "./index.ts",
     "./ports": "./ports.ts",
+    "./presets": "./presets/default.ts",
     "./sources": "./sources/index.ts",
     "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
     "./clients/firecrawl-search": "./clients/firecrawl-search.ts"
@@ -41,6 +42,7 @@
   "files": [
     "*.ts",
     "*.json",
+    "presets",
     "sources",
     "clients",
     "testing",
