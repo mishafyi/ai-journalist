@@ -37,7 +37,8 @@
     "./presets": "./presets/default.ts",
     "./sources": "./sources/index.ts",
     "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
-    "./clients/firecrawl-search": "./clients/firecrawl-search.ts"
+    "./clients/firecrawl-search": "./clients/firecrawl-search.ts",
+    "./clients/searxng-search": "./clients/searxng-search.ts"
   },
   "files": [
     "*.ts",
