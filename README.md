@@ -39,23 +39,44 @@ purity checks **and** the offline end-to-end example
 ## The contract
 
 [`ports.ts`](./ports.ts) is the entire customization surface and is the
-authoritative reference — read its docstrings. A minimal adopter brings a
-**Source** (their data), an **EngineConfig** (an LLM + search client + brand),
-and implements **`publish(post)`** — there is no Sink class to subclass; the Sink
-is just an object with a `publish` method (a file, a CMS, your own API):
+authoritative reference — read its docstrings. A minimal adopter brings **four
+things** — a **Source** (their data), an **LlmClient**, a **SearchClient**, and a
+**BrandProfile** — and hands them to [`createDefaultInternals`](./presets/default.ts),
+the batteries-included preset that assembles the complete `EngineInternals` (the
+REAL editor + gate chain). That carrier is the one input `runPipeline` **requires**
+beyond the public ports — so it is line 1 of the story:
 
 ```ts
 import { writeFile } from "node:fs/promises";
 import { runPipeline } from "ai-journalist";
+import { createDefaultInternals } from "ai-journalist/presets";
 import { createHttpSource } from "ai-journalist/sources";
-import {
-  createOpenRouterLlm,
-  DEFAULT_MODEL,
-} from "ai-journalist/clients/openrouter-llm";
+import { createOpenRouterLlm } from "ai-journalist/clients/openrouter-llm";
 import { createFirecrawlSearch } from "ai-journalist/clients/firecrawl-search";
 
+const source = createHttpSource({ signalUrl: "https://my-api/signal" }); // your data
+// `apiKey` falls back to OPENROUTER_API_KEY; omit `defaultModel` → dynamic
+// top-weekly-free model selection at runtime (pass one to pin a stable id).
+const llm = createOpenRouterLlm({ apiKey: process.env.OPENROUTER_API_KEY });
+// `apiUrl` is required (or set FIRECRAWL_API_URL); `apiKey` → FIRECRAWL_API_KEY.
+const search = createFirecrawlSearch({
+  apiKey: process.env.FIRECRAWL_API_KEY,
+  apiUrl: process.env.FIRECRAWL_API_URL,
+});
+const brand = {
+  name: "My Outlet",
+  publication: "My Outlet (myoutlet.com)",
+  beat: "your beat",
+  bylines: ["A. Writer"],
+};
+
+// The preset turns those four ports into a complete, working EngineInternals —
+// no gate-chain wiring of your own. Override knobs / systemPrompt / enrichment /
+// onEvent here (see CUSTOMIZING.md).
+const internals = createDefaultInternals({ llm, search, brand, source });
+
 await runPipeline({
-  source: createHttpSource({ signalUrl: "https://my-api/signal" }), // your data
+  source,
   sink: {
     // YOU implement publish() — where the finished post lands (no Sink class ships)
     async publish(post) {
@@ -63,50 +84,54 @@ await runPipeline({
       return { url: `out/${post.slug}.md`, status: "DRAFT" };
     },
   },
-  config: {
-    // `defaultModel` is required — a STABLE id (DEFAULT_MODEL is the bundled one);
-    // `apiKey` falls back to OPENROUTER_API_KEY.
-    llm: createOpenRouterLlm({
-      apiKey: process.env.OPENROUTER_API_KEY,
-      defaultModel: DEFAULT_MODEL,
-    }),
-    // `apiUrl` is required (or set FIRECRAWL_API_URL); `apiKey` → FIRECRAWL_API_KEY.
-    search: createFirecrawlSearch({
-      apiKey: process.env.FIRECRAWL_API_KEY,
-      apiUrl: process.env.FIRECRAWL_API_URL,
-    }),
-    brand: {
-      name: "My Outlet",
-      publication: "My Outlet (myoutlet.com)",
-      beat: "your beat",
-      bylines: ["A. Writer"],
-    },
-  },
-  // internals, — the adapter-internal carrier the four public ports can't express
-  //              (the Phase-2 generation closure + slug/finalize helpers — see
-  //              `EngineInternals` in ports.ts and `examples/basic.ts`).
-  // topic,     — optional: a fixed topic; omit for autonomous discovery from the signal
-  // linker,    — optional: on-site entity links (omit → no internal links)
-  // dryRun,    — optional: return the post instead of publishing
+  config: { llm, search, brand },
+  internals,
+  // topic,  — optional: a fixed topic; omit for autonomous discovery from the signal
+  // linker, — optional: on-site entity links (omit → no internal links)
+  // dryRun, — optional: return the post instead of publishing
 });
 ```
 
+Beyond the preset, the four **public ports** stay the customization surface: a
+**Source** (your data), an **EngineConfig** (LLM + search + brand), an optional
+**Linker** (on-site links), and **`publish(post)`** — there is no Sink class to
+subclass; the Sink is just an object with a `publish` method (a file, a CMS, your
+own API). The `internals` carrier holds only what those four can't express (the
+Phase-2 generation closure + slug/finalize helpers — see `EngineInternals` in
+[`ports.ts`](./ports.ts)); the preset builds it for you.
+
 `runPipeline(input)` returns the `GeneratedPost` either way (a dry run yields it
-for inspection without publishing). For a complete, **offline, runnable** wiring
-— a fake `LlmClient`, an inline `Source`, a no-op `Sink`, and the `internals`
-carrier — see [`examples/basic.ts`](./examples/basic.ts) (`npx tsx examples/basic.ts`).
+for inspection without publishing). Two runnable demos:
+
+- [`examples/basic.ts`](./examples/basic.ts) — **offline**, zero real services (a
+  fake `LlmClient`, an inline `Source`, a no-op `Sink`, stub `internals`); it is
+  the vitest-run wiring proof (`npx tsx examples/basic.ts`).
+- [`examples/live-minimal.ts`](./examples/live-minimal.ts) — the **live** preset
+  path (`createDefaultInternals` + a real LLM + a real search backend), writing to
+  `out/<slug>.md`; operator-run and safe anywhere (`npx tsx examples/live-minimal.ts`
+  prints `SKIP` without `OPENROUTER_API_KEY`).
+
+New here? See [`CUSTOMIZING.md`](./CUSTOMIZING.md) ("I want to change X" → the
+exact seam) and [`AGENTS.md`](./AGENTS.md) (repo map + the enforced invariants).
 
 ### Search backends
 
-The default `createFirecrawlSearch` client talks to a [Firecrawl](https://firecrawl.dev)
-instance, which provides its own web search. Point it at **Firecrawl Cloud** or a
-**self-hosted Firecrawl** via `FIRECRAWL_API_URL` (`apiUrl` is required; there is no
-baked-in default, so the engine ships brand-clean). Search is fully swappable: the
-client is only a reference adapter, so implementing the `SearchClient` port
-([`ports.ts`](./ports.ts)) lets you back search with anything — a different SaaS, an
-internal index, a separate self-hosted metasearch like
-[**SearXNG**](https://github.com/searxng/searxng) (its own service, *not* a Firecrawl
-backend), or a static fixture for tests.
+Two reference `SearchClient`s ship, and search is fully swappable:
+
+- [`createFirecrawlSearch`](./clients/firecrawl-search.ts) — talks to a
+  [Firecrawl](https://firecrawl.dev) instance (its own web search). Point it at
+  **Firecrawl Cloud** or a **self-hosted Firecrawl** via `FIRECRAWL_API_URL`
+  (`apiUrl` is required; `apiKey` → `FIRECRAWL_API_KEY`).
+- [`createSearxngSearch`](./clients/searxng-search.ts) — talks to a self-hosted
+  [**SearXNG**](https://github.com/searxng/searxng) metasearch instance via its
+  JSON API (`baseUrl` → `SEARXNG_URL`; the instance must allow `format=json`).
+  A **separate service, _not_ a Firecrawl backend**; opts: `{ baseUrl, engines,
+  language, timeoutMs }`.
+
+Neither has a baked-in default host, so the engine ships brand-clean. Both are
+reference adapters — implementing the `SearchClient` port ([`ports.ts`](./ports.ts))
+lets you back search with anything else: a different SaaS, an internal index, or a
+static fixture for tests.
 
 ## "Plug any data in" — three layers of effort
 
@@ -143,11 +168,12 @@ primitives.ts     trigramSimilarity / sharesEntityEvent
 run-context.ts    per-run telemetry + artifact + runId carrier (no module globals)
 build-headline-corpus.ts / headlines.json   NYT/WSJ headline corpus for the title gate
 
+presets/          createDefaultInternals — a working EngineInternals from 4 inputs
 sources/          Http / Rss / File / compose — the reference Source library
-clients/          OpenRouter LlmClient + Firecrawl SearchClient (the default config clients)
+clients/          OpenRouter LlmClient + Firecrawl/SearXNG SearchClient (the reference clients)
 testing/replay.ts record/replay harness (sha256-keyed) for deterministic tests
 *.checks.ts       per-module byte-lock + behavioral checks (run by `npm run test:checks`)
-examples/         offline, runnable end-to-end demo (`basic.ts` + its vitest wrapper)
+examples/         runnable demos — basic.ts (offline, vitest) + live-minimal.ts (operator-run)
 ```
 
 ## Purity & testing — enforced in CI
