@@ -108,17 +108,21 @@ const LIST_BASE_DELAY_MS = envInt("OPENROUTER_LIST_BASE_DELAY_MS", 300, 0);
 const LIST_TTL_MS = envInt("OPENROUTER_LIST_TTL_MS", 3_600_000, 0);
 
 /**
- * Hard timeout for a SINGLE `chat.send`, handed to the SDK's OWN per-call
- * `timeoutMs` (`RequestOptions`, `@openrouter/sdk`). Bounds an SDK hang: the SDK's
- * response matcher `JSON.parse`s the body with no empty-body guard, so an
- * intermittently-empty free-provider response can leave the awaited call unsettled
- * — hanging the whole pipeline (observed on free models under load). The SDK turns
- * `timeoutMs` into an `AbortSignal.timeout` on the underlying `fetch` (`lib/sdks`),
- * so on timeout the REQUEST is aborted (the socket is released) and `chat.send`
- * rejects with a `RequestTimeoutError`; the per-model retry in `runWithSelection`
- * then advances to the next ranked candidate. This is preferred over a hand-rolled
- * `Promise.race`, which would leave the hung `fetch` reading in the background.
- * Env-overridable; default 120s (a real free-model response can be slow, but a
+ * Per-request timeout, set ONCE at client construction via the SDK's OWN
+ * `SDKOptions.timeoutMs` (`@openrouter/sdk`). `chatSend` resolves a request's
+ * timeout as `options?.timeoutMs || client._options.timeoutMs || -1`, so a
+ * client-level value is inherited by every `chat.send` with no per-call plumbing.
+ * Bounds an SDK hang: the SDK defaults to `-1` (NO timeout), and its response
+ * matcher `JSON.parse`s the body with no empty-body guard, so an intermittently-
+ * empty free-provider response can leave the awaited call unsettled — hanging the
+ * whole pipeline (observed on free models under load). The SDK turns `timeoutMs`
+ * into an `AbortSignal.timeout` on the underlying `fetch` (`lib/sdks`), so on
+ * timeout the REQUEST is aborted (the socket is released) and `chat.send` rejects
+ * with a `RequestTimeoutError`; the per-model retry in `runWithSelection` then
+ * advances to the next ranked candidate. Preferred over a hand-rolled
+ * `Promise.race` (which would leave the hung `fetch` reading in the background)
+ * AND over per-call passing (this is DRYer and covers every call site). Env-
+ * overridable; default 120s (a real free-model response can be slow, but a
  * 2-minute silence is a hang). Floor 1s.
  */
 const CALL_TIMEOUT_MS = envInt("OPENROUTER_CALL_TIMEOUT_MS", 120_000, 1_000);
@@ -197,7 +201,12 @@ export function getTopFreeTextModels(client?: OpenRouter): Promise<string[]> {
   if (rankedModelsPromise && Date.now() - rankedModelsFetchedAt < LIST_TTL_MS) {
     return rankedModelsPromise;
   }
-  const c = client ?? new OpenRouter({ apiKey: process.env.OPENROUTER_API_KEY });
+  const c =
+    client ??
+    new OpenRouter({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      timeoutMs: CALL_TIMEOUT_MS,
+    });
   const attempt = withRetry(
     () => fetchRankedModels(c),
     LIST_MAX_ATTEMPTS,
@@ -289,6 +298,7 @@ export function createOpenRouterLlm(opts: {
 }): OpenRouterLlmClient {
   const client = new OpenRouter({
     apiKey: opts.apiKey ?? process.env.OPENROUTER_API_KEY,
+    timeoutMs: CALL_TIMEOUT_MS,
   });
 
   const totals: OpenRouterUsageTotals = {
@@ -354,19 +364,16 @@ export function createOpenRouterLlm(opts: {
     prompt: string,
     temperature: number | undefined,
   ): Promise<string> {
-    const response = await client.chat.send(
-      {
-        chatRequest: {
-          model,
-          messages: [
-            ...(system ? [{ role: "system" as const, content: system }] : []),
-            { role: "user" as const, content: prompt },
-          ],
-          temperature,
-        },
+    const response = await client.chat.send({
+      chatRequest: {
+        model,
+        messages: [
+          ...(system ? [{ role: "system" as const, content: system }] : []),
+          { role: "user" as const, content: prompt },
+        ],
+        temperature,
       },
-      { timeoutMs: CALL_TIMEOUT_MS },
-    );
+    });
 
     // The streaming overload returns an EventStream (no `choices`). A non-stream
     // request should never hit this, but guard rather than crash on an
@@ -401,24 +408,21 @@ export function createOpenRouterLlm(opts: {
       temperature?: number;
     },
   ): Promise<T> {
-    const response = await client.chat.send(
-      {
-        chatRequest: {
-          model,
-          messages: args.messages,
-          temperature: args.temperature,
-          responseFormat: {
-            type: "json_schema",
-            jsonSchema: {
-              name: args.schemaName,
-              strict: true,
-              schema: z.toJSONSchema(args.schema),
-            },
+    const response = await client.chat.send({
+      chatRequest: {
+        model,
+        messages: args.messages,
+        temperature: args.temperature,
+        responseFormat: {
+          type: "json_schema",
+          jsonSchema: {
+            name: args.schemaName,
+            strict: true,
+            schema: z.toJSONSchema(args.schema),
           },
         },
       },
-      { timeoutMs: CALL_TIMEOUT_MS },
-    );
+    });
     if (!("choices" in response)) {
       throw new Error(
         "OpenRouter returned a streaming response where a completion was expected",

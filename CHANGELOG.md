@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-07-03
+
+### Changed
+
+- **Set the SDK timeout ONCE at client construction, not per-call.** The
+  `@openrouter/sdk` resolves a request's timeout as `options?.timeoutMs ||
+  client._options.timeoutMs || -1`, so a client-level `SDKOptions.timeoutMs`
+  (set in the two `new OpenRouter({...})` constructors) is inherited by every
+  `chat.send`, and the two calls return to the documented single-arg
+  `{ chatRequest }` envelope. Same env knob (`OPENROUTER_CALL_TIMEOUT_MS`, 120s
+  default) and behaviour as 0.4.1 — just DRYer, and it covers any future call
+  site automatically instead of relying on each one to pass the option.
+
 ## [0.4.1] - 2026-07-03
 
 ### Changed
@@ -74,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial public release — extracted engine, ports contract, reference
 sources/clients, byte-lock + purity CI.
 
+[0.4.2]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.2
 [0.4.1]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.1
 [0.4.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.3.0
