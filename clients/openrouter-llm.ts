@@ -108,6 +108,18 @@ const LIST_BASE_DELAY_MS = envInt("OPENROUTER_LIST_BASE_DELAY_MS", 300, 0);
 const LIST_TTL_MS = envInt("OPENROUTER_LIST_TTL_MS", 3_600_000, 0);
 
 /**
+ * Hard timeout for a SINGLE `chat.send`. Bounds an SDK hang: `@openrouter/sdk`'s
+ * response matcher `JSON.parse`s the body with no empty-body guard, so an
+ * intermittently-empty free-provider response throws a FLOATING rejection while
+ * the awaited call never settles — hanging the whole pipeline (observed on free
+ * models under load). On timeout the call rejects, so the per-model retry in
+ * `runWithSelection` advances to the next ranked candidate. Env-overridable;
+ * default 120s (a real free-model response can be slow, but a 2-minute silence
+ * is a hang). Floor 1s.
+ */
+const CALL_TIMEOUT_MS = envInt("OPENROUTER_CALL_TIMEOUT_MS", 120_000, 1_000);
+
+/**
  * Minimal exponential-backoff retry. The engine's own `withRetry` is a dependency
  * the pure core injects and is not importable here, so `clients/**` inlines this.
  * Tries `fn` up to `attempts` times, sleeping `baseDelayMs * 2**i` between tries;
@@ -132,6 +144,33 @@ async function withRetry<T>(
     }
   }
   throw lastErr;
+}
+
+/**
+ * Hard per-call timeout around a `chat.send` await (see `CALL_TIMEOUT_MS`).
+ * `Promise.race`s the send against an unref'd timer; on timeout it rejects with
+ * the model id so the caller's retry/advance can act. The timer is cleared once
+ * the race settles so a fast response never keeps the process alive.
+ */
+function callWithTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  model: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `OpenRouter chat.send timed out after ${ms}ms (model ${model})`,
+          ),
+        ),
+      ms,
+    );
+    timer.unref();
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -338,16 +377,20 @@ export function createOpenRouterLlm(opts: {
     prompt: string,
     temperature: number | undefined,
   ): Promise<string> {
-    const response = await client.chat.send({
-      chatRequest: {
-        model,
-        messages: [
-          ...(system ? [{ role: "system" as const, content: system }] : []),
-          { role: "user" as const, content: prompt },
-        ],
-        temperature,
-      },
-    });
+    const response = await callWithTimeout(
+      client.chat.send({
+        chatRequest: {
+          model,
+          messages: [
+            ...(system ? [{ role: "system" as const, content: system }] : []),
+            { role: "user" as const, content: prompt },
+          ],
+          temperature,
+        },
+      }),
+      CALL_TIMEOUT_MS,
+      model,
+    );
 
     // The streaming overload returns an EventStream (no `choices`). A non-stream
     // request should never hit this, but guard rather than crash on an
@@ -382,21 +425,25 @@ export function createOpenRouterLlm(opts: {
       temperature?: number;
     },
   ): Promise<T> {
-    const response = await client.chat.send({
-      chatRequest: {
-        model,
-        messages: args.messages,
-        temperature: args.temperature,
-        responseFormat: {
-          type: "json_schema",
-          jsonSchema: {
-            name: args.schemaName,
-            strict: true,
-            schema: z.toJSONSchema(args.schema),
+    const response = await callWithTimeout(
+      client.chat.send({
+        chatRequest: {
+          model,
+          messages: args.messages,
+          temperature: args.temperature,
+          responseFormat: {
+            type: "json_schema",
+            jsonSchema: {
+              name: args.schemaName,
+              strict: true,
+              schema: z.toJSONSchema(args.schema),
+            },
           },
         },
-      },
-    });
+      }),
+      CALL_TIMEOUT_MS,
+      model,
+    );
     if (!("choices" in response)) {
       throw new Error(
         "OpenRouter returned a streaming response where a completion was expected",
