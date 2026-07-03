@@ -1,6 +1,6 @@
 {
   "name": "ai-journalist",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A domain-agnostic AI journalist / blog-generation engine behind hexagonal ports.",
   "type": "module",
   "license": "MIT",
