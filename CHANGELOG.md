@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-07-02
+
+### Added
+
+- `DefaultInternalsOptions.embedder?` (`ai-journalist/presets`) — pass any
+  `Embedder` (`ports.ts`) and `createDefaultInternals` upgrades its
+  `embedDedupSurvivors` from the trigram-only `null` fallback to real
+  embedding-grade near-paraphrase dedup (cosine over a per-factory cache),
+  bound into both the discovery topic pass and the title-candidate gate.
+  Omitted → today's `null` behavior, unchanged.
+
 ## [0.2.0] - 2026-07-02
 
 ### Added
@@ -36,5 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial public release — extracted engine, ports contract, reference
 sources/clients, byte-lock + purity CI.
 
+[0.3.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.3.0
 [0.2.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.2.0
 [0.1.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.1.0

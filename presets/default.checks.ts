@@ -318,7 +318,68 @@ async function runFlagship(): Promise<void> {
   );
 }
 
+/**
+ * The `embedder` option — a supplied `Embedder` upgrades the preset's
+ * `embedDedupSurvivors` from the constant `async () => null` (trigram-only
+ * fallback) to a REAL embedding-grade near-paraphrase dedup, bound into BOTH
+ * `discoveryDeps` and `gateDeps`. This proves the generic derivation drops a
+ * paraphrase (cosine ≥ threshold against a covered topic) while a novel
+ * candidate survives, and that omitting the embedder preserves today's `null`.
+ */
+async function runEmbedderChecks(): Promise<void> {
+  // ── embedder option: generic embedDedupSurvivors derivation ─────────────────
+  {
+    // A fake embedder with fixed vectors: "same story" pairs are identical
+    // (sim 1.0), everything else orthogonal (sim 0.0).
+    const VEC: Record<string, number[]> = {
+      "NASA delays Artemis crew flight": [1, 0, 0],
+      "Artemis slips again": [1, 0, 0], // paraphrase — same vector
+      "DoD hiring surge in cyber roles": [0, 1, 0],
+    };
+    const fakeEmbedder = {
+      async embed(texts: string[]): Promise<number[][]> {
+        return texts.map((t) => VEC[t] ?? [0, 0, 1]);
+      },
+    };
+    const withEmb = createDefaultInternals({
+      llm: fakeLlm,
+      search: fakeSearch,
+      brand,
+      source,
+      embedder: fakeEmbedder,
+    });
+    const dedup = withEmb.discoveryDeps.embedDedupSurvivors;
+    const res = await dedup(
+      ["Artemis slips again", "DoD hiring surge in cyber roles"],
+      ["NASA delays Artemis crew flight"],
+      0.9,
+    );
+    ok(
+      "embedder: paraphrase dropped, novel survives",
+      res !== null &&
+        res.survivors.length === 1 &&
+        res.survivors[0] === "DoD hiring surge in cyber roles" &&
+        res.dropped.length === 1 &&
+        res.dropped[0].sim > 0.99,
+      JSON.stringify(res),
+    );
+    const without = createDefaultInternals({
+      llm: fakeLlm,
+      search: fakeSearch,
+      brand,
+      source,
+    });
+    ok(
+      "no embedder: embedDedupSurvivors returns null (trigram-only fallback)",
+      (await without.discoveryDeps.embedDedupSurvivors(["a"], ["b"], 0.9)) ===
+        null,
+      "must be null when embedder omitted",
+    );
+  }
+}
+
 runFlagship()
+  .then(runEmbedderChecks)
   .then(() => {
     process.stdout.write(failures ? `\n${failures} FAILED\n` : "\nALL passed\n");
     if (failures) process.exit(1);

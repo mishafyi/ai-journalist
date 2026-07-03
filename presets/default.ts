@@ -39,12 +39,14 @@ import type { AssemblyDeps } from "../assembly";
 import type { Plan } from "../planning";
 import type {
   BrandProfile,
+  Embedder,
   EngineInternals,
   GeneratedPost,
   LlmClient,
   SearchClient,
   Source,
 } from "../ports";
+import { cosineSimilarity } from "../text";
 import {
   stripPreambleAndFence,
   isArticleShaped,
@@ -146,6 +148,10 @@ export interface DefaultInternalsOptions {
   runId?: string;
   /** Domain enrichment (Task 1); omit → neutralEnrichment(). */
   enrichment?: PipelineEnrichment<PipelineBoardCompany>;
+  /** Optional embedding backend. Supplied → embedding-based near-paraphrase
+   *  dedup for topics + title candidates (the engine's embedDedupSurvivors);
+   *  omitted → null, i.e. trigram-only dedup (the documented degradation). */
+  embedder?: Embedder;
   /** Override any numeric knob; unspecified ones use the documented defaults. */
   knobs?: Partial<DefaultKnobs>;
   /** withRetry attempt budget; omit → 3. */
@@ -256,8 +262,60 @@ export function createDefaultInternals(
     (await source.coveredTopics?.())?.map((t) => t.title) ?? [];
   const fetchPriorTitles = opts.fetchPriorTitles ?? gatherCoveredTopics;
 
-  // ── 7. no embedder → trigram dedup only (the documented degradation).
-  const embedDedupSurvivors = async (): Promise<null> => null;
+  // ── 7. embedder → embedding-grade near-paraphrase dedup; omitted → null
+  //      (trigram dedup only, the documented degradation). Bound into BOTH
+  //      gateDeps (title candidates) and discoveryDeps (topics) below.
+  //      Per-factory embedding cache — the same covered-topic strings are
+  //      re-embedded on every discovery round otherwise (mirrors the host
+  //      adapter's cache).
+  const embedCache = new Map<string, number[]>();
+  const embedDedupSurvivors = opts.embedder
+    ? async (
+        candidates: string[],
+        covered: string[],
+        simThreshold: number,
+      ): Promise<{
+        survivors: string[];
+        dropped: { cand: string; closest: string; sim: number }[];
+      } | null> => {
+        const embedder = opts.embedder;
+        if (!embedder) return null;
+        const misses = [...new Set([...covered, ...candidates])].filter(
+          (t) => t.length > 0 && !embedCache.has(t),
+        );
+        if (misses.length > 0) {
+          const vectors = await embedder.embed(misses);
+          misses.forEach((t, i) => embedCache.set(t, vectors[i]));
+        }
+        const vecOf = (t: string): number[] | undefined => embedCache.get(t);
+        const survivors: string[] = [];
+        const dropped: { cand: string; closest: string; sim: number }[] = [];
+        for (const cand of candidates) {
+          const cv = vecOf(cand);
+          if (!cv) {
+            survivors.push(cand);
+            continue;
+          }
+          let closest = "";
+          let best = -Infinity;
+          for (const cov of covered) {
+            const covVec = vecOf(cov);
+            if (!covVec) continue;
+            const sim = cosineSimilarity(cv, covVec);
+            if (sim > best) {
+              best = sim;
+              closest = cov;
+            }
+          }
+          if (covered.length > 0 && best >= simThreshold) {
+            dropped.push({ cand, closest, sim: best });
+          } else {
+            survivors.push(cand);
+          }
+        }
+        return { survivors, dropped };
+      }
+    : async (): Promise<null> => null;
 
   // ── 8. headline-corpus exemplar sampler — mirror of the host's:
   //      70% from entries whose domain === category (fall back to "general",

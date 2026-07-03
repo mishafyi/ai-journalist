@@ -16,6 +16,7 @@ page is the guided tour.
 | HOW research happens                 | a `SearchClient` (Firecrawl / SearXNG / custom)   | `clients/` · `ports.ts`                     |
 | WHAT the writing sounds like         | `systemPrompt` + `BrandProfile`                   | `presets/default.ts` · `ports.ts`           |
 | HOW MUCH it writes                   | `knobs`                                            | `presets/default.ts` (`DefaultKnobs`)       |
+| PARAPHRASE-grade dedup               | pass `embedder` (any `Embedder`; e.g. an HTTP wrapper over your embedding service) | `presets/default.ts` · `ports.ts`           |
 | DOMAIN data woven in                 | `PipelineEnrichment`                              | `pipeline.ts`                               |
 | OBSERVABILITY                        | `onEvent` / `onError` / `RunContext`              | `presets/default.ts` · `run-context.ts`     |
 
@@ -185,6 +186,31 @@ const internals = createDefaultInternals({
   llm, search, source, brand,
   knobs: { maxSections: 5, snippetsPerQuery: 8, draftWordWarnFloor: 1200 },
 });
+```
+
+## PARAPHRASE-grade dedup → `embedder`
+
+Omit `embedder` and dedup is trigram-only (the documented degradation:
+`embedDedupSurvivors` returns `null`). Pass any `Embedder` — one method,
+`embed(texts) => Promise<number[][]>` — and the preset upgrades to embedding-grade
+near-paraphrase dedup (cosine over a per-factory cache) for both discovery topics
+and title candidates. An HTTP wrapper over your embedding service is the typical
+production shape:
+
+```ts
+import type { Embedder } from "ai-journalist/ports";
+
+const embedder: Embedder = {
+  async embed(texts) {
+    const res = await fetch(process.env.EMBED_URL!, {
+      method: "POST",
+      body: JSON.stringify({ texts }),
+    });
+    return (await res.json()).vectors as number[][];
+  },
+};
+
+const internals = createDefaultInternals({ llm, search, source, brand, embedder });
 ```
 
 ## DOMAIN data woven in → `PipelineEnrichment`
