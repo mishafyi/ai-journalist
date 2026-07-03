@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-03
+
+### Fixed
+
+- **Bounded a hang on the OpenRouter free-tier.** `@openrouter/sdk`'s response
+  matcher `JSON.parse`s the body with no empty-body guard (still true in the
+  latest `0.13.22`), so an intermittently-empty free-provider response throws a
+  *floating* rejection while the awaited `chat.send` never settles — hanging the
+  whole pipeline. `createOpenRouterLlm` now wraps every `chat.send` in a hard
+  per-call timeout (`OPENROUTER_CALL_TIMEOUT_MS`, default 120s): on timeout the
+  call rejects, so the per-model retry advances to the next ranked free model
+  instead of hanging. No behavior change on the happy path.
+
 ## [0.3.0] - 2026-07-02
 
 ### Added
@@ -47,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial public release — extracted engine, ports contract, reference
 sources/clients, byte-lock + purity CI.
 
+[0.4.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.3.0
 [0.2.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.2.0
 [0.1.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.1.0
