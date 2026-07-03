@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-03
+
+### Changed
+
+- **Use the SDK's native per-call `timeoutMs` instead of a hand-rolled
+  `Promise.race`.** `@openrouter/sdk`'s `chat.send(request, { timeoutMs })`
+  (`RequestOptions`) turns the value into an `AbortSignal.timeout` on the
+  underlying `fetch` (`lib/sdks`), so a timed-out call ABORTS the request and
+  releases the socket — where the 0.4.0 `Promise.race` wrapper left the hung
+  `fetch` reading in the background (a socket leak plus the later floating
+  rejection). Same env knob (`OPENROUTER_CALL_TIMEOUT_MS`, default 120s) and the
+  same per-model retry/advance behaviour; strictly cleaner teardown of a hung
+  free-model call, and no longer hand-rolls what the SDK provides.
+
 ## [0.4.0] - 2026-07-03
 
 ### Fixed
@@ -60,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial public release — extracted engine, ports contract, reference
 sources/clients, byte-lock + purity CI.
 
+[0.4.1]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.1
 [0.4.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.3.0
 [0.2.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.2.0
