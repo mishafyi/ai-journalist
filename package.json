@@ -1,6 +1,6 @@
 {
   "name": "ai-journalist",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "A domain-agnostic AI journalist / blog-generation engine behind hexagonal ports.",
   "type": "module",
   "license": "MIT",
@@ -39,7 +39,17 @@
     "./sources": "./sources/index.ts",
     "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
     "./clients/firecrawl-search": "./clients/firecrawl-search.ts",
-    "./clients/searxng-search": "./clients/searxng-search.ts"
+    "./clients/searxng-search": "./clients/searxng-search.ts",
+    "./gates": "./gates.ts",
+    "./discovery": "./discovery.ts",
+    "./section-writer": "./section-writer.ts",
+    "./assembly": "./assembly.ts",
+    "./run-context": "./run-context.ts",
+    "./text": "./text.ts",
+    "./news": "./news.ts",
+    "./primitives": "./primitives.ts",
+    "./gate": "./gate.ts",
+    "./headlines.json": "./headlines.json"
   },
   "files": [
     "*.ts",

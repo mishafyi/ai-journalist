@@ -1,0 +1,33 @@
+name: Publish
+
+# Publishes to npm when a v* tag is pushed. Requires an NPM_TOKEN repo secret
+# (an npm automation/publish token). The package ships raw .ts with no build
+# step, so publish just packs the files listed in package.json "files".
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The package is unscoped, so it publishes public by default — no
+      # --access flag needed.
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

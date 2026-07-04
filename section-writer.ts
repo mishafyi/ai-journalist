@@ -127,7 +127,7 @@ async function writeSection(
     .map((s, i) => `${i + 1}. ${s.heading} — ${s.intent}`)
     .join("\n");
   const boardBlock = boardFacts.trim()
-    ? `\n\nFIRST-PARTY BOARD DATA (${deps.brandName}'s own live job board, ingested directly from company ATSes — stronger than third-party counts). If DIRECTLY relevant to THIS section, you may cite ONE of these figures in a reporting sentence (e.g. "${deps.brandName}'s board lists 215 SpaceX roles added in the past week"); otherwise omit — never force them:\n${boardFacts}`
+    ? `\n\nFIRST-PARTY BOARD DATA (${deps.brandName}'s own live data, ingested directly at the source — stronger than any third-party count OR third-party figure). For any figure below that a web source also reports second-hand, PREFER this first-party board figure over the web-scraped one, and cite the specific board item by name (it links to the on-site listing). For other facts, cite one figure only when directly relevant — never force it:\n${boardFacts}`
     : "";
   const prompt = `You are writing ONE section of a larger article. Here is the whole plan so your section fits the arc and does NOT repeat what other sections cover.
 
