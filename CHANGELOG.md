@@ -5,6 +5,35 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-04
+
+### Added
+
+- **9 deep-import subpaths + the headline corpus asset in `exports`.** Added
+  `./gates`, `./discovery`, `./section-writer`, `./assembly`, `./run-context`,
+  `./text`, `./news`, `./primitives`, `./gate`, and the `./headlines.json` asset
+  to the `exports` map. The files already shipped in the tarball (via
+  `files: ["*.ts", "*.json"]`) but were not addressable as package subpaths, so a
+  rich host that hand-builds `EngineInternals` (rather than using
+  `createDefaultInternals`) could not import the gate/discovery/section-writer
+  types and helpers it needs. This unblocks a first-party consumer that imports
+  the engine's internals directly.
+- **Publish-on-tag GitHub Action (`.github/workflows/publish.yml`).** Pushing a
+  `v*` tag runs `npm publish` (needs an `NPM_TOKEN` repo secret). The package
+  ships raw `.ts` with no build step, so publish just packs.
+
+### Changed
+
+- **First-party board data is now the PREFERRED source for a figure it carries.**
+  Generalized the section-writer's `FIRST-PARTY BOARD DATA` prompt from
+  "cite ONE figure if relevant, otherwise omit" to: PREFER a first-party board
+  figure over any web-scraped second-hand report of the same figure, and cite the
+  specific board item by name. The fact-guard's `TABLE-CELL attribution` rule
+  gains a matching EXCEPTION — a table cell whose figure is present in the
+  `FIRST-PARTY BOARD DATA` block is authoritative and preferred over any
+  web-scraped figure for that entity. Both stay domain-agnostic (figure-generic,
+  not tied to any one content vertical). Byte-locked in `gates.checks.ts`.
+
 ## [0.4.2] - 2026-07-03
 
 ### Changed
@@ -87,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial public release — extracted engine, ports contract, reference
 sources/clients, byte-lock + purity CI.
 
+[0.5.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.5.0
 [0.4.2]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.2
 [0.4.1]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.1
 [0.4.0]: https://github.com/mishafyi/ai-journalist/releases/tag/v0.4.0
