@@ -1,8 +1,14 @@
 name: Publish
 
-# Publishes to npm when a v* tag is pushed. Requires an NPM_TOKEN repo secret
-# (an npm automation/publish token). The package ships raw .ts with no build
-# step, so publish just packs the files listed in package.json "files".
+# Publishes to npm when a v* tag is pushed. Auth, in order of preference:
+#   1. npm TRUSTED PUBLISHING (OIDC, tokenless) — once the package's npmjs.com
+#      Settings → Trusted Publisher is configured for this repo + this workflow
+#      file (publish.yml), the npm CLI detects the OIDC environment and uses it
+#      automatically. Requires npm >= 11.5.1 (bumped below) + id-token: write.
+#   2. Fallback: the NPM_TOKEN repo secret (granular bypass-2FA / automation
+#      token) — used only when no trusted publisher is configured.
+# The package ships raw .ts with no build step, so publish just packs the
+# files listed in package.json "files".
 on:
   push:
     tags:
@@ -13,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write # OIDC token for npm trusted publishing
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +29,10 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      # setup-node's Node 22 bundles npm 10.x; trusted publishing needs >= 11.5.1.
+      - name: Update npm for OIDC trusted publishing
+        run: npm install -g npm@11 && npm --version
 
       - name: Install dependencies
         run: npm ci
