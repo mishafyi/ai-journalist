@@ -46,6 +46,27 @@ ok(
   "recordLlmCall preserves fields",
   ctx.telemetry.llmCalls[0].label === "title",
 );
+ok(
+  "base field set stays valid without provenance fields",
+  ctx.telemetry.llmCalls[0].model === undefined &&
+    ctx.telemetry.llmCalls[0].generationId === undefined,
+);
+
+// optional provenance fields (model + generationId) — type-valid + preserved
+ctx.recordLlmCall({
+  label: "seo",
+  attempts: 1,
+  ms: 5,
+  promptTokens: 10,
+  completionTokens: 4,
+  model: "test/model-1",
+  generationId: "gen_abc123",
+});
+ok(
+  "recordLlmCall preserves optional model + generationId",
+  ctx.telemetry.llmCalls[1].model === "test/model-1" &&
+    ctx.telemetry.llmCalls[1].generationId === "gen_abc123",
+);
 
 ctx.recordRetry({ label: "draft", attempt: 2, error: "boom", body: "{}" });
 ok("recordRetry appends", ctx.telemetry.retries.length === 1);

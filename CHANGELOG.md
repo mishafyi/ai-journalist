@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-07-06
+
+### Added
+
+- **`LlmCallStat`: optional `model` + `generationId` fields for adapter-side
+  per-call provenance.** `model` is the model id that served the successful call
+  (as reported by the provider response); `generationId` is the provider's
+  generation id (OpenRouter `response.id`), joinable to
+  `GET /api/v1/generation` for per-call provider-side metadata. Both are
+  optional — existing callers passing the base
+  `{label, attempts, ms, promptTokens, completionTokens}` set remain type-valid
+  with zero changes.
+
 ## [0.5.0] - 2026-07-04
 
 ### Added

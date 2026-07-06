@@ -22,6 +22,13 @@ export interface LlmCallStat {
   ms: number;
   promptTokens: number;
   completionTokens: number;
+  /** The model id that served the successful call (as reported by the provider response). */
+  model?: string;
+  /**
+   * The provider's generation id (OpenRouter `response.id`), joinable to
+   * GET /api/v1/generation for per-call provider-side metadata.
+   */
+  generationId?: string;
 }
 
 /**
