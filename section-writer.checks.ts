@@ -125,6 +125,20 @@ async function main(): Promise<void> {
     capturedSectionPrompt.includes("prefer the NEWEST dated source"),
   );
 
+  // Part B (2026-07): the MAIN THEME anchor opens every section prompt (themeOf
+  // falls back to "title — angle" for plans without a themeStatement, so the
+  // anchor is always present).
+  ok(
+    "section prompt opens with the MAIN THEME anchor",
+    capturedSectionPrompt.startsWith("MAIN THEME"),
+  );
+  ok(
+    "section restatement block repeats the theme rule",
+    capturedSectionPrompt.includes("Serve the MAIN THEME above") &&
+      capturedSectionPrompt.indexOf("Serve the MAIN THEME above") >
+        capturedSectionPrompt.lastIndexOf("YOUR TASK, RESTATED"),
+  );
+
   process.stdout.write(
     failed === 0
       ? `\nALL ${passed} checks passed\n`

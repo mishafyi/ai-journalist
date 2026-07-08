@@ -281,6 +281,7 @@ Output ONLY a JSON object (no prose, no code fences):
 {
   "title": "the article title",
   "angle": "one sentence stating the specific argument / throughline",
+  "themeStatement": "<1-2 plain sentences of ACTION stating what the story SAYS — the development, one or two effects, the major reaction; no details, no numbers>",
   "category": "the story's primary domain — one of: robotics, artificial-intelligence, aerospace-engineering, defense, energy, biotech, frontier",
   "searchSeed": "a 2-4 word phrase a reader would type into Google to find this story (e.g. 'defense tech salaries', 'humanoid robot funding')",
   "sections": [

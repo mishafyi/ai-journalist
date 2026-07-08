@@ -1,10 +1,19 @@
 /**
  * Checks for planning.ts — run: npx tsx planning.checks.ts
  */
-import { parseDiscovery, parsePlan } from "./planning";
+import { parseDiscovery, parsePlan, themeOf, Plan } from "./planning";
 
 let passed = 0;
 let failed = 0;
+function ok(name: string, cond: boolean): void {
+  if (cond) {
+    passed++;
+    process.stdout.write(`PASS ${name}\n`);
+  } else {
+    failed++;
+    process.stdout.write(`FAIL ${name}\n`);
+  }
+}
 function eq(name: string, actual: unknown, expected: unknown): void {
   const a = JSON.stringify(actual);
   const e = JSON.stringify(expected);
@@ -74,6 +83,25 @@ eq(
     `{"title":"Defense${ctrl}Tech","angle":"a","sections":[{"heading":"h","intent":"i","queries":[]}]}`,
   ).title,
   "Defense Tech",
+);
+
+// --- themeOf (Part B, 2026-07: the ONLY reader of the plan's theme) ---
+ok(
+  "themeOf falls back to title — angle",
+  themeOf({ title: "T", angle: "A" }) === "T — A",
+);
+ok(
+  "themeOf prefers an explicit statement",
+  themeOf({ title: "T", angle: "A", themeStatement: "S." }) === "S.",
+);
+ok(
+  "Plan accepts themeStatement",
+  Plan.safeParse({
+    title: "t",
+    angle: "a",
+    sections: [{ heading: "h", intent: "i" }],
+    themeStatement: "x",
+  }).success,
 );
 
 process.stdout.write(

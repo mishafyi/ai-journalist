@@ -327,6 +327,14 @@ discoverStory(captureDeps)
       capturedStoryPlanPrompt.includes("APPROACH") &&
         capturedStoryPlanPrompt.includes("stresses most"),
     );
+    // Part B (2026-07): the JSON spec asks for a themeStatement. Both plan
+    // paths (pooled-research discoverStory AND the seeded planForTopic) share
+    // this one pickStoryAndPlan prompt, so one lock covers both.
+    ok(
+      "story-plan JSON spec asks for a themeStatement",
+      capturedStoryPlanPrompt.includes('"themeStatement"') &&
+        capturedStoryPlanPrompt.includes("no details, no numbers"),
+    );
 
     process.stdout.write(
       failed === 0

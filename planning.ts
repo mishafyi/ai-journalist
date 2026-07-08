@@ -35,9 +35,26 @@ export const Plan = z.object({
   // (e.g. "defense tech salaries") — grounds the headline pass's live
   // autocomplete lookup. Optional: falls back to the title's leading words.
   searchSeed: z.string().optional(),
+  // 1-2 plain sentences of ACTION stating what the story SAYS — the main-theme
+  // statement every downstream pass anchors on (via themeOf, never read
+  // directly). Optional: plans/fixtures recorded before this field stay valid
+  // through themeOf's "title — angle" fallback.
+  themeStatement: z.string().optional(),
   sections: z.array(PlanSection).min(1),
 });
 export type Plan = z.infer<typeof Plan>;
+
+/**
+ * The ONLY reader of the plan's theme: the explicit themeStatement when the
+ * model supplied one, else the "title — angle" fallback (keeps old
+ * fixtures/plans valid). Downstream code never touches plan.themeStatement
+ * directly — it calls this.
+ */
+export function themeOf(
+  plan: Pick<Plan, "title" | "angle" | "themeStatement">,
+): string {
+  return plan.themeStatement?.trim() || `${plan.title} — ${plan.angle}`;
+}
 
 /** Replace raw control characters (code point < 0x20) with a space. owl-alpha
  *  occasionally emits a literal newline or tab INSIDE a JSON string value, which

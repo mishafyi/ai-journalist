@@ -393,6 +393,59 @@ async function main(): Promise<void> {
       capturedFinalEditPrompt.includes("no unique load-bearing fact"),
   );
 
+  // ── Part B (2026-07): MAIN THEME threading — with `deps.theme` set, the
+  // final-edit / fact-guard / title passes anchor on it (final-edit also gains
+  // the nut rule). Theme UNSET keeps the exact old prompt bytes — that is the
+  // byte-identity locks above, unchanged.
+  const THEME = "Acme's widget push is remaking the market.";
+  const THEME_HEAD = `MAIN THEME of this piece: ${THEME}\n\n`;
+
+  captures.length = 0;
+  await runFinalEdit("ART BODY", {
+    ...makeDeps(() => "final"),
+    theme: THEME,
+  });
+  const themedFinalEditPrompt = captures[0].prompt;
+  ok(
+    "final-edit opens with the MAIN THEME anchor when theme is set",
+    themedFinalEditPrompt.startsWith(THEME_HEAD),
+  );
+  ok(
+    "final-edit appends the nut rule to its change-list when theme is set",
+    themedFinalEditPrompt.includes(
+      "- THE NUT: the main theme material must be plainly stated within the first three paragraphs; if it is buried, surface it there.",
+    ) &&
+      themedFinalEditPrompt.indexOf("- THE NUT:") <
+        themedFinalEditPrompt.indexOf("Make surgical changes"),
+  );
+
+  captures.length = 0;
+  await runFactGuard("ART", "RESEARCH", {
+    ...makeDeps(() => "guarded"),
+    theme: THEME,
+  });
+  ok(
+    "fact-guard opens with the MAIN THEME anchor when theme is set",
+    captures[0].prompt.startsWith(THEME_HEAD),
+  );
+
+  captures.length = 0;
+  await runTitle(
+    titleArticle,
+    "Working Topic Label",
+    {
+      category: "robotics",
+      angle: "the angle phrasing",
+      searchSeed: "robotics jobs",
+    },
+    "GROUND TRUTH",
+    { ...makeDeps(() => titleReply), theme: THEME },
+  );
+  ok(
+    "title pass opens with the MAIN THEME anchor when theme is set",
+    captures[0].prompt.startsWith(THEME_HEAD),
+  );
+
   // ── Brand-lift no-op: the literal appears in none of the gate prompts ──────
   const allPrompts = [
     refEdit("x"),

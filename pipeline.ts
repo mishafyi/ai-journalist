@@ -32,7 +32,7 @@
  * order are byte-for-byte the old runPipeline — only the couplings became
  * injected. The golden guard replays the whole pipeline end-to-end through this.
  */
-import { type Plan } from "./planning";
+import { themeOf, type Plan } from "./planning";
 import { type LlmClient } from "./ports";
 import { type RunContext } from "./run-context";
 import { type BlogRunEvent } from "./discovery";
@@ -362,6 +362,11 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
     recordArtifact,
     brandName,
   } = deps;
+  // Thread this run's MAIN THEME into gateDeps. Set on the SHARED object (not a
+  // spread copy): the edit passes (runEdit/runFinalEdit) reach gates.ts through
+  // closures the preset/adapter pre-bound over this exact object, so only an
+  // in-place field lets every gate pass — including those closures — read it.
+  gateDeps.theme = themeOf(plan);
   const { boardJobsLine, usLeanLocations, shortForm } = enr;
   const MODEL = deps.model;
   const META_PROSE_RE = deps.metaProseRe;

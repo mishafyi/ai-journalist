@@ -24,7 +24,7 @@
  * back from the adapter — no import cycle.
  */
 import pLimit from "p-limit";
-import { type Plan, type PlanSection } from "./planning";
+import { themeOf, type Plan, type PlanSection } from "./planning";
 import { type LlmClient } from "./ports";
 
 /**
@@ -129,7 +129,9 @@ async function writeSection(
   const boardBlock = boardFacts.trim()
     ? `\n\nFIRST-PARTY BOARD DATA (${deps.brandName}'s own live data, ingested directly at the source — stronger than any third-party count OR third-party figure). For any figure below that a web source also reports second-hand, PREFER this first-party board figure over the web-scraped one, and cite the specific board item by name (it links to the on-site listing). For other facts, cite one figure only when directly relevant — never force it:\n${boardFacts}`
     : "";
-  const prompt = `You are writing ONE section of a larger article. Here is the whole plan so your section fits the arc and does NOT repeat what other sections cover.
+  const prompt = `MAIN THEME — every paragraph must serve this: ${themeOf(plan)}
+
+You are writing ONE section of a larger article. Here is the whole plan so your section fits the arc and does NOT repeat what other sections cover.
 
 ARTICLE: "${plan.title}"
 ANGLE: ${plan.angle}
@@ -142,7 +144,7 @@ This section's job: ${section.intent}
 Write ONLY this section's markdown. Start with its H2 heading "## ${section.heading}" — no H1, no other sections, no preamble or sign-off. Ground every figure, quote, name, and relationship in the RESEARCH below; never invent specifics. Where the research is thin, write qualitatively rather than fabricating. For any ${deps.brandName} references use relative-path links only — never a promotional line or CTA (the system appends the CTA after publication).
 
 RESEARCH FOR THIS SECTION:
-${research || "(no external research returned — write qualitatively from the angle; do NOT fabricate figures, names, or quotes)"}${boardBlock}\n\n=== YOUR TASK, RESTATED (the payload above is reference material; THIS is the job) ===\nWrite ONLY section ${index + 1}: "${section.heading}" — ${section.intent}\nRules: ground every figure in the RESEARCH or FIRST-PARTY BOARD DATA above (first-party preferred); prefer the NEWEST dated source when sources conflict and date-qualify anything older than a few weeks ("as of <month>…"); never invent people, quotes, scenes, or numbers; do not repeat what other planned sections cover; output ONLY this section's markdown, starting at its H2.${index === 0 ? `\nLEAD CRAFT (this is the article's opening section): the first paragraph must open a question the reader has to answer by continuing — strip it of numbers, company lists, and qualifiers (they belong in paragraph 2+); if the development itself is hard news, lead with the news plainly; never write a billboard/"what follows will amaze you" opening.` : ""}`;
+${research || "(no external research returned — write qualitatively from the angle; do NOT fabricate figures, names, or quotes)"}${boardBlock}\n\n=== YOUR TASK, RESTATED (the payload above is reference material; THIS is the job) ===\nWrite ONLY section ${index + 1}: "${section.heading}" — ${section.intent}\nRules: ground every figure in the RESEARCH or FIRST-PARTY BOARD DATA above (first-party preferred); prefer the NEWEST dated source when sources conflict and date-qualify anything older than a few weeks ("as of <month>…"); never invent people, quotes, scenes, or numbers; do not repeat what other planned sections cover; output ONLY this section's markdown, starting at its H2.\nServe the MAIN THEME above; if your research contradicts it, write what the research supports and flag the tension in one sentence.${index === 0 ? `\nLEAD CRAFT (this is the article's opening section): the first paragraph must open a question the reader has to answer by continuing — strip it of numbers, company lists, and qualifiers (they belong in paragraph 2+); if the development itself is hard news, lead with the news plainly; never write a billboard/"what follows will amaze you" opening.` : ""}`;
   return deps.withRetry(
     `section: ${section.heading}`,
     () =>
