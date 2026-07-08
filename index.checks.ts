@@ -68,6 +68,13 @@ const STORY_PLAN_JSON = JSON.stringify({
   searchSeed: "test story",
   sections: [{ heading: "Section One", intent: "establish", queries: [] }],
 });
+// C4: the theme-recast checkpoint (fires only on the digest path, check 5).
+const RECAST_JSON = JSON.stringify({
+  verdict: "adjust",
+  theme: "Recast theme from the evidence.",
+  note: "why",
+  newestSourceDate: null,
+});
 function makeDiscoveryLlm(): LlmClient {
   return {
     async complete(args) {
@@ -83,7 +90,9 @@ function makeDiscoveryLlm(): LlmClient {
       const json =
         args.schemaName === "discovery_queries"
           ? QUERY_GEN_JSON
-          : STORY_PLAN_JSON;
+          : args.schemaName === "recast_theme"
+            ? RECAST_JSON
+            : STORY_PLAN_JSON;
       return args.schema.parse(JSON.parse(json));
     },
   };
@@ -297,9 +306,11 @@ async function run(): Promise<void> {
     };
     deps.digestSection = async (raw) => raw;
     let generalAtGenerate: string | undefined;
+    let planAtGenerate: Plan | undefined;
     const baseGenerate = input.internals!.generate;
     input.internals!.generate = async (p: Plan) => {
       generalAtGenerate = deps.generalDigest;
+      planAtGenerate = p;
       return baseGenerate(p);
     };
     await runPipeline(input);
@@ -321,6 +332,14 @@ async function run(): Promise<void> {
       generalAtGenerate === "## SCOPE\n- digest bullet",
       String(generalAtGenerate),
     );
+    // C4: the recast checkpoint runs right after the general digest — a
+    // keep/adjust verdict lands on plan.themeStatement so every downstream
+    // themeOf(plan) reader sees the recast statement.
+    ok(
+      "recast wiring: plan.themeStatement set from the verdict BEFORE generate",
+      planAtGenerate?.themeStatement === "Recast theme from the evidence.",
+      String(planAtGenerate?.themeStatement),
+    );
   }
 
   // 6. Part C counter-case: NO digestSection → the entry neither captures nor
@@ -330,19 +349,23 @@ async function run(): Promise<void> {
     const input = makeInput(trace, {});
     const deps = input.internals!.discoveryDeps;
     let completeCalls = 0;
+    let recastCalls = 0;
     const baseLlm = deps.llm;
     deps.llm = {
       complete: async (args) => {
         completeCalls += 1;
         return baseLlm.complete(args);
       },
-      completeStructured: baseLlm.completeStructured,
+      completeStructured: async (args) => {
+        if (args.schemaName === "recast_theme") recastCalls += 1;
+        return baseLlm.completeStructured(args);
+      },
     };
     await runPipeline(input);
     ok(
-      "no digestSection → no digest call, generalDigest untouched",
-      completeCalls === 0 && !("generalDigest" in deps),
-      `calls=${completeCalls} hasField=${"generalDigest" in deps}`,
+      "no digestSection → no digest call, no recast, generalDigest untouched",
+      completeCalls === 0 && recastCalls === 0 && !("generalDigest" in deps),
+      `calls=${completeCalls} recasts=${recastCalls} hasField=${"generalDigest" in deps}`,
     );
   }
 

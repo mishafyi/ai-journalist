@@ -20,5 +20,10 @@ export function computeGateWarnings(
     w.push(`draft under the ${wordFloor}-word warning floor`);
   if (artFlags.boardDataUsedInPrint === false)
     w.push("relevant first-party board data never cited in print");
+  // C4 (theme recast): pre-built warning STRINGS — their text needs run data
+  // (newest source date / age / window, the kill note) only the recast site
+  // knows, so it records the full message and this pass relays it verbatim.
+  if (typeof artFlags.staleStory === "string") w.push(artFlags.staleStory);
+  if (typeof artFlags.themeKilled === "string") w.push(artFlags.themeKilled);
   return w;
 }
