@@ -32,12 +32,17 @@
  * `runBlogAuto` → `main` → here.
  */
 import { discoverStory, planForTopic } from "./discovery";
-import { buildDigest } from "./digest";
-import { type Plan } from "./planning";
+import { buildDigest, recastTheme } from "./digest";
+import { themeOf, type Plan } from "./planning";
 import { type GeneratedPost, type RunInput } from "./ports";
 
 // Re-exported module surface (also importable via the "./digest" subpath).
-export { buildDigest, type DigestDeps } from "./digest";
+export {
+  buildDigest,
+  recastTheme,
+  RecastResult,
+  type DigestDeps,
+} from "./digest";
 
 /**
  * Run the full pipeline: discover (or plan the fixed topic) → generate → publish.
@@ -106,6 +111,29 @@ export async function runPipeline(input: RunInput): Promise<GeneratedPost> {
           withRetry: discoveryDeps.withRetry,
         })
       : undefined;
+
+    // C4: the TRUE theme-recast checkpoint — judge the planned theme against
+    // the ORGANIZED evidence, only when a general digest was actually built
+    // (same digestSection gate, so digest-off runs stay byte-identical).
+    // keep/adjust → the recast statement lands on plan.themeStatement, so
+    // every downstream themeOf(plan) reader sees it; kill → recastTheme
+    // records `theme-killed: <note>` on the run's gate-warnings channel and
+    // THROWS — the host's fail-soft run catch owns terminal kills.
+    if (discoveryDeps.generalDigest !== undefined) {
+      const recast = await recastTheme(
+        themeOf(plan),
+        discoveryDeps.generalDigest,
+        {
+          llm: discoveryDeps.llm,
+          model: discoveryDeps.model,
+          withRetry: discoveryDeps.withRetry,
+          ctx: discoveryDeps.ctx,
+          maxStoryAgeDays: discoveryDeps.maxStoryAgeDays,
+          nowIso: discoveryDeps.nowIso,
+        },
+      );
+      plan.themeStatement = recast.theme;
+    }
   }
 
   // Phase 2 — the section-research → gate-chain orchestration → article

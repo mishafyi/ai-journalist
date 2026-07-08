@@ -304,6 +304,7 @@ export interface EngineConfig {
 import type { GeneratedArticle } from "./pipeline";
 import type { Plan } from "./planning";
 import type { DiscoveryDeps } from "./discovery";
+import type { DigestDeps } from "./digest";
 import type { SectionWriterDeps } from "./section-writer";
 import type { AssemblyDeps } from "./assembly";
 
@@ -313,8 +314,14 @@ export interface EngineInternals {
    *  object the adapter binds into `PipelineDeps.blogDeps`: the entry threads
    *  per-run values across the phase boundary through it — with `digestSection`
    *  supplied, `generalDigest` (the discovery-corpus digest) is set here after
-   *  planning so the pipeline's section writes read it. */
-  discoveryDeps: DiscoveryDeps & SectionWriterDeps & AssemblyDeps;
+   *  planning so the pipeline's section writes read it. The optional
+   *  `ctx`/`maxStoryAgeDays`/`nowIso` (C4, declared on `DigestDeps`) ride here
+   *  too — the entry forwards them into the theme-recast checkpoint; all
+   *  optional, so pre-C4 adapters type-check unchanged. */
+  discoveryDeps: DiscoveryDeps &
+    SectionWriterDeps &
+    AssemblyDeps &
+    Pick<DigestDeps, "ctx" | "maxStoryAgeDays" | "nowIso">;
   /** Phase 2: the section-research → gate-chain orchestration, pre-bound to the
    *  adapter's full `PipelineDeps` (the proprietary DATA gathers + link tail +
    *  text helpers + named knobs + telemetry — the four public ports can't carry
