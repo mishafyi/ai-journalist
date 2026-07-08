@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-07-08
+
+### Added
+
+- **Deterministic editorial gates (Part D, record-only pure functions in
+  `gates.ts`).** `corroborationBlockers(article, rawCorpus)` — every figure in
+  the H1 + first three paragraphs needs ≥2 independent source domains OR
+  first-party board data (years and sub-10 figures skipped).
+  `structureBlockers(article, theme, opts?)` — early-nut presence via
+  trigramSimilarity (default threshold 0.18, calibrated), cluttered-lead
+  (≥3 numbers in the opening paragraph), and load-bearing-ending (a figure
+  appearing only in the final two paragraphs).
+- **`GateDeps.seoInputChars` (Part E1):** `runSeo` reads up to this many
+  article chars (default 24000; was a hard-coded 6000 slice), so SEO metadata
+  sees the whole piece, not just the lede.
+
 ## [0.7.0] - 2026-07-08
 
 ### Added
