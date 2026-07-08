@@ -5,6 +5,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-07
+
+### Changed
+
+- **Editorial prompt mechanics (Part A of the editorial-pipeline upgrade).**
+  Long-context prompts now restate the task AFTER the data payload
+  (section-writer, fact-guard, fact-check-audit — lost-in-the-middle
+  mitigation), with a recency rule (prefer the newest dated source,
+  date-qualify older claims). Section 1 gains lead-craft rules; the line-edit
+  pass teaches pictorial numbers, blob-hunting, abstract↔concrete movement,
+  and surface-and-conclude; the managing-editor pass gains character economy,
+  proof variety, natural transitions, and the three newspaper close types
+  (no unique load-bearing facts in the kicker). Discovery: queries spread
+  across the six story boxes with the five ideation techniques
+  (extrapolate/synthesize/localize/project/switch-viewpoint); story-plan
+  demands a cause-and-effect map with an explicit fence, a deliberate
+  roundup-vs-profile approach choice, and block-progression section ordering.
+  The audit pass appends a "MISSING:" completeness line. Prompt-text only —
+  no API changes.
+
 ## [0.5.2] - 2026-07-07
 
 ### Changed
