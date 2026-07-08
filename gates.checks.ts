@@ -179,12 +179,14 @@ ${groundTruth.slice(0, 120000)}
 ARTICLE:
 ${article}\n\n=== YOUR TASK, RESTATED ===\nRate every claim as instructed above. Then add one final line starting "MISSING: " naming the single most important thing a beat reporter would add to this story that the research could support (or "MISSING: nothing material").`;
 
+// Deliberate lock update, Task E1 (2026-07): default article slice widened
+// 6000 → 24000 (deps.seoInputChars overrides). Prompt text unchanged.
 const refSeo = (article: string): string =>
   `Produce metadata for the article below. Output EXACTLY one JSON object and nothing else:
 {"title": "<the article's H1, cleaned>", "description": "<=300 chars, plain text", "seoTitle": "<=60 chars, keyword-led", "seoDescription": "<=160 chars", "tags": ["3-6 tags"], "keywords": ["3-6 search keywords"]}
 
 ARTICLE:
-${article.slice(0, 6000)}`;
+${article.slice(0, 24000)}`;
 
 // runTitle's prompt depends on exemplars/searchTerms/priorTitles — with the
 // fixture deps (all empty) styleBlock/searchBlock/priorTitles-block collapse to
@@ -339,6 +341,30 @@ async function main(): Promise<void> {
     captures[0].system === undefined &&
       captures[0].model === "test-model" &&
       captures[0].temperature === 0.4,
+  );
+
+  // Task E1 (2026-07): SEO input widening — default slice is 24000 (was 6000),
+  // overridable per-run via deps.seoInputChars.
+  const seoReply =
+    '{"title":"T","description":"d","seoTitle":"s","seoDescription":"sd","tags":["x"],"keywords":["y"]}';
+  const seoMarker = "SEO_MARKER_BEYOND_CHAR_6000";
+  const longArticle =
+    "# Long\n\n" + "x".repeat(8000) + seoMarker + "y".repeat(4000);
+  captures.length = 0;
+  await runSeo(longArticle, makeDeps(() => seoReply));
+  ok(
+    "runSeo default widened to 24000: >10K article content beyond char 6000 reaches the prompt",
+    captures[0].prompt.includes(seoMarker),
+  );
+  captures.length = 0;
+  await runSeo(longArticle, {
+    ...makeDeps(() => seoReply),
+    seoInputChars: 100,
+  });
+  ok(
+    "runSeo seoInputChars=100: exactly the first 100 chars appear",
+    captures[0].prompt.includes(longArticle.slice(0, 100)) &&
+      !captures[0].prompt.includes(longArticle.slice(0, 101)),
   );
 
   // runTitle (empty exemplars/searchTerms/priorTitles → no-blocks form). The

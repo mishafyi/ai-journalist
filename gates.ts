@@ -83,6 +83,9 @@ export interface GateDeps {
    *  runTitle anchor their prompts on it; absent → the prompts render in their
    *  pre-theme byte shape (old fixtures/tests stay valid). */
   theme?: string;
+  /** How many article chars runSeo feeds the metadata prompt (adapter binds
+   *  BLOG_SEO_INPUT_CHARS). Absent → 24000. runSeo-only. */
+  seoInputChars?: number;
   /** Headline-corpus exemplars for a category (the adapter folds corpusDomain +
    *  sampleExemplars over its HEADLINES module data). runTitle-only. */
   gatherExemplars: (category: string, count: number) => string[];
@@ -712,11 +715,12 @@ export async function runSeo(
   article: string,
   deps: GateDeps,
 ): Promise<SeoMeta> {
+  const seoInputChars = deps.seoInputChars ?? 24000;
   const prompt = `Produce metadata for the article below. Output EXACTLY one JSON object and nothing else:
 {"title": "<the article's H1, cleaned>", "description": "<=300 chars, plain text", "seoTitle": "<=60 chars, keyword-led", "seoDescription": "<=160 chars", "tags": ["3-6 tags"], "keywords": ["3-6 search keywords"]}
 
 ARTICLE:
-${article.slice(0, 6000)}`;
+${article.slice(0, seoInputChars)}`;
   const h1 = article.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "";
   let parsed: Partial<SeoMeta> = {};
   try {
