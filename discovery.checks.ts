@@ -18,7 +18,12 @@
  * re-pick) is integration-verified in the Task 10 dry-run. Importing this module
  * loads the engine's real trigram/entity helpers (deterministic, no network).
  */
-import { titleCollidesLexically, buildSignalText } from "./discovery";
+import {
+  titleCollidesLexically,
+  buildSignalText,
+  discoverStory,
+  type DiscoveryDeps,
+} from "./discovery";
 import { type DiscoverySignal, type SignalItem } from "./ports";
 
 // The engine's stable trigram cutoff default (adapter binds BLOG_DEDUP_THRESHOLD
@@ -36,6 +41,15 @@ function eq(name: string, actual: unknown, expected: unknown): void {
     process.stdout.write(
       `FAIL ${name}\n  expected: ${JSON.stringify(expected)}\n  actual:   ${JSON.stringify(actual)}\n`,
     );
+  }
+}
+function ok(name: string, cond: boolean): void {
+  if (cond) {
+    passed++;
+    process.stdout.write(`PASS ${name}\n`);
+  } else {
+    failed++;
+    process.stdout.write(`FAIL ${name}\n`);
   }
 }
 
@@ -219,9 +233,109 @@ eq(
   oldBuildJobsSignal(emptyBoard, emptyCorpus),
 );
 
-process.stdout.write(
-  failed === 0
-    ? `\nALL ${passed} checks passed\n`
-    : `\n${failed} FAILED, ${passed} passed\n`,
-);
-if (failed > 0) process.exit(1);
+// ───────────────────────────────────────────────────────────────────────────
+// Part A (2026-07): six-box query coverage + cause-and-effect fencing. The
+// discovery prompts (query-gen + story-plan) had no capture: drive discoverStory
+// with a capturing llm stub (schemaName tells the two passes apart) + fixture
+// deps, then assert the new prompt lines. buildSignalText stays byte-locked
+// above — these edits go around the signal formatting, never through it.
+// ───────────────────────────────────────────────────────────────────────────
+
+let capturedQueryGenPrompt = "";
+let capturedStoryPlanPrompt = "";
+
+const captureDeps: DiscoveryDeps = {
+  llm: {
+    complete: async () => {
+      throw new Error("free-text complete is not used by discovery");
+    },
+    completeStructured: async (args) => {
+      const prompt =
+        args.messages.find((m) => m.role === "user")?.content ?? "";
+      if (args.schemaName === "discovery_queries") {
+        capturedQueryGenPrompt = prompt;
+        return args.schema.parse({
+          queries: ["widget factory expansion"],
+          companies: [], // no companies → no RSS fetch (network-free)
+        });
+      }
+      capturedStoryPlanPrompt = prompt;
+      return args.schema.parse({
+        title: "Acme Widgets Ships a Faster Widget",
+        angle: "why the widget market just moved",
+        category: "robotics",
+        searchSeed: "widget jobs",
+        sections: [
+          {
+            heading: "The Move",
+            intent: "establish the development",
+            queries: ["acme widgets news"],
+          },
+        ],
+      });
+    },
+  },
+  gatherSignal: async () => ({
+    items: [
+      {
+        title: "Acme Widgets",
+        summary: "Acme Widgets (Widgets): 3 new role(s) — Widget Engineer",
+        entities: ["Acme Widgets"],
+      },
+    ],
+  }),
+  searchSnippets: async () => ["snippet about the widget market"],
+  gatherCoveredTopics: async () => [],
+  embedDedupSurvivors: async () => null,
+  withRetry: async <T>(_label: string, fn: () => Promise<T>): Promise<T> =>
+    fn(),
+  getRunId: () => "run_checks",
+  onEvent: async () => {},
+  onError: () => {},
+  model: "test-model",
+  dedupThreshold: DEDUP_THRESHOLD,
+  embedDedupSim: 0.86,
+  discoveryQueries: 15,
+  newsCompanies: 12,
+  maxSections: 7,
+  sectionQueries: 3,
+  researchConcurrency: 4,
+  snippetsPerQuery: 5,
+  rssPerCompany: 5,
+};
+
+discoverStory(captureDeps)
+  .then(() => {
+    ok(
+      "query-gen spreads queries across the six story boxes",
+      capturedQueryGenPrompt.includes("history") &&
+        capturedQueryGenPrompt.includes("countermoves") &&
+        capturedQueryGenPrompt.includes("futures"),
+    );
+    ok(
+      "story-plan demands an action map and a fence",
+      capturedStoryPlanPrompt.includes("cause-and-effect") &&
+        capturedStoryPlanPrompt.includes("explicitly OUT of scope"),
+    );
+    ok(
+      "query-gen teaches the five ideation moves",
+      capturedQueryGenPrompt.includes("EXTRAPOLATE") &&
+        capturedQueryGenPrompt.includes("SWITCH VIEWPOINT"),
+    );
+    ok(
+      "story-plan picks approach + block order",
+      capturedStoryPlanPrompt.includes("APPROACH") &&
+        capturedStoryPlanPrompt.includes("stresses most"),
+    );
+
+    process.stdout.write(
+      failed === 0
+        ? `\nALL ${passed} checks passed\n`
+        : `\n${failed} FAILED, ${passed} passed\n`,
+    );
+    if (failed > 0) process.exit(1);
+  })
+  .catch((e: unknown) => {
+    process.stderr.write(`${e instanceof Error ? e.stack : String(e)}\n`);
+    process.exit(1);
+  });
