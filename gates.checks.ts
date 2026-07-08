@@ -28,8 +28,11 @@ import {
   runFactCheckAudit,
   runTitle,
   runSeo,
+  corroborationBlockers,
+  structureBlockers,
   type GateDeps,
 } from "./gates";
+import { trigramSimilarity } from "./primitives";
 
 // Stub global fetch so runTitle's gatherSearchTerms (live Google autocomplete)
 // is deterministic + network-free — returns the empty [query, []] shape, so the
@@ -458,6 +461,194 @@ async function main(): Promise<void> {
   ok(
     `brand-lift no-op: "${BRAND_LITERAL}" absent from all gate prompts`,
     allPrompts.every((p) => !p.includes(BRAND_LITERAL)),
+  );
+
+  // ── Part D1 (2026-07): corroborationBlockers — deterministic two-source
+  // corroboration for lede/headline figures. RECORD-ONLY primitive: pure
+  // (article, rawCorpus) → string[], no LLM, no ctx, no throw. The zerog
+  // adapter pushes the strings onto its publish-blockers list (the A4 seam).
+  const srcBlock = (n: number, url: string, body: string): string =>
+    `### Source ${n} [tier 2]: Title ${n}\nURL: ${url}\n\n${body}`;
+
+  // Lede scope = H1 + first 3 paragraphs. "3" (sub-10) and "2026" (year) are
+  // candidate-regex matches that must be SKIPPED; the body's later figure is
+  // out of scope entirely.
+  const d1Article = [
+    "# Space hiring hits 42,000 open roles on a $500M bet",
+    "The sector added 42,000 roles this year, backed by a $500M raise and 3 new factories.",
+    "Growth has held since 2026 across the industry.",
+    "A third paragraph of context.",
+    "## Later section",
+    "Down here 99,999 appears once but body figures are out of D1 scope.",
+  ].join("\n\n");
+
+  const twoDomains = [
+    // comma-less "42000" in source 2 proves comma-normalized matching;
+    // "www." on source 1 proves hostname stripping.
+    srcBlock(
+      1,
+      "https://www.techcrunch.com/a",
+      "TechCrunch reports 42,000 roles and the $500M raise.",
+    ),
+    srcBlock(
+      2,
+      "https://spacenews.com/b",
+      "SpaceNews counts 42000 roles; the $500M round closed.",
+    ),
+  ].join("\n\n");
+  ok(
+    "corroboration: two distinct domains → no blockers (year + sub-10 skipped)",
+    corroborationBlockers(d1Article, twoDomains).length === 0,
+  );
+
+  const oneDomain = [
+    srcBlock(
+      1,
+      "https://www.techcrunch.com/a",
+      "TechCrunch reports 42,000 roles and the $500M raise.",
+    ),
+    srcBlock(2, "https://spacenews.com/b", "SpaceNews covers the $500M round only."),
+  ].join("\n\n");
+  const oneBlockers = corroborationBlockers(d1Article, oneDomain);
+  ok(
+    "corroboration: single-domain figure → exact blocker string (www-stripped)",
+    oneBlockers.length === 1 &&
+      oneBlockers[0] === 'single-source-figure: "42,000" seen only via techcrunch.com',
+    JSON.stringify(oneBlockers),
+  );
+
+  // FIRST-PARTY BOARD DATA is authoritative on its own (the same exception the
+  // fact-guard's table-cell rule makes) — a board-only figure needs no second
+  // web domain. The block rides at the corpus TAIL, after the last `### Source`
+  // (the real groundTruth shape) — and must not credit a web source's domain.
+  const boardCorpus =
+    [
+      srcBlock(1, "https://spacenews.com/b", "SpaceNews covers the $500M round."),
+      srcBlock(2, "https://techcrunch.com/a", "TechCrunch also has the $500M raise."),
+    ].join("\n\n") +
+    "\n\n## FIRST-PARTY BOARD DATA (the brand's own job board — verified)\n\nAcme: 42,000 open roles";
+  ok(
+    "corroboration: FIRST-PARTY BOARD DATA containment corroborates by itself",
+    corroborationBlockers(d1Article, boardCorpus).length === 0,
+    JSON.stringify(corroborationBlockers(d1Article, boardCorpus)),
+  );
+
+  ok(
+    "corroboration: bare years and sub-10 figures never flag (even uncorroborated)",
+    corroborationBlockers(
+      "# The 2026 outlook\n\nBy 2027, 3 firms and 9 labs remain.\n\nMore.\n\nEven more.",
+      "",
+    ).length === 0,
+  );
+
+  const mBlockers = corroborationBlockers(
+    "# A $5M seed\n\nThe $5M seed closed quietly.\n\nMore.\n\nEven more.",
+    srcBlock(1, "https://a.com/x", "the $5M seed"),
+  );
+  ok(
+    'corroboration: "$5M" is 5e6 (suffix multiplier), not sub-10 — single-sourced → flags',
+    mBlockers.length === 1 &&
+      mBlockers[0] === 'single-source-figure: "$5M" seen only via a.com',
+    JSON.stringify(mBlockers),
+  );
+
+  // ── Part D2 (2026-07): structureBlockers — deterministic structure gate.
+  // RECORD-ONLY primitive: pure (article, theme, opts?) → string[].
+  //
+  // nutMinSim CALIBRATION (measured 2026-07-07 against trigramSimilarity):
+  //   - near-verbatim nut restatement in paras 1-3 (the pair below): 0.6299
+  //   - realistically PARAPHRASED nut ("Venture-backed defense firms are
+  //     luring senior engineers out of Lockheed and Northrop by offering
+  //     equity packages…" for the same theme):                        0.3174
+  //   - off-topic lede (orbital-tourism prose, same lengths):         0.0883
+  // The 0.18 default sits comfortably below even a paraphrased nut and well
+  // above off-topic prose. The asserts on `nutSim`/`offTopicSim` below keep
+  // the recorded calibration honest if primitives.ts ever drifts.
+  const nutTheme =
+    "Defense tech startups are pulling mid-career engineers away from legacy primes with equity-heavy offers.";
+  const nutArticle = [
+    "# The quiet exodus",
+    "Defense tech startups are pulling mid-career engineers away from the legacy primes with equity-heavy offers the big contractors cannot match.",
+    "The trend accelerated this spring, with 42,000 open roles across the sector.",
+    "Recruiters say the shift is structural.",
+    "## What it means",
+    "The primes are responding with retention bonuses.",
+    "The sector's 42,000 openings tell one story.",
+    "The next chapter may hinge on a $750M bet no prime has yet made.",
+  ].join("\n\n");
+  const nutSim = trigramSimilarity(
+    nutTheme,
+    [
+      "Defense tech startups are pulling mid-career engineers away from the legacy primes with equity-heavy offers the big contractors cannot match.",
+      "The trend accelerated this spring, with 42,000 open roles across the sector.",
+      "Recruiters say the shift is structural.",
+    ].join("\n\n"),
+  );
+  ok(
+    `structure calibration: nut restatement measures ${nutSim.toFixed(4)} ≥ 0.18`,
+    nutSim >= 0.18,
+  );
+  const offTopicSim = trigramSimilarity(
+    nutTheme,
+    [
+      "Orbital tourism sold its first zero-training seat last week.",
+      "The booking platform quotes a four-hour ride with a champagne landing, and the waitlist crossed nine thousand names.",
+      "Regulators have not yet said whether the flights count as commercial aviation.",
+    ].join("\n\n"),
+  );
+  ok(
+    `structure calibration: off-topic lede measures ${offTopicSim.toFixed(4)} < 0.18`,
+    offTopicSim < 0.18,
+  );
+
+  // (1) nut present + (2) clean 0-number lead + (3) "$750M" introduced only in
+  // the last two paragraphs while the earlier "42,000" repeat stays legal →
+  // EXACTLY one blocker.
+  const nutBlockers = structureBlockers(nutArticle, nutTheme);
+  ok(
+    "structure: nut present, clean lead, kicker introduces $750M → exactly the load-bearing-ending blocker",
+    nutBlockers.length === 1 &&
+      nutBlockers[0] === 'load-bearing-ending: "$750M"',
+    JSON.stringify(nutBlockers),
+  );
+
+  ok(
+    "structure: nutMinSim opt parameterizes the threshold (0.9 flips the nut case)",
+    structureBlockers(nutArticle, nutTheme, { nutMinSim: 0.9 }).includes(
+      "no-early-nut",
+    ),
+  );
+
+  const offTopicArticle = [
+    "# Seats to orbit",
+    "Orbital tourism sold its first zero-training seat last week.",
+    "The booking platform quotes a four-hour ride with a champagne landing, and the waitlist crossed nine thousand names.",
+    "Regulators have not yet said whether the flights count as commercial aviation.",
+  ].join("\n\n");
+  ok(
+    "structure: theme absent from the first three paragraphs → no-early-nut",
+    structureBlockers(offTopicArticle, nutTheme).includes("no-early-nut"),
+  );
+
+  const clutteredArticle = [
+    "# Pay check",
+    "In 2025, 42,000 roles paid $210,000 on average, up 12% year over year.",
+    "Second paragraph.",
+    "Third paragraph.",
+  ].join("\n\n");
+  ok(
+    "structure: ≥3 numbers in the first paragraph → cluttered-lead",
+    structureBlockers(clutteredArticle, nutTheme).includes("cluttered-lead"),
+  );
+  const twoNumberLead = [
+    "# Pay check",
+    "In 2025, 42,000 roles opened.",
+    "Second paragraph.",
+    "Third paragraph.",
+  ].join("\n\n");
+  ok(
+    "structure: 2 numbers in the first paragraph stay legal",
+    !structureBlockers(twoNumberLead, nutTheme).includes("cluttered-lead"),
   );
 }
 

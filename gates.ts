@@ -757,3 +757,171 @@ ${article.slice(0, 6000)}`;
       .slice(0, 30),
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part D (2026-07) — deterministic, RECORD-ONLY blocker primitives. Pure string
+// functions: no LLM, no ctx, no env, no throw. The host adapter appends their
+// outputs to its publish-blockers list (the same gate-warnings seam
+// `computeGateWarnings` feeds) — the engine only computes the strings.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Blank-line-separated markdown blocks, trimmed, empties dropped. */
+function splitBlocks(article: string): string[] {
+  return article
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter((b) => b.length > 0);
+}
+
+const isHeading = (block: string): boolean => /^#{1,6}\s/.test(block);
+
+/** A candidate figure: the article's spelling + its comma-stripped match key. */
+interface LedeFigure {
+  display: string;
+  norm: string;
+}
+
+/** Extract candidate figures ($1.2B, 42,000, 15%, $210k, 500 million…) from a
+ *  text slice. Normalization = trim trailing sentence punctuation + strip
+ *  commas, so the article's "42,000." matches a source's "42000". Deduped by
+ *  normalized key (first spelling wins). */
+function extractFigures(text: string): LedeFigure[] {
+  const seen = new Map<string, LedeFigure>();
+  for (const m of text.match(/\$?\d[\d,.]*(?:%|k|M|B| million| billion)?/g) ??
+    []) {
+    const display = m.replace(/[.,]+$/, "");
+    const norm = display.replace(/,/g, "");
+    if (!seen.has(norm)) seen.set(norm, { display, norm });
+  }
+  return [...seen.values()];
+}
+
+/** Numeric magnitude of a normalized figure ("$4.5B" → 4.5e9, "15%" → 15). */
+function figureValue(norm: string): number {
+  const m = norm.match(/^\$?([\d.]+)(%|k|M|B| million| billion)?$/);
+  if (!m) return Number.NaN;
+  const mult =
+    m[2] === "k"
+      ? 1e3
+      : m[2] === "M" || m[2] === " million"
+        ? 1e6
+        : m[2] === "B" || m[2] === " billion"
+          ? 1e9
+          : 1;
+  return Number.parseFloat(m[1]) * mult;
+}
+
+/** Bare calendar year (19xx/20xx — no $, %, or magnitude suffix). */
+const isYear = (norm: string): boolean => /^(?:19|20)\d\d$/.test(norm);
+
+/**
+ * D1 — two-source corroboration for the lede/headline figures (record-only).
+ * Every figure in the H1 + first 3 paragraphs must appear (comma-normalized)
+ * in `### Source` blocks under ≥2 distinct domains (the block's `URL:` line
+ * hostname, `www.` stripped), OR inside the FIRST-PARTY BOARD DATA block —
+ * first-party board data is authoritative on its own (the same exception the
+ * fact-guard's table-cell rule makes), so it corroborates without a second
+ * web source. Figures under 10 (list positions, section numbers) and bare
+ * years (19xx/20xx) are skipped. One blocker string per under-sourced figure:
+ *   `single-source-figure: "<figure>" seen only via <domain>`
+ */
+export function corroborationBlockers(
+  article: string,
+  rawCorpus: string,
+): string[] {
+  const blocks = splitBlocks(article);
+  const lede = [
+    blocks.find((b) => /^#\s/.test(b)) ?? "",
+    ...blocks.filter((b) => !isHeading(b)).slice(0, 3),
+  ].join("\n\n");
+
+  // The real corpus appends the FIRST-PARTY BOARD DATA block after the last
+  // `### Source` (groundTruth = research + datagod + boardTruth in the
+  // pipeline); slice it off so board figures never credit a web domain.
+  const boardAt = rawCorpus.indexOf("FIRST-PARTY BOARD DATA");
+  const webCorpus = boardAt >= 0 ? rawCorpus.slice(0, boardAt) : rawCorpus;
+  const boardNorm =
+    boardAt >= 0 ? rawCorpus.slice(boardAt).replace(/,/g, "") : "";
+
+  // ponytail: domain = URL hostname minus www. — no public-suffix parsing.
+  // A block with no parseable URL: line corroborates nothing (no domain).
+  const sources = webCorpus
+    .split(/^(?=### Source )/m)
+    .filter((p) => p.startsWith("### Source "))
+    .map((p) => {
+      const url = p.match(/^URL:\s*(\S+)/m)?.[1];
+      return {
+        domain:
+          url !== undefined && URL.canParse(url)
+            ? new URL(url).hostname.replace(/^www\./, "")
+            : null,
+        norm: p.replace(/,/g, ""),
+      };
+    });
+
+  const out: string[] = [];
+  for (const fig of extractFigures(lede)) {
+    if (isYear(fig.norm) || figureValue(fig.norm) < 10) continue;
+    if (boardNorm.includes(fig.norm)) continue; // first-party — authoritative
+    const domains = new Set<string>();
+    for (const s of sources)
+      if (s.domain !== null && s.norm.includes(fig.norm)) domains.add(s.domain);
+    if (domains.size < 2)
+      out.push(
+        `single-source-figure: "${fig.display}" seen only via ${
+          [...domains].join(", ") || "(no source)"
+        }`,
+      );
+  }
+  return out;
+}
+
+/**
+ * D2 — structure gate (record-only). Three deterministic checks:
+ *   1. nut presence — `trigramSimilarity(theme, first 3 paragraphs)` must
+ *      reach `opts.nutMinSim` (default 0.18 — calibrated in gates.checks.ts:
+ *      a real nut restatement measures ~0.63, a paraphrased one ~0.32,
+ *      off-topic prose ~0.09), else `no-early-nut`;
+ *   2. lead clutter — ≥3 numbers in the opening paragraph → `cluttered-lead`;
+ *   3. load-bearing ending — a figure present in the last two paragraphs but
+ *      nowhere earlier → `load-bearing-ending: "<figure>"` (the kicker must
+ *      stay expendable — the managing-editor rule, checked mechanically).
+ * The host adapter binds its env (BLOG_NUT_MIN_SIM) to `opts.nutMinSim`; the
+ * engine reads no env.
+ */
+export function structureBlockers(
+  article: string,
+  theme: string,
+  opts?: { nutMinSim?: number },
+): string[] {
+  const out: string[] = [];
+  const blocks = splitBlocks(article);
+  const paraIdx = blocks.flatMap((b, i) => (isHeading(b) ? [] : [i]));
+  const paras = paraIdx.map((i) => blocks[i]);
+
+  // (1) nut presence — the theme must be lexically visible in the lede.
+  const sim = trigramSimilarity(theme, paras.slice(0, 3).join("\n\n"));
+  if (sim < (opts?.nutMinSim ?? 0.18)) out.push("no-early-nut");
+
+  // (2) lead clutter — ≥3 numbers in the opening paragraph.
+  if (((paras[0] ?? "").match(/\d[\d,.]*/g) ?? []).length >= 3)
+    out.push("cluttered-lead");
+
+  // (3) load-bearing ending — a figure the last two paragraphs introduce.
+  // Skipped under 3 paragraphs (no ending distinct from the lead to judge).
+  if (paras.length >= 3) {
+    const tailIdx = new Set(paraIdx.slice(-2));
+    const tail = paraIdx
+      .slice(-2)
+      .map((i) => blocks[i])
+      .join("\n\n");
+    const earlierNorm = blocks
+      .filter((_, i) => !tailIdx.has(i))
+      .join("\n\n")
+      .replace(/,/g, "");
+    for (const fig of extractFigures(tail))
+      if (!earlierNorm.includes(fig.norm))
+        out.push(`load-bearing-ending: "${fig.display}"`);
+  }
+  return out;
+}
