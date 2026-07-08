@@ -210,6 +210,10 @@ const blogDeps = {
   sectionSnippets: 4,
   sectionConcurrency: 3,
   brandName: "Example News",
+  // Part C: a pre-built general digest on the bundle — the write closure must
+  // thread it into the section prompt (asserted below). No digestSection here,
+  // so the per-section digest path stays off and the pooled research stays "".
+  generalDigest: "GENERAL DIGEST FIXTURE",
 } as unknown as PipelineDeps<MinBoard>["blogDeps"];
 
 const repeatFired = { n: 0 };
@@ -413,6 +417,20 @@ async function run(): Promise<void> {
       "article object must be returned as-is",
     );
   }
+
+  // ── Part C: the write-closure binding threads blogDeps.generalDigest into the
+  // section prompt (background block), while the pooled research stays raw —
+  // this fixture's empty gather keeps RESEARCH = "" (asserted implicitly by the
+  // surgical-pass references above, which embed that empty research block).
+  const sectionCap = captures.get("section: Section One");
+  ok(
+    "write closure threads blogDeps.generalDigest into the section prompt",
+    !!sectionCap &&
+      sectionCap.prompt.includes(
+        "GENERAL RESEARCH DIGEST (background — cite only when directly relevant to THIS section):\nGENERAL DIGEST FIXTURE",
+      ),
+    sectionCap?.prompt.slice(0, 120),
+  );
 
   // ── site-inventory empty-guard (Step 3d): the all-zeros site data this fixture
   // feeds must NOT inject a "verified" FIRST-PARTY SITE INVENTORY block into the

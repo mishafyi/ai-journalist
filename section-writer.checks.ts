@@ -13,7 +13,7 @@ import {
   type SectionResult,
   type SectionWriterDeps,
 } from "./section-writer";
-import { type Plan } from "./planning";
+import { themeOf, type Plan } from "./planning";
 
 let passed = 0;
 let failed = 0;
@@ -137,6 +137,148 @@ async function main(): Promise<void> {
     capturedSectionPrompt.includes("Serve the MAIN THEME above") &&
       capturedSectionPrompt.indexOf("Serve the MAIN THEME above") >
         capturedSectionPrompt.lastIndexOf("YOUR TASK, RESTATED"),
+  );
+
+  // Part C (2026-07): extractive research digests + thin-section backfill.
+  //
+  // 1) ABSENT digest deps (the capture run above supplied none): the prompt
+  //    must be BYTE-IDENTICAL to the pre-digest legacy shape. Locked verbatim
+  //    (the pipeline.checks.ts reference pattern) so the digest wiring can
+  //    never drift the legacy prompt, plus the plan's substring form.
+  const legacyReference = `MAIN THEME — every paragraph must serve this: ${themeOf(plan)}
+
+You are writing ONE section of a larger article. Here is the whole plan so your section fits the arc and does NOT repeat what other sections cover.
+
+ARTICLE: "${plan.title}"
+ANGLE: ${plan.angle}
+FULL SECTION PLAN:
+${plan.sections.map((s, i) => `${i + 1}. ${s.heading} — ${s.intent}`).join("\n")}
+
+>>> You are writing section 1: "First" <<<
+This section's job: set the stage
+
+Write ONLY this section's markdown. Start with its H2 heading "## First" — no H1, no other sections, no preamble or sign-off. Ground every figure, quote, name, and relationship in the RESEARCH below; never invent specifics. Where the research is thin, write qualitatively rather than fabricating. For any TestBrand references use relative-path links only — never a promotional line or CTA (the system appends the CTA after publication).
+
+RESEARCH FOR THIS SECTION:
+research block\n\nFIRST-PARTY BOARD DATA (TestBrand's own live data, ingested directly at the source — stronger than any third-party count OR third-party figure). For any figure below that a web source also reports second-hand, PREFER this first-party board figure over the web-scraped one, and cite the specific board item by name (it links to the on-site listing). For other facts, cite one figure only when directly relevant — never force it:\n- Board: 42 open widget roles\n\n=== YOUR TASK, RESTATED (the payload above is reference material; THIS is the job) ===\nWrite ONLY section 1: "First" — set the stage\nRules: ground every figure in the RESEARCH or FIRST-PARTY BOARD DATA above (first-party preferred); prefer the NEWEST dated source when sources conflict and date-qualify anything older than a few weeks ("as of <month>…"); never invent people, quotes, scenes, or numbers; do not repeat what other planned sections cover; output ONLY this section's markdown, starting at its H2.\nServe the MAIN THEME above; if your research contradicts it, write what the research supports and flag the tension in one sentence.\nLEAD CRAFT (this is the article's opening section): the first paragraph must open a question the reader has to answer by continuing — strip it of numbers, company lists, and qualifiers (they belong in paragraph 2+); if the development itself is hard news, lead with the news plainly; never write a billboard/"what follows will amaze you" opening.`;
+  eq(
+    "absent digest deps → prompt byte-identical to the legacy reference",
+    capturedSectionPrompt,
+    legacyReference,
+  );
+  ok(
+    // Plan-spec form. (The plan draft asserted includes("RESEARCH:"), a
+    // substring the byte-locked legacy prompt never contained — its label is
+    // "RESEARCH FOR THIS SECTION:"; asserted via the real label instead.)
+    "absent digest deps → prompt identical to legacy shape",
+    capturedSectionPrompt.includes("RESEARCH FOR THIS SECTION:") &&
+      !capturedSectionPrompt.includes("DIGEST"),
+  );
+
+  // 2) Digest-active composition: MAIN THEME → plan block → GENERAL digest
+  //    (background) → THIS SECTION'S digest (primary) → board block →
+  //    restatement. The RAW block still pools into SectionResult.research
+  //    (the gate chain's ground truth is never a digest).
+  let capturedDigestedPrompt = "";
+  const digestActiveDeps: SectionWriterDeps = {
+    ...captureDeps,
+    llm: {
+      complete: async (args) => {
+        capturedDigestedPrompt = args.prompt;
+        return "## First\n\nbody";
+      },
+      completeStructured: async () => {
+        throw new Error("completeStructured is not used by writeSection");
+      },
+    },
+    gatherResearch: async () => ({ block: "raw research block" }),
+    generalDigest: "## SCOPE\n- general digest bullet",
+    digestSection: async (raw, label) =>
+      `## SCOPE\n- digest of ${label} (${raw.length} chars)`,
+  };
+  const digestedOut = await writeOneSection(
+    plan,
+    0,
+    "- Board: 42 open widget roles",
+    digestActiveDeps,
+  );
+  ok(
+    "general digest labeled background, section digest labeled primary",
+    capturedDigestedPrompt.indexOf("GENERAL RESEARCH DIGEST") >= 0 &&
+      capturedDigestedPrompt.indexOf("GENERAL RESEARCH DIGEST") <
+        capturedDigestedPrompt.indexOf("THIS SECTION'S RESEARCH DIGEST") &&
+      capturedDigestedPrompt.includes("cite only when directly relevant"),
+  );
+  ok(
+    "digest-active order: theme → plan → general → section digest → board → restatement",
+    capturedDigestedPrompt.startsWith("MAIN THEME") &&
+      capturedDigestedPrompt.indexOf("FULL SECTION PLAN:") <
+        capturedDigestedPrompt.indexOf("GENERAL RESEARCH DIGEST") &&
+      capturedDigestedPrompt.indexOf("THIS SECTION'S RESEARCH DIGEST") <
+        capturedDigestedPrompt.indexOf("FIRST-PARTY BOARD DATA") &&
+      capturedDigestedPrompt.indexOf("FIRST-PARTY BOARD DATA") <
+        capturedDigestedPrompt.lastIndexOf("YOUR TASK, RESTATED"),
+  );
+  ok(
+    "digest-active prompt grounds on the digests; raw block pools untouched",
+    capturedDigestedPrompt.includes("- digest of First (18 chars)") &&
+      !capturedDigestedPrompt.includes("RESEARCH FOR THIS SECTION:") &&
+      !capturedDigestedPrompt.includes("raw research block") &&
+      digestedOut.research === "raw research block",
+  );
+
+  // 3) Thin-section backfill: an EMPTY gather calls retryThin BEFORE the
+  //    qualitative fallback; its research grounds the prompt AND pools.
+  // Capture-object (not a bare let): TS's CFA doesn't track closure
+  // assignments, so a boolean let stays narrowed to `false` at the assertion.
+  const retryThinCalled = { v: false };
+  let capturedThinPrompt = "";
+  const thinDeps: SectionWriterDeps = {
+    ...captureDeps,
+    llm: {
+      complete: async (args) => {
+        capturedThinPrompt = args.prompt;
+        return "## First\n\nbody";
+      },
+      completeStructured: async () => {
+        throw new Error("completeStructured is not used by writeSection");
+      },
+    },
+    gatherResearch: async () => ({ block: "" }),
+    retryThin: async (section) => {
+      retryThinCalled.v = true;
+      return `### Source (retry): ${section.heading} backfill`;
+    },
+  };
+  const thinOut = await writeOneSection(plan, 0, "", thinDeps);
+  ok(
+    "thin section calls retryThin before the qualitative fallback",
+    retryThinCalled.v === true,
+  );
+  ok(
+    "retryThin research grounds the prompt (no qualitative fallback) and pools",
+    capturedThinPrompt.includes("### Source (retry): First backfill") &&
+      !capturedThinPrompt.includes("(no external research returned") &&
+      thinOut.research.includes("### Source (retry): First backfill"),
+  );
+  const retryThinCalledOnRich = { v: false };
+  await writeOneSection(plan, 0, "", {
+    ...captureDeps,
+    llm: {
+      complete: async () => "## First\n\nbody",
+      completeStructured: async () => {
+        throw new Error("completeStructured is not used by writeSection");
+      },
+    },
+    gatherResearch: async () => ({ block: "rich research" }),
+    retryThin: async () => {
+      retryThinCalledOnRich.v = true;
+      return "never used";
+    },
+  });
+  ok(
+    "retryThin NOT called when the gather returned research",
+    retryThinCalledOnRich.v === false,
   );
 
   process.stdout.write(

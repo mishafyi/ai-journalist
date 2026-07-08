@@ -504,6 +504,10 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   );
   const sections = await writeAllSections(
     plan,
+    // Part C: the digest deps ride blogDeps through this binding — the run's
+    // generalDigest (built by the entry from the discovery corpus) plus the
+    // host's digestSection/retryThin reach writeOneSection here; all absent →
+    // the legacy raw-research prompt, byte-identical.
     (p, i) => writeOneSection(p, i, boardFacts, blogDeps),
     blogDeps.onError,
     blogDeps.sectionConcurrency,

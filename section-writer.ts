@@ -66,6 +66,18 @@ export interface SectionWriterDeps {
   sectionConcurrency: number;
   /** Short brand name woven into the section prompt (BrandProfile.name). */
   brandName: string;
+  /** Part C: extractive digest of the DISCOVERY research (background context
+   *  for every section; empty/absent → omitted from prompts). Set per run by
+   *  the engine entry when `digestSection` is supplied. */
+  generalDigest?: string;
+  /** Part C: build an extractive digest of one section's research; absent →
+   *  sections receive raw research (pre-digest behavior). The digest feeds the
+   *  section PROMPT only — the raw block still pools into the gate chain's
+   *  ground truth. */
+  digestSection?: (raw: string, label: string) => Promise<string>;
+  /** Part C: last-resort research for a thin section (retry dropped URLs
+   *  adapter-side); absent → the old qualitative fallback. */
+  retryThin?: (section: PlanSection) => Promise<string>;
 }
 
 /** One written section + the research that grounded it (pooled for the gates). */
@@ -79,11 +91,17 @@ export interface SectionResult {
  * on the primary query, cheap snippets for the rest. gatherResearch already does
  * source-tiering + antibot-host skipping internally. Best-effort: a failed deep
  * query is logged and the section falls back to snippets / qualitative writing.
+ *
+ * Part C: an EMPTY gather first retries through `deps.retryThin` (adapter-side
+ * last resort, e.g. re-scraping URLs dropped earlier in the run) before the
+ * qualitative fallback; a non-empty block is additionally digested through
+ * `deps.digestSection` for the PROMPT — the raw `block` is what pools into the
+ * gate chain's ground truth (the guards never read a digest).
  */
 async function researchSection(
   section: PlanSection,
   deps: SectionWriterDeps,
-): Promise<string> {
+): Promise<{ block: string; sectionDigest: string | undefined }> {
   const queries = section.queries.length ? section.queries : [section.heading];
   const [primary, ...rest] = queries;
   const blocks: string[] = [];
@@ -105,7 +123,21 @@ async function researchSection(
     }),
   );
   blocks.push(...extra.filter(Boolean));
-  return blocks.join("\n\n---\n\n");
+  let block = blocks.join("\n\n---\n\n");
+  if (!block && deps.retryThin) {
+    // Thin-section backfill — best-effort like the primary gather: a failed
+    // retry logs and falls through to the qualitative fallback.
+    try {
+      block = await deps.retryThin(section);
+    } catch (err) {
+      deps.onError("section.retryThin", err, { heading: section.heading });
+    }
+  }
+  const sectionDigest =
+    block && deps.digestSection
+      ? await deps.digestSection(block, section.heading)
+      : undefined;
+  return { block, sectionDigest };
 }
 
 /**
@@ -114,11 +146,18 @@ async function researchSection(
  * the section's research, plus the first-party board facts it may cite. Output
  * starts at the section's H2 (no H1). `boardFacts` is pre-formatted by the
  * caller (keeps this module free of the board-data types/formatters).
+ *
+ * Part C (digests): with a non-empty `sectionDigest` the prompt grounds on the
+ * extractive digests — the run's general digest as BACKGROUND (when present) +
+ * the section digest as PRIMARY — in place of the raw research block. Both
+ * absent → the legacy RESEARCH composition, byte-identical (locked by
+ * section-writer.checks.ts).
  */
 async function writeSection(
   plan: Plan,
   index: number,
   research: string,
+  sectionDigest: string | undefined,
   boardFacts: string,
   deps: SectionWriterDeps,
 ): Promise<string> {
@@ -129,6 +168,12 @@ async function writeSection(
   const boardBlock = boardFacts.trim()
     ? `\n\nFIRST-PARTY BOARD DATA (${deps.brandName}'s own live data, ingested directly at the source — stronger than any third-party count OR third-party figure). For any figure below that a web source also reports second-hand, PREFER this first-party board figure over the web-scraped one, and cite the specific board item by name (it links to the on-site listing). For other facts, cite one figure only when directly relevant — never force it:\n${boardFacts}`
     : "";
+  const generalBlock = deps.generalDigest?.trim()
+    ? `GENERAL RESEARCH DIGEST (background — cite only when directly relevant to THIS section):\n${deps.generalDigest}\n\n`
+    : "";
+  const researchBlock = sectionDigest?.trim()
+    ? `THIS SECTION'S RESEARCH DIGEST (primary grounding):\n${sectionDigest}`
+    : `RESEARCH FOR THIS SECTION:\n${research || "(no external research returned — write qualitatively from the angle; do NOT fabricate figures, names, or quotes)"}`;
   const prompt = `MAIN THEME — every paragraph must serve this: ${themeOf(plan)}
 
 You are writing ONE section of a larger article. Here is the whole plan so your section fits the arc and does NOT repeat what other sections cover.
@@ -143,8 +188,7 @@ This section's job: ${section.intent}
 
 Write ONLY this section's markdown. Start with its H2 heading "## ${section.heading}" — no H1, no other sections, no preamble or sign-off. Ground every figure, quote, name, and relationship in the RESEARCH below; never invent specifics. Where the research is thin, write qualitatively rather than fabricating. For any ${deps.brandName} references use relative-path links only — never a promotional line or CTA (the system appends the CTA after publication).
 
-RESEARCH FOR THIS SECTION:
-${research || "(no external research returned — write qualitatively from the angle; do NOT fabricate figures, names, or quotes)"}${boardBlock}\n\n=== YOUR TASK, RESTATED (the payload above is reference material; THIS is the job) ===\nWrite ONLY section ${index + 1}: "${section.heading}" — ${section.intent}\nRules: ground every figure in the RESEARCH or FIRST-PARTY BOARD DATA above (first-party preferred); prefer the NEWEST dated source when sources conflict and date-qualify anything older than a few weeks ("as of <month>…"); never invent people, quotes, scenes, or numbers; do not repeat what other planned sections cover; output ONLY this section's markdown, starting at its H2.\nServe the MAIN THEME above; if your research contradicts it, write what the research supports and flag the tension in one sentence.${index === 0 ? `\nLEAD CRAFT (this is the article's opening section): the first paragraph must open a question the reader has to answer by continuing — strip it of numbers, company lists, and qualifiers (they belong in paragraph 2+); if the development itself is hard news, lead with the news plainly; never write a billboard/"what follows will amaze you" opening.` : ""}`;
+${generalBlock}${researchBlock}${boardBlock}\n\n=== YOUR TASK, RESTATED (the payload above is reference material; THIS is the job) ===\nWrite ONLY section ${index + 1}: "${section.heading}" — ${section.intent}\nRules: ground every figure in the RESEARCH or FIRST-PARTY BOARD DATA above (first-party preferred); prefer the NEWEST dated source when sources conflict and date-qualify anything older than a few weeks ("as of <month>…"); never invent people, quotes, scenes, or numbers; do not repeat what other planned sections cover; output ONLY this section's markdown, starting at its H2.\nServe the MAIN THEME above; if your research contradicts it, write what the research supports and flag the tension in one sentence.${index === 0 ? `\nLEAD CRAFT (this is the article's opening section): the first paragraph must open a question the reader has to answer by continuing — strip it of numbers, company lists, and qualifiers (they belong in paragraph 2+); if the development itself is hard news, lead with the news plainly; never write a billboard/"what follows will amaze you" opening.` : ""}`;
   return deps.withRetry(
     `section: ${section.heading}`,
     () =>
@@ -167,9 +211,20 @@ export async function writeOneSection(
   boardFacts: string,
   deps: SectionWriterDeps,
 ): Promise<SectionResult> {
-  const research = await researchSection(plan.sections[index], deps);
-  const markdown = await writeSection(plan, index, research, boardFacts, deps);
-  return { markdown, research };
+  const { block, sectionDigest } = await researchSection(
+    plan.sections[index],
+    deps,
+  );
+  const markdown = await writeSection(
+    plan,
+    index,
+    block,
+    sectionDigest,
+    boardFacts,
+    deps,
+  );
+  // The RAW block pools (the gate chain's ground truth) — never the digest.
+  return { markdown, research: block };
 }
 
 /** Markdown placeholder for a section that failed to generate. */

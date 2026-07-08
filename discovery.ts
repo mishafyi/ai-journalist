@@ -90,6 +90,13 @@ export interface DiscoveryDeps {
     error: unknown,
     context?: Record<string, unknown>,
   ) => void;
+  /** Part C: observe the pooled broad-research corpus — the EXACT string
+   *  `pickStoryAndPlan` interpolates into the story-plan prompt (fired inside
+   *  `discoverStory`, before the story pick). The engine entry registers a
+   *  capture here to build the run's general digest; absent → nothing
+   *  observes. Observation only — never reformats (`buildSignalText` and the
+   *  pool assembly are byte-locked). */
+  onCorpus?: (pooledDiscoveryResearch: string) => void;
   /**
    * Tunable knobs, INJECTED (the engine reads no env). The adapter binds the
    * `BLOG_*` env vars to these (defaults in parens), so behavior is unchanged:
@@ -392,6 +399,9 @@ export async function discoverStory(deps: DiscoveryDeps): Promise<Plan> {
   if (!research.pool.trim()) {
     throw new Error("Broad research returned no signal — cannot pick a story");
   }
+  // Part C: let the entry observe the exact pooled corpus the story pick reads
+  // (the general-digest source). Observation only — the pool is not reformatted.
+  deps.onCorpus?.(research.pool);
 
   const covered = await deps.gatherCoveredTopics();
   let plan = await pickStoryAndPlan(research.pool, covered, null, deps);
