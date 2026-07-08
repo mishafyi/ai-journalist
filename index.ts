@@ -35,6 +35,9 @@ import { discoverStory, planForTopic } from "./discovery";
 import { type Plan } from "./planning";
 import { type GeneratedPost, type RunInput } from "./ports";
 
+// Re-exported module surface (also importable via the "./digest" subpath).
+export { buildDigest, type DigestDeps } from "./digest";
+
 /**
  * Run the full pipeline: discover (or plan the fixed topic) → generate → publish.
  *

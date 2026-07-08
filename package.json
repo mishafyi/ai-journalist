@@ -42,6 +42,7 @@
     "./clients/searxng-search": "./clients/searxng-search.ts",
     "./gates": "./gates.ts",
     "./discovery": "./discovery.ts",
+    "./digest": "./digest.ts",
     "./section-writer": "./section-writer.ts",
     "./assembly": "./assembly.ts",
     "./run-context": "./run-context.ts",
