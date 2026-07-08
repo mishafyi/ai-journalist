@@ -111,7 +111,7 @@ function unfence(text: string): string {
 
 /** Pass 6 — line-edit the draft (the journalist self-edit pass). */
 export async function runEdit(draft: string, deps: GateDeps): Promise<string> {
-  const prompt = `Line-edit this draft for publication. Apply the newspaper self-edit pass: kill passive voice and nominalizations, fix adjective pile-up and editorializing, cut throat-clearing and clichés, break fact-lists into narrative, cut repeated material (each statistic, sentence, and company list appears ONCE, at its strongest spot — rephrase later references instead of restating the number), thin stat pile-ups (where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table), ensure "said" attribution with at most two "according to" in the whole piece, vary sentence length, vary section-header shapes (never let every H2 share one construction — e.g. the "Topic — Subtitle" em-dash pattern on every header; mix plain noun phrases, claims, and the occasional question), and cut about 10%. Keep every markdown link and the H1 intact. Output ONLY the edited markdown article, nothing else.
+  const prompt = `Line-edit this draft for publication. Apply the newspaper self-edit pass: kill passive voice and nominalizations, fix adjective pile-up and editorializing, cut throat-clearing and clichés, break fact-lists into narrative, cut repeated material (each statistic, sentence, and company list appears ONCE, at its strongest spot — rephrase later references instead of restating the number), thin stat pile-ups (where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table), recast raw figures the pictorial way (round unless precision is the point; prefer ratios — "one in four" over "24.7%"; give an incomprehensibly large number one visualizable equivalent), never let two number-heavy paragraphs sit adjacent, hunt abstract blobs and replace them with specific pictorial words ("severe personnel problems" → the actual thing: turnover; "resource companies" → oil rigs and mines), keep the piece MOVING by alternating the general and the concrete (a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row), and when a stretch hides behind stacked citations, surface once and draw the prudent conclusion plainly in one sentence, ensure "said" attribution with at most two "according to" in the whole piece, vary sentence length, vary section-header shapes (never let every H2 share one construction — e.g. the "Topic — Subtitle" em-dash pattern on every header; mix plain noun phrases, claims, and the occasional question), and cut about 10%. Keep every markdown link and the H1 intact. Output ONLY the edited markdown article, nothing else.
 
 DRAFT:
 ${draft}`;
@@ -144,6 +144,10 @@ export async function runFinalEdit(
 - Structural duplication: if two or more sections each enumerate the same set of named entities doing the same kind of thing (e.g. three sections that each list companies funding training programs), MERGE them into one section — that is shuffle-without-loss duplication even when the sentences differ. The same applies to FACT-CLUSTERS: when the same 2-3 distinctive figures travel together into two sections ("250 days + 8–15 months" appearing in both the backlog section and the bottleneck section), they belong in ONE place — rewording or swapping an acronym for the full name does not make it new material.
 - Kill any AI tells, hedging, or hype that survived the line edit; enforce "said" attribution and at most two "according to" in the whole piece.
 - INTEGRITY (most important): cut or fix any invented individual — a person whose story isn't in the reporting, including UNNAMED composites ("a former Google engineer who left to join…", "a 26-year-old researcher at…", an invented "she/he" you narrate). Replace any fictional protagonist with the real trend, named companies, and verified numbers. Every person, number, and quote must trace to the research.
+- CHARACTER ECONOMY: develop one or two voices the reader gets to know; cut or fold in sources quoted once for a flat line; never keep a quote that only states the obvious — assert facts as facts; when a person appears, let them DO something, not just talk.
+- PROOF VARIETY: within each section, mix the classes of evidence — a figure, an incident, a quote, an observation — never several of the same class stacked; prefer a mix of source LEVELS too (ground-level actors alongside official/desk-level voices), as far as the research supplies them.
+- TRANSITIONS: let the end of each section point naturally into the next (a fact or image already on the page suggests the move); delete any empty connective scaffolding ("meanwhile", "it is worth noting") that exists only to change subject.
+- THE ENDING: close with a kicker that seals the piece in memory using one of the three newspaper close types — CIRCLE BACK (echo the main theme through a symbol, voice, or image already in the piece — not a new proof), LOOK AHEAD (future material reads as speculation mid-piece but as a natural close at the end — move it there), or a plain SUMMARY close. Never a "revelation" ending, and the kicker must be expendable: no unique load-bearing fact or figure may appear ONLY in the final two paragraphs (move such facts up into the body).
 Make surgical changes, not a rewrite — preserve the reporting and the voice. Keep every markdown link and heading intact. Output ONLY the finished markdown article, nothing else.
 
 ARTICLE:
@@ -193,7 +197,7 @@ RESEARCH DATA (the only facts that are real):
 ${research}
 
 ARTICLE:
-${article}`;
+${article}\n\n=== YOUR TASK, RESTATED ===\nReturn the ARTICLE with every fabrication (per the definition at the top: undocumented individuals, and undocumented concrete scenes/events) removed or neutralized, and NOTHING else changed. When two sources conflict, trust the newer dated one. Output only the cleaned markdown article.`;
   return deps.withRetry(
     "fact-guard",
     () =>
@@ -231,7 +235,7 @@ RESEARCH:
 ${groundTruth.slice(0, 120000)}
 
 ARTICLE:
-${article}`;
+${article}\n\n=== YOUR TASK, RESTATED ===\nRate every claim as instructed above. Then add one final line starting "MISSING: " naming the single most important thing a beat reporter would add to this story that the research could support (or "MISSING: nothing material").`;
   return deps.withRetry(
     "fact-check-audit",
     () =>

@@ -9,7 +9,9 @@
 import {
   sectionPlaceholder,
   writeAllSections,
+  writeOneSection,
   type SectionResult,
+  type SectionWriterDeps,
 } from "./section-writer";
 import { type Plan } from "./planning";
 
@@ -24,6 +26,15 @@ function eq(name: string, actual: unknown, expected: unknown): void {
     process.stdout.write(
       `FAIL ${name}\n  expected: ${JSON.stringify(expected)}\n  actual:   ${JSON.stringify(actual)}\n`,
     );
+  }
+}
+function ok(name: string, cond: boolean): void {
+  if (cond) {
+    passed++;
+    process.stdout.write(`PASS ${name}\n`);
+  } else {
+    failed++;
+    process.stdout.write(`FAIL ${name}\n`);
   }
 }
 
@@ -72,6 +83,46 @@ async function main(): Promise<void> {
       out.research.includes("research 2") &&
       !out.research.includes("research 1"),
     true,
+  );
+
+  // Part A (2026-07): long-context prompt mechanics — the task must be RESTATED
+  // after the research payload (lost-in-the-middle: end-position attention wins).
+  // No prompt capture existed for writeSection: drive writeOneSection with a
+  // capturing llm stub (mirrors gates.checks.ts's capture pattern).
+  let capturedSectionPrompt = "";
+  const captureDeps: SectionWriterDeps = {
+    llm: {
+      complete: async (args) => {
+        capturedSectionPrompt = args.prompt;
+        return "## First\n\nbody";
+      },
+      completeStructured: async () => {
+        throw new Error("completeStructured is not used by writeSection");
+      },
+    },
+    gatherResearch: async () => ({ block: "research block" }),
+    searchSnippets: async () => [],
+    systemPrompt: () => "system prompt",
+    withRetry: async <T>(_label: string, fn: () => Promise<T>): Promise<T> =>
+      fn(),
+    onError: () => {},
+    model: "test-model",
+    sectionSnippets: 4,
+    sectionConcurrency: 3,
+    brandName: "TestBrand",
+  };
+  await writeOneSection(plan, 0, "- Board: 42 open widget roles", captureDeps);
+  ok(
+    "section prompt restates the task AFTER the research block",
+    // Anchor the payload on its FIRST occurrence (the block header): the
+    // restated rules deliberately echo "FIRST-PARTY BOARD DATA", so a
+    // lastIndexOf-vs-lastIndexOf comparison would self-defeat.
+    capturedSectionPrompt.lastIndexOf("YOUR TASK, RESTATED") >
+      capturedSectionPrompt.indexOf("FIRST-PARTY BOARD DATA"),
+  );
+  ok(
+    "section prompt carries the recency rule",
+    capturedSectionPrompt.includes("prefer the NEWEST dated source"),
   );
 
   process.stdout.write(
