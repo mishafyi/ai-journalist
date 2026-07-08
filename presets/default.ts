@@ -383,6 +383,21 @@ export function createDefaultInternals(
     onEvent: async (event) => onEvent?.(event),
     dedupThreshold: knobs.dedupThreshold,
     embedDedupSim: knobs.embedDedupSim,
+    // Publication identity threading — the engine bakes no domain/publication
+    // text into prompts; unset BrandProfile fields resolve to neutral defaults.
+    desk: brand.desk ?? `a ${brand.beat} publication`,
+    signalLabel:
+      brand.signalDescriptor ??
+      "our LIVE first-party data signal — what is happening right now in this domain",
+    signalHeading: brand.signalHeading ?? "SIGNAL",
+    audience: brand.audience ?? `professionals working in ${brand.beat}`,
+    categories: brand.categories ?? [
+      "news",
+      "analysis",
+      "feature",
+      "profile",
+      "explainer",
+    ],
     discoveryQueries: knobs.discoveryQueries,
     newsCompanies: knobs.newsCompanies,
     maxSections: knobs.maxSections,

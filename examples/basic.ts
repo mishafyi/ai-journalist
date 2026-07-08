@@ -169,6 +169,11 @@ export async function runBasicExample(): Promise<DemoResult> {
     sectionSnippets: 4,
     sectionConcurrency: 3,
     brandName: brand.name,
+    desk: "a demo publication",
+    signalLabel: "our demo data signal",
+    signalHeading: "SIGNAL",
+    audience: "demo readers",
+    categories: ["news", "analysis"],
   };
 
   // The adapter-internal carrier. A real adopter binds these to their gate chain;

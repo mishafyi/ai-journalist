@@ -103,3 +103,15 @@ NOT part of `npm test` — it makes live calls and prints `SKIP` without
 all configuration as arguments (`EngineConfig`, `EngineInternals`, knobs); API
 keys and backend selection live in the reference clients. The purity guard fails
 CI on any `process.env` read outside `clients/**`.
+
+## Universality invariant (2026-07-08)
+
+This engine is a UNIVERSAL, host-agnostic OSS package. Nothing
+publication-specific ships in it: no host's domain framing, category taxonomy,
+audience description, or signal phrasing in any prompt literal — identity
+threads through `BrandProfile` (`desk` / `signalDescriptor` / `signalHeading` /
+`audience` / `categories`) with neutral defaults. Before adding prompt text ask:
+could a different publication ship this line unchanged? If not, it belongs in a
+`BrandProfile` field. The AST guard (`__guard.checks.ts`) bans the phrases that
+leaked once ("frontier-tech", "hiring publication", host brand names).
+Host-specific optimizations belong in the host's adapter, never here.

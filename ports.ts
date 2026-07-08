@@ -97,7 +97,7 @@ export interface TopicBrief {
 
 /** One citable first-party fact tied to the chosen topic. */
 export interface Fact {
-  /** The claim in words, e.g. "SpaceX has 1,768 open roles". */
+  /** The claim in words, e.g. "ACME Robotics has 1,768 open roles". */
   claim: string;
   /** Structured value when numeric — feeds the figure-grounding gate. */
   value?: string | number;
@@ -250,6 +250,23 @@ export interface BrandProfile {
   publication: string;
   /** Domain framing — e.g. "space, AI, robotics". */
   beat: string;
+  /** Discovery persona: what this publication IS, woven into the discovery
+   *  prompts — e.g. "a space-industry hiring publication (launch, satellites,
+   *  defense)". Default: `a ${beat} publication`. */
+  desk?: string;
+  /** What the Source's signal IS, e.g. "our LIVE job-board hiring signal — who
+   *  is hiring right now, for what, and where". Default: a neutral
+   *  first-party-data phrasing. */
+  signalDescriptor?: string;
+  /** Heading over the signal block in discovery prompts. Default: "SIGNAL". */
+  signalHeading?: string;
+  /** Who reads the publication, e.g. "engineers and operators in space /
+   *  defense / robotics". Default: `professionals working in ${beat}`. */
+  audience?: string;
+  /** Story-category taxonomy the planner picks from (also filters headline
+   *  exemplars; unknown categories fall back to the general corpus).
+   *  Default: ["news", "analysis", "feature", "profile", "explainer"]. */
+  categories?: string[];
   /** Anti-AI-writing banned-words list (ships with a sensible default). */
   bannedWords?: string[];
   /** Author pen names. */

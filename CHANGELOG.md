@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.8.0
+
+- **Universality: publication identity fully externalized.** The last
+  host-flavored prompt literals (a "frontier-tech hiring publication" desk
+  line, a job-board signal descriptor, an audience list, and a hardcoded
+  story-category taxonomy) now thread through new optional `BrandProfile`
+  fields — `desk`, `signalDescriptor`, `signalHeading`, `audience`,
+  `categories` — resolved to neutral, `beat`-derived defaults by the preset.
+  The AST purity guard now bans the phrases that leaked ("frontier-tech",
+  "hiring publication", host brand names), and AGENTS.md carries the standing
+  invariant: if a different publication couldn't ship a prompt line unchanged,
+  it belongs in `BrandProfile`.
+- Publish workflow now creates a GitHub Release (with the version's CHANGELOG
+  section) for every npm publish — npm and GitHub stay in lockstep from the
+  same tag.
+- README rewritten: value-first, current npm install (the "not yet published"
+  note was stale), compact quickstart.
+
 ## 0.7.5
 
 - runTitle membership gate: the structured `{candidates, best}` schema

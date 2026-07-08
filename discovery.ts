@@ -83,6 +83,15 @@ export interface DiscoveryDeps {
     fn: () => Promise<T>,
     opts?: { input?: string; maxAttempts?: number },
   ) => Promise<T>;
+  /** Publication identity threading (resolved from BrandProfile by the preset
+   *  or adapter — the engine bakes NO publication/domain text into prompts):
+   *  what the outlet is, what its signal is, and who reads it. */
+  desk: string;
+  signalLabel: string;
+  signalHeading: string;
+  audience: string;
+  /** Story-category taxonomy the planner picks from. */
+  categories: string[];
   getRunId: () => string;
   onEvent: (event: BlogRunEvent) => Promise<void>;
   onError: (
@@ -155,7 +164,7 @@ async function generateQueries(
   signal: string,
   deps: DiscoveryDeps,
 ): Promise<DiscoveryOutput> {
-  const prompt = `You are the research desk for a frontier-tech hiring publication (space, defense, robotics, AI, energy, biotech). Below is our LIVE job-board hiring signal — who is hiring right now, for what, and where.
+  const prompt = `You are the research desk for ${deps.desk}. Below is ${deps.signalLabel}.
 
 From it, output ONLY a JSON object (no prose, no code fences):
 {
@@ -166,7 +175,7 @@ From it, output ONLY a JSON object (no prose, no code fences):
 Spread the queries across the six aspects every strong story has — history (roots or break with the past), scope (how big/where/who), reasons (economic, political, psychological), impacts (who is helped or hurt), countermoves (what opponents or competitors are DOING, not saying), and futures (projections) — at least one query for each aspect that plausibly applies. Use search operators where they sharpen a query: quoted phrases for exact strings, - to exclude a dominant irrelevant sense, site: for a known primary source, intitle: for coverage checks.
 When the signal itself is thin, generate story angles the five reporter's ways: EXTRAPOLATE (what common cause drives this development, and where else must that cause be producing the same effect?), SYNTHESIZE (what single thread unifies several seemingly unrelated postings/events?), LOCALIZE (turn a big abstract trend into one concrete, representative case from the board), PROJECT (skip the crowded central development — is this story juvenile or mature? if mature, target its impacts and countermoves instead), and SWITCH VIEWPOINT (tell it from a vantage nobody covering it occupies — the candidate's, the losing competitor's, the supplier's).
 
-HIRING SIGNAL:
+${deps.signalHeading}:
 ${signal}`;
   const out = await deps.withRetry(
     "discovery: query-gen",
@@ -278,10 +287,10 @@ async function pickStoryAndPlan(
     : "";
   const task = seed
     ? `Build a sectioned article around THIS story: "${seed}". Use the pooled research below to structure and ground it.`
-    : "Pick the SINGLE best story — specific, timely, well-grounded in this research, and genuinely interesting to engineers and operators in space / defense / robotics / AI / energy / biotech — and design it as a sectioned article.";
-  const prompt = `You are the editor of a frontier-tech hiring publication. Below is pooled research (web-search snippets + recent company news headlines). ${task}
+    : `Pick the SINGLE best story — specific, timely, well-grounded in this research, and genuinely interesting to ${deps.audience} — and design it as a sectioned article.`;
+  const prompt = `You are the editor of ${deps.desk}. Below is pooled research (web-search snippets + recent company news headlines). ${task}
 Before choosing sections, think in cause-and-effect: the central development, the effects that logically follow, the reactions to those effects, and the constituencies touched — then FENCE the story: the sections must cover one coherent slice of that map, and the angle must make clear what is explicitly OUT of scope. Distrust remote links in the chain (they may not have happened yet); the plan's section queries must seek evidence, not confirmation.
-Choose the APPROACH deliberately and let the story's nature (not habit) dictate it: a ROUNDUP (many sources, breadth) when the development is wide and no single case carries it; a MICROCOSM/PROFILE (one representative company or role carries the tale) ONLY when the exemplar is verifiably representative — vet it against the hiring data before building sections on it.
+Choose the APPROACH deliberately and let the story's nature (not habit) dictate it: a ROUNDUP (many sources, breadth) when the development is wide and no single case carries it; a MICROCOSM/PROFILE (one representative company or role carries the tale) ONLY when the exemplar is verifiably representative — vet it against the first-party data before building sections on it.
 ORDER the sections as blocks of related material (never scatter one aspect across sections): after the theme is established, the FIRST detailed section must be the aspect your themeStatement stresses most (a newsy development → scope first; a well-known development → impacts or countermoves first); weave history in small touches where it adds contrast rather than as one lump.
 
 Output ONLY a JSON object (no prose, no code fences):
@@ -289,7 +298,7 @@ Output ONLY a JSON object (no prose, no code fences):
   "title": "the article title",
   "angle": "one sentence stating the specific argument / throughline",
   "themeStatement": "<1-2 plain sentences of ACTION stating what the story SAYS — the development, one or two effects, the major reaction; no details, no numbers>",
-  "category": "the story's primary domain — one of: robotics, artificial-intelligence, aerospace-engineering, defense, energy, biotech, frontier",
+  "category": "the story's primary domain — one of: ${deps.categories.join(", ")}",
   "searchSeed": "a 2-4 word phrase a reader would type into Google to find this story (e.g. 'defense tech salaries', 'humanoid robot funding')",
   "sections": [
     { "heading": "section H2 heading", "intent": "one sentence: what this section establishes", "queries": ["targeted research query", "up to ${deps.sectionQueries} total"] }

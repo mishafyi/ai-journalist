@@ -129,6 +129,11 @@ function makeDiscoveryDeps(): DiscoveryDeps & SectionWriterDeps & AssemblyDeps {
     sectionSnippets: 4,
     sectionConcurrency: 3,
     brandName: "Test Brand",
+    desk: "a demo publication",
+    signalLabel: "our demo data signal",
+    signalHeading: "SIGNAL",
+    audience: "demo readers",
+    categories: ["news", "analysis"],
   };
 }
 

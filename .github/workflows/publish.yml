@@ -18,7 +18,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # checkout + create the GitHub Release for the tag
       id-token: write # OIDC token for npm trusted publishing
 
     steps:
@@ -43,3 +43,26 @@ jobs:
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Keep GitHub in lockstep with npm: every published version also gets a
+      # GitHub Release carrying its CHANGELOG section (the repo is the source
+      # of truth; npm and the Releases page are both derived from the tag).
+      - name: Create GitHub Release with the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Extract this version's section from CHANGELOG.md (from "## X.Y.Z"
+          # to the next "## " heading).
+          awk -v ver="$VERSION" '
+            $0 ~ "^## " ver "($| )" { on=1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          if ! [ -s /tmp/release-notes.md ]; then
+            echo "(no CHANGELOG section found for $VERSION)" > /tmp/release-notes.md
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file /tmp/release-notes.md \
+            --verify-tag

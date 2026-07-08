@@ -135,7 +135,17 @@ const isBrandLiteral = (node: ts.Node): boolean => {
     ts.isTemplateTail(node)
   ) {
     const lower = node.text.toLowerCase();
-    return lower.includes("example news") || lower.includes("example.com");
+    return (
+      lower.includes("example news") ||
+      lower.includes("example.com") ||
+      // Host-publication leakage (2026-07-08 genericization): publication
+      // identity/domain text must thread through BrandProfile, never sit in
+      // engine prompt literals. These are the phrases that leaked once.
+      lower.includes("frontier-tech") ||
+      lower.includes("hiring publication") ||
+      lower.includes("zero g talent") ||
+      lower.includes("zerogtalent")
+    );
   }
   return false;
 };

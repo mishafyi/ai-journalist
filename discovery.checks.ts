@@ -245,6 +245,23 @@ let capturedQueryGenPrompt = "";
 let capturedStoryPlanPrompt = "";
 
 const captureDeps: DiscoveryDeps = {
+  // Historical identity values — the locked reference prompts below were
+  // written when these were baked into the engine; they now thread via deps.
+  desk: "a frontier-tech hiring publication (space, defense, robotics, AI, energy, biotech)",
+  signalLabel:
+    "our LIVE job-board hiring signal — who is hiring right now, for what, and where",
+  signalHeading: "HIRING SIGNAL",
+  audience:
+    "engineers and operators in space / defense / robotics / AI / energy / biotech",
+  categories: [
+    "robotics",
+    "artificial-intelligence",
+    "aerospace-engineering",
+    "defense",
+    "energy",
+    "biotech",
+    "frontier",
+  ],
   llm: {
     complete: async () => {
       throw new Error("free-text complete is not used by discovery");
