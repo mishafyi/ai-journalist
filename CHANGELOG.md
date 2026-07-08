@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.3
+
+- `GateDeps.editWordFloor?` (default 1200) — runEdit/runFinalEdit prompts now
+  carry an explicit word floor. "cut about 10%" alone measured 43–54% keeps and
+  the "surgical" final read ~55% (2026-07-08); with fact-guard stripping ~30%
+  after them, finals fell under the pipeline's 800-word shape assertion even
+  with in-target sections. Fact-guard deliberately gets NO floor — integrity
+  strips must never be traded for length.
+
 ## 0.7.2
 
 - `SectionWriterDeps.sectionWordTarget?: { min, max }` (default 350–550) — the section
