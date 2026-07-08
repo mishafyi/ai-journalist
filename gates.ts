@@ -78,6 +78,11 @@ export interface GateDeps {
   ) => Promise<T>;
   /** The per-run telemetry/artifact carrier (title-gate flags are written here). */
   ctx: RunContext;
+  /** The plan's main-theme statement (themeOf(plan), set by the pipeline on
+   *  this shared object each run). When present, runFinalEdit/runFactGuard/
+   *  runTitle anchor their prompts on it; absent → the prompts render in their
+   *  pre-theme byte shape (old fixtures/tests stay valid). */
+  theme?: string;
   /** Headline-corpus exemplars for a category (the adapter folds corpusDomain +
    *  sampleExemplars over its HEADLINES module data). runTitle-only. */
   gatherExemplars: (category: string, count: number) => string[];
@@ -109,6 +114,12 @@ function unfence(text: string): string {
   return m ? m[1] : text;
 }
 
+/** The MAIN THEME prompt anchor — "" when no theme is set, so themeless calls
+ *  keep the pre-theme prompt bytes. */
+function themeHead(deps: GateDeps): string {
+  return deps.theme ? `MAIN THEME of this piece: ${deps.theme}\n\n` : "";
+}
+
 /** Pass 6 — line-edit the draft (the journalist self-edit pass). */
 export async function runEdit(draft: string, deps: GateDeps): Promise<string> {
   const prompt = `Line-edit this draft for publication. Apply the newspaper self-edit pass: kill passive voice and nominalizations, fix adjective pile-up and editorializing, cut throat-clearing and clichés, break fact-lists into narrative, cut repeated material (each statistic, sentence, and company list appears ONCE, at its strongest spot — rephrase later references instead of restating the number), thin stat pile-ups (where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table), recast raw figures the pictorial way (round unless precision is the point; prefer ratios — "one in four" over "24.7%"; give an incomprehensibly large number one visualizable equivalent), never let two number-heavy paragraphs sit adjacent, hunt abstract blobs and replace them with specific pictorial words ("severe personnel problems" → the actual thing: turnover; "resource companies" → oil rigs and mines), keep the piece MOVING by alternating the general and the concrete (a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row), and when a stretch hides behind stacked citations, surface once and draw the prudent conclusion plainly in one sentence, ensure "said" attribution with at most two "according to" in the whole piece, vary sentence length, vary section-header shapes (never let every H2 share one construction — e.g. the "Topic — Subtitle" em-dash pattern on every header; mix plain noun phrases, claims, and the occasional question), and cut about 10%. Keep every markdown link and the H1 intact. Output ONLY the edited markdown article, nothing else.
@@ -136,7 +147,7 @@ export async function runFinalEdit(
   article: string,
   deps: GateDeps,
 ): Promise<string> {
-  const prompt = `You are the managing editor giving this piece its final read before print. You are NOT line-editing — read the whole thing for impact and integrity, and change only what's needed:
+  const prompt = `${themeHead(deps)}You are the managing editor giving this piece its final read before print. You are NOT line-editing — read the whole thing for impact and integrity, and change only what's needed:
 - Lede: does the first sentence earn attention? If it's throat-clearing or generic, rewrite it to open on a hard verified fact, a real named company's move, or a provocation — never an invented person, scene, or event (an undocumented demo, incident, or moment narrated with specific details is fabrication, even with no one named).
 - Kicker (last paragraph): does it land on a concrete image or implication? Kill any "In conclusion", summary, or empty optimism. A kicker may CALL BACK to an earlier idea but must rephrase it — copying a sentence from an earlier section verbatim (or near-verbatim) is a repetition failure, not a callback.
 - Spine: each section should earn the next. Cut or reorder any paragraph that stalls the through-line or could be shuffled without loss.
@@ -147,7 +158,7 @@ export async function runFinalEdit(
 - CHARACTER ECONOMY: develop one or two voices the reader gets to know; cut or fold in sources quoted once for a flat line; never keep a quote that only states the obvious — assert facts as facts; when a person appears, let them DO something, not just talk.
 - PROOF VARIETY: within each section, mix the classes of evidence — a figure, an incident, a quote, an observation — never several of the same class stacked; prefer a mix of source LEVELS too (ground-level actors alongside official/desk-level voices), as far as the research supplies them.
 - TRANSITIONS: let the end of each section point naturally into the next (a fact or image already on the page suggests the move); delete any empty connective scaffolding ("meanwhile", "it is worth noting") that exists only to change subject.
-- THE ENDING: close with a kicker that seals the piece in memory using one of the three newspaper close types — CIRCLE BACK (echo the main theme through a symbol, voice, or image already in the piece — not a new proof), LOOK AHEAD (future material reads as speculation mid-piece but as a natural close at the end — move it there), or a plain SUMMARY close. Never a "revelation" ending, and the kicker must be expendable: no unique load-bearing fact or figure may appear ONLY in the final two paragraphs (move such facts up into the body).
+- THE ENDING: close with a kicker that seals the piece in memory using one of the three newspaper close types — CIRCLE BACK (echo the main theme through a symbol, voice, or image already in the piece — not a new proof), LOOK AHEAD (future material reads as speculation mid-piece but as a natural close at the end — move it there), or a plain SUMMARY close. Never a "revelation" ending, and the kicker must be expendable: no unique load-bearing fact or figure may appear ONLY in the final two paragraphs (move such facts up into the body).${deps.theme ? `\n- THE NUT: the main theme material must be plainly stated within the first three paragraphs; if it is buried, surface it there.` : ""}
 Make surgical changes, not a rewrite — preserve the reporting and the voice. Keep every markdown link and heading intact. Output ONLY the finished markdown article, nothing else.
 
 ARTICLE:
@@ -177,7 +188,7 @@ export async function runFactGuard(
   research: string,
   deps: GateDeps,
 ): Promise<string> {
-  const prompt = `You are a fact-checker. The ARTICLE must be grounded entirely in the RESEARCH DATA below. Find every FABRICATION the article presents as real but that is NOT in the research: (a) any INDIVIDUAL PERSON — named ("Maya Chen said…") or an unnamed composite ("a senior RF engineer who left FAANG…", "a 26-year-old researcher at…") — whose story isn't reported; AND (b) any SPECIFIC SCENE OR EVENT narrated with concrete details — a demo, incident, meeting, or moment with specific actions, measurements, timing, or dialogue ("At a robotics demo day, a humanoid robot tightened four bolts in thirty seconds; weeks later on the factory floor it failed, the bolts half a centimeter off") — that isn't documented in the research. Both are fabrications and must go, even when no person is named.
+  const prompt = `${themeHead(deps)}You are a fact-checker. The ARTICLE must be grounded entirely in the RESEARCH DATA below. Find every FABRICATION the article presents as real but that is NOT in the research: (a) any INDIVIDUAL PERSON — named ("Maya Chen said…") or an unnamed composite ("a senior RF engineer who left FAANG…", "a 26-year-old researcher at…") — whose story isn't reported; AND (b) any SPECIFIC SCENE OR EVENT narrated with concrete details — a demo, incident, meeting, or moment with specific actions, measurements, timing, or dialogue ("At a robotics demo day, a humanoid robot tightened four bolts in thirty seconds; weeks later on the factory floor it failed, the bolts half a centimeter off") — that isn't documented in the research. Both are fabrications and must go, even when no person is named.
 
 Rewrite the article to remove every fabrication:
 - If it OPENS on an invented person, scene, or event, replace that opening with a grounded hook — a verified number, a real named company's move, or the documented trend — that still earns attention. The single most common failure is a vivid invented opening anecdote with no source; treat any undocumented opening scene as fabrication.
@@ -345,7 +356,7 @@ export async function runTitle(
         .map((t) => `- ${t}`)
         .join("\n")}\n\n`
     : "";
-  const prompt = `You are the headline editor at a major newspaper. Your goal: a headline the reader CANNOT scroll past — maximum stop-power built entirely from REAL reported material. Curiosity, hard data, and shock value working together; never boilerplate clickbait.
+  const prompt = `${themeHead(deps)}You are the headline editor at a major newspaper. Your goal: a headline the reader CANNOT scroll past — maximum stop-power built entirely from REAL reported material. Curiosity, hard data, and shock value working together; never boilerplate clickbait.
 
 ${styleBlock}${searchBlock}${
     priorTitles.length
