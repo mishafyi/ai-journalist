@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.5
+
+- runTitle membership gate: the structured `{candidates, best}` schema
+  guarantees shape, not semantics — a model returned `best: "candidate_2"`
+  (a reference into its own list, not the verbatim text) and it published as a
+  live title (2026-07-08). "best" now must be one of the candidates: numeric
+  references resolve against the list, anything else falls back to the first
+  candidate, and the swap is recorded in the title gate trace
+  (`best-not-in-candidates`).
+
 ## 0.7.4
 
 - runEdit: the "cut about 10%" instruction is GONE — models read any percentage

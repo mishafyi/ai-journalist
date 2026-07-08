@@ -446,6 +446,20 @@ one of your candidates, copied verbatim.`;
   const gateEvent = (gate: string, from: string, to: string): void => {
     titleGateEvents.push({ gate, from, to });
   };
+  // Membership gate — the structured schema guarantees the {candidates, best}
+  // SHAPE, not the semantics: a model returned best="candidate_2" (a REFERENCE
+  // to its list, not the verbatim text) and it published as a live title
+  // (2026-07-08). Resolve numeric references against the candidate list, else
+  // fall back to the first candidate; "best" must ALWAYS be a real headline.
+  if (allCands.length > 0 && !allCands.includes(title)) {
+    const ref = title.match(
+      /^(?:candidate|option|headline|title)?[\s_#-]*(\d{1,2})$/i,
+    );
+    const n = ref ? Number(ref[1]) : NaN;
+    const resolved = ref ? (allCands[n - 1] ?? allCands[n]) : undefined;
+    gateEvent("best-not-in-candidates", title, resolved ?? allCands[0]);
+    title = resolved ?? allCands[0];
+  }
   // Formula-collision gate (R6C10: a near-verbatim template rerun of a
   // published headline shipped — the prompt block above asks; this enforces).
   // Collision = high trigram overlap with any prior title, or a frame that

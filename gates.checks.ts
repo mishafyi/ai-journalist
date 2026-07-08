@@ -404,6 +404,34 @@ async function main(): Promise<void> {
       captures[0].temperature === 0.8,
   );
 
+  // Membership gate: a "best" that is a REFERENCE ("candidate_2") instead of
+  // verbatim candidate text must resolve to a real candidate — one shipped as
+  // a live title 2026-07-08. 1-based reference → candidates[1].
+  {
+    const refReply = JSON.stringify({
+      candidates: [
+        "First Real Headline About Robots",
+        "Second Real Headline About Pay",
+      ],
+      best: "candidate_2",
+    });
+    const { title: resolvedTitle } = await runTitle(
+      titleArticle,
+      "Working Topic Label",
+      {
+        category: "robotics",
+        angle: "the angle phrasing",
+        searchSeed: "robotics jobs",
+      },
+      "GROUND TRUTH",
+      makeDeps(() => refReply),
+    );
+    ok(
+      "runTitle resolves a reference-shaped best to a real candidate",
+      resolvedTitle === "Second Real Headline About Pay",
+    );
+  }
+
   // ── Part A (2026-07): long-context prompt mechanics + craft lines ──────────
   // The task must be RESTATED after the research payload (lost-in-the-middle:
   // end-position attention wins); the edit passes carry the craft rules.
