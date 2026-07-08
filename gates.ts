@@ -875,3 +875,53 @@ export function corroborationBlockers(
   }
   return out;
 }
+
+/**
+ * D2 — structure gate (record-only). Three deterministic checks:
+ *   1. nut presence — `trigramSimilarity(theme, first 3 paragraphs)` must
+ *      reach `opts.nutMinSim` (default 0.18 — calibrated in gates.checks.ts:
+ *      a real nut restatement measures ~0.63, a paraphrased one ~0.32,
+ *      off-topic prose ~0.09), else `no-early-nut`;
+ *   2. lead clutter — ≥3 numbers in the opening paragraph → `cluttered-lead`;
+ *   3. load-bearing ending — a figure present in the last two paragraphs but
+ *      nowhere earlier → `load-bearing-ending: "<figure>"` (the kicker must
+ *      stay expendable — the managing-editor rule, checked mechanically).
+ * The host adapter binds its env (BLOG_NUT_MIN_SIM) to `opts.nutMinSim`; the
+ * engine reads no env.
+ */
+export function structureBlockers(
+  article: string,
+  theme: string,
+  opts?: { nutMinSim?: number },
+): string[] {
+  const out: string[] = [];
+  const blocks = splitBlocks(article);
+  const paraIdx = blocks.flatMap((b, i) => (isHeading(b) ? [] : [i]));
+  const paras = paraIdx.map((i) => blocks[i]);
+
+  // (1) nut presence — the theme must be lexically visible in the lede.
+  const sim = trigramSimilarity(theme, paras.slice(0, 3).join("\n\n"));
+  if (sim < (opts?.nutMinSim ?? 0.18)) out.push("no-early-nut");
+
+  // (2) lead clutter — ≥3 numbers in the opening paragraph.
+  if (((paras[0] ?? "").match(/\d[\d,.]*/g) ?? []).length >= 3)
+    out.push("cluttered-lead");
+
+  // (3) load-bearing ending — a figure the last two paragraphs introduce.
+  // Skipped under 3 paragraphs (no ending distinct from the lead to judge).
+  if (paras.length >= 3) {
+    const tailIdx = new Set(paraIdx.slice(-2));
+    const tail = paraIdx
+      .slice(-2)
+      .map((i) => blocks[i])
+      .join("\n\n");
+    const earlierNorm = blocks
+      .filter((_, i) => !tailIdx.has(i))
+      .join("\n\n")
+      .replace(/,/g, "");
+    for (const fig of extractFigures(tail))
+      if (!earlierNorm.includes(fig.norm))
+        out.push(`load-bearing-ending: "${fig.display}"`);
+  }
+  return out;
+}

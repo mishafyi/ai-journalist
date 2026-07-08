@@ -29,8 +29,10 @@ import {
   runTitle,
   runSeo,
   corroborationBlockers,
+  structureBlockers,
   type GateDeps,
 } from "./gates";
+import { trigramSimilarity } from "./primitives";
 
 // Stub global fetch so runTitle's gatherSearchTerms (live Google autocomplete)
 // is deterministic + network-free — returns the empty [query, []] shape, so the
@@ -548,6 +550,105 @@ async function main(): Promise<void> {
     mBlockers.length === 1 &&
       mBlockers[0] === 'single-source-figure: "$5M" seen only via a.com',
     JSON.stringify(mBlockers),
+  );
+
+  // ── Part D2 (2026-07): structureBlockers — deterministic structure gate.
+  // RECORD-ONLY primitive: pure (article, theme, opts?) → string[].
+  //
+  // nutMinSim CALIBRATION (measured 2026-07-07 against trigramSimilarity):
+  //   - near-verbatim nut restatement in paras 1-3 (the pair below): 0.6299
+  //   - realistically PARAPHRASED nut ("Venture-backed defense firms are
+  //     luring senior engineers out of Lockheed and Northrop by offering
+  //     equity packages…" for the same theme):                        0.3174
+  //   - off-topic lede (orbital-tourism prose, same lengths):         0.0883
+  // The 0.18 default sits comfortably below even a paraphrased nut and well
+  // above off-topic prose. The asserts on `nutSim`/`offTopicSim` below keep
+  // the recorded calibration honest if primitives.ts ever drifts.
+  const nutTheme =
+    "Defense tech startups are pulling mid-career engineers away from legacy primes with equity-heavy offers.";
+  const nutArticle = [
+    "# The quiet exodus",
+    "Defense tech startups are pulling mid-career engineers away from the legacy primes with equity-heavy offers the big contractors cannot match.",
+    "The trend accelerated this spring, with 42,000 open roles across the sector.",
+    "Recruiters say the shift is structural.",
+    "## What it means",
+    "The primes are responding with retention bonuses.",
+    "The sector's 42,000 openings tell one story.",
+    "The next chapter may hinge on a $750M bet no prime has yet made.",
+  ].join("\n\n");
+  const nutSim = trigramSimilarity(
+    nutTheme,
+    [
+      "Defense tech startups are pulling mid-career engineers away from the legacy primes with equity-heavy offers the big contractors cannot match.",
+      "The trend accelerated this spring, with 42,000 open roles across the sector.",
+      "Recruiters say the shift is structural.",
+    ].join("\n\n"),
+  );
+  ok(
+    `structure calibration: nut restatement measures ${nutSim.toFixed(4)} ≥ 0.18`,
+    nutSim >= 0.18,
+  );
+  const offTopicSim = trigramSimilarity(
+    nutTheme,
+    [
+      "Orbital tourism sold its first zero-training seat last week.",
+      "The booking platform quotes a four-hour ride with a champagne landing, and the waitlist crossed nine thousand names.",
+      "Regulators have not yet said whether the flights count as commercial aviation.",
+    ].join("\n\n"),
+  );
+  ok(
+    `structure calibration: off-topic lede measures ${offTopicSim.toFixed(4)} < 0.18`,
+    offTopicSim < 0.18,
+  );
+
+  // (1) nut present + (2) clean 0-number lead + (3) "$750M" introduced only in
+  // the last two paragraphs while the earlier "42,000" repeat stays legal →
+  // EXACTLY one blocker.
+  const nutBlockers = structureBlockers(nutArticle, nutTheme);
+  ok(
+    "structure: nut present, clean lead, kicker introduces $750M → exactly the load-bearing-ending blocker",
+    nutBlockers.length === 1 &&
+      nutBlockers[0] === 'load-bearing-ending: "$750M"',
+    JSON.stringify(nutBlockers),
+  );
+
+  ok(
+    "structure: nutMinSim opt parameterizes the threshold (0.9 flips the nut case)",
+    structureBlockers(nutArticle, nutTheme, { nutMinSim: 0.9 }).includes(
+      "no-early-nut",
+    ),
+  );
+
+  const offTopicArticle = [
+    "# Seats to orbit",
+    "Orbital tourism sold its first zero-training seat last week.",
+    "The booking platform quotes a four-hour ride with a champagne landing, and the waitlist crossed nine thousand names.",
+    "Regulators have not yet said whether the flights count as commercial aviation.",
+  ].join("\n\n");
+  ok(
+    "structure: theme absent from the first three paragraphs → no-early-nut",
+    structureBlockers(offTopicArticle, nutTheme).includes("no-early-nut"),
+  );
+
+  const clutteredArticle = [
+    "# Pay check",
+    "In 2025, 42,000 roles paid $210,000 on average, up 12% year over year.",
+    "Second paragraph.",
+    "Third paragraph.",
+  ].join("\n\n");
+  ok(
+    "structure: ≥3 numbers in the first paragraph → cluttered-lead",
+    structureBlockers(clutteredArticle, nutTheme).includes("cluttered-lead"),
+  );
+  const twoNumberLead = [
+    "# Pay check",
+    "In 2025, 42,000 roles opened.",
+    "Second paragraph.",
+    "Third paragraph.",
+  ].join("\n\n");
+  ok(
+    "structure: 2 numbers in the first paragraph stay legal",
+    !structureBlockers(twoNumberLead, nutTheme).includes("cluttered-lead"),
   );
 }
 
