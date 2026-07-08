@@ -5,6 +5,27 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-08
+
+### Added
+
+- **Research-digest architecture (Part C engine half: C1/C2/C4).**
+  - `digest.ts`: `buildDigest(raw, label, deps)` — extractive six-box research
+    index (HISTORY/SCOPE/REASONS/IMPACTS/COUNTERMOVES/FUTURES) of verbatim
+    spans + URL + normalized date; instructions restated after the payload.
+  - Optional `SectionWriterDeps` fields `generalDigest` / `digestSection` /
+    `retryThin` and `DiscoveryDeps.onCorpus`: when active, section prompts
+    compose MAIN THEME → plan → general digest (background) → section digest
+    (primary grounding) → board data → restatement; thin sections call
+    `retryThin` before the qualitative fallback; the RAW research always pools
+    for the guards. Absent deps ⇒ byte-identical legacy behavior.
+  - `recastTheme(theme, generalDigest, deps)`: structured (schema-constrained)
+    post-research theme recast with keep/adjust/kill verdicts +
+    `newestSourceDate`; staleness (`stale-story: …`) and `theme-killed`
+    warnings flow through the existing gate-warnings channel; kill throws for
+    the host's fail-soft. Window/now/ctx arrive via optional deps
+    (`maxStoryAgeDays` default 14) — the engine still reads no env.
+
 ## [0.6.1] - 2026-07-07
 
 ### Added
