@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.7.4
+
+- runEdit: the "cut about 10%" instruction is GONE — models read any percentage
+  as license to condense (measured 43–54% keeps). The pass now cuts only what
+  the craft bullets name (line-fat, repetition, filler) and states it is a line
+  edit, not a condensation; the editWordFloor stays as the guardrail.
+- Section write prompt: the word target is now a floor, not a range —
+  "at least min words (max is a guide, not a ceiling — run past it whenever the
+  grounded material supports more)". Sections should never be capped by prompt
+  when the reporting supports depth.
+
 ## 0.7.3
 
 - `GateDeps.editWordFloor?` (default 1200) — runEdit/runFinalEdit prompts now
