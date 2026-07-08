@@ -28,6 +28,7 @@ import {
   runFactCheckAudit,
   runTitle,
   runSeo,
+  corroborationBlockers,
   type GateDeps,
 } from "./gates";
 
@@ -458,6 +459,95 @@ async function main(): Promise<void> {
   ok(
     `brand-lift no-op: "${BRAND_LITERAL}" absent from all gate prompts`,
     allPrompts.every((p) => !p.includes(BRAND_LITERAL)),
+  );
+
+  // ── Part D1 (2026-07): corroborationBlockers — deterministic two-source
+  // corroboration for lede/headline figures. RECORD-ONLY primitive: pure
+  // (article, rawCorpus) → string[], no LLM, no ctx, no throw. The zerog
+  // adapter pushes the strings onto its publish-blockers list (the A4 seam).
+  const srcBlock = (n: number, url: string, body: string): string =>
+    `### Source ${n} [tier 2]: Title ${n}\nURL: ${url}\n\n${body}`;
+
+  // Lede scope = H1 + first 3 paragraphs. "3" (sub-10) and "2026" (year) are
+  // candidate-regex matches that must be SKIPPED; the body's later figure is
+  // out of scope entirely.
+  const d1Article = [
+    "# Space hiring hits 42,000 open roles on a $500M bet",
+    "The sector added 42,000 roles this year, backed by a $500M raise and 3 new factories.",
+    "Growth has held since 2026 across the industry.",
+    "A third paragraph of context.",
+    "## Later section",
+    "Down here 99,999 appears once but body figures are out of D1 scope.",
+  ].join("\n\n");
+
+  const twoDomains = [
+    // comma-less "42000" in source 2 proves comma-normalized matching;
+    // "www." on source 1 proves hostname stripping.
+    srcBlock(
+      1,
+      "https://www.techcrunch.com/a",
+      "TechCrunch reports 42,000 roles and the $500M raise.",
+    ),
+    srcBlock(
+      2,
+      "https://spacenews.com/b",
+      "SpaceNews counts 42000 roles; the $500M round closed.",
+    ),
+  ].join("\n\n");
+  ok(
+    "corroboration: two distinct domains → no blockers (year + sub-10 skipped)",
+    corroborationBlockers(d1Article, twoDomains).length === 0,
+  );
+
+  const oneDomain = [
+    srcBlock(
+      1,
+      "https://www.techcrunch.com/a",
+      "TechCrunch reports 42,000 roles and the $500M raise.",
+    ),
+    srcBlock(2, "https://spacenews.com/b", "SpaceNews covers the $500M round only."),
+  ].join("\n\n");
+  const oneBlockers = corroborationBlockers(d1Article, oneDomain);
+  ok(
+    "corroboration: single-domain figure → exact blocker string (www-stripped)",
+    oneBlockers.length === 1 &&
+      oneBlockers[0] === 'single-source-figure: "42,000" seen only via techcrunch.com',
+    JSON.stringify(oneBlockers),
+  );
+
+  // FIRST-PARTY BOARD DATA is authoritative on its own (the same exception the
+  // fact-guard's table-cell rule makes) — a board-only figure needs no second
+  // web domain. The block rides at the corpus TAIL, after the last `### Source`
+  // (the real groundTruth shape) — and must not credit a web source's domain.
+  const boardCorpus =
+    [
+      srcBlock(1, "https://spacenews.com/b", "SpaceNews covers the $500M round."),
+      srcBlock(2, "https://techcrunch.com/a", "TechCrunch also has the $500M raise."),
+    ].join("\n\n") +
+    "\n\n## FIRST-PARTY BOARD DATA (the brand's own job board — verified)\n\nAcme: 42,000 open roles";
+  ok(
+    "corroboration: FIRST-PARTY BOARD DATA containment corroborates by itself",
+    corroborationBlockers(d1Article, boardCorpus).length === 0,
+    JSON.stringify(corroborationBlockers(d1Article, boardCorpus)),
+  );
+
+  ok(
+    "corroboration: bare years and sub-10 figures never flag (even uncorroborated)",
+    corroborationBlockers(
+      "# The 2026 outlook\n\nBy 2027, 3 firms and 9 labs remain.\n\nMore.\n\nEven more.",
+      "",
+    ).length === 0,
+  );
+
+  const mBlockers = corroborationBlockers(
+    "# A $5M seed\n\nThe $5M seed closed quietly.\n\nMore.\n\nEven more.",
+    srcBlock(1, "https://a.com/x", "the $5M seed"),
+  );
+  ok(
+    'corroboration: "$5M" is 5e6 (suffix multiplier), not sub-10 — single-sourced → flags',
+    mBlockers.length === 1 &&
+      mBlockers[0] === 'single-source-figure: "$5M" seen only via a.com',
+    JSON.stringify(mBlockers),
   );
 }
 
