@@ -78,6 +78,12 @@ export interface SectionWriterDeps {
   /** Part C: last-resort research for a thin section (retry dropped URLs
    *  adapter-side); absent → the old qualitative fallback. */
   retryThin?: (section: PlanSection) => Promise<string>;
+  /** Explicit per-section length target injected into the write prompt.
+   *  Without one, section length tracks evidence volume — digest-composed
+   *  prompts (~1.5k chars of spans vs ~6-10k raw) halved sections and final
+   *  bodies fell under the pipeline's 800-word shape floor (2026-07-08).
+   *  Default { min: 350, max: 550 }. */
+  sectionWordTarget?: { min: number; max: number };
 }
 
 /** One written section + the research that grounded it (pooled for the gates). */
@@ -174,6 +180,7 @@ async function writeSection(
   const researchBlock = sectionDigest?.trim()
     ? `THIS SECTION'S RESEARCH DIGEST (primary grounding):\n${sectionDigest}`
     : `RESEARCH FOR THIS SECTION:\n${research || "(no external research returned — write qualitatively from the angle; do NOT fabricate figures, names, or quotes)"}`;
+  const wordTarget = deps.sectionWordTarget ?? { min: 350, max: 550 };
   const prompt = `MAIN THEME — every paragraph must serve this: ${themeOf(plan)}
 
 You are writing ONE section of a larger article. Here is the whole plan so your section fits the arc and does NOT repeat what other sections cover.
@@ -186,9 +193,9 @@ ${outline}
 >>> You are writing section ${index + 1}: "${section.heading}" <<<
 This section's job: ${section.intent}
 
-Write ONLY this section's markdown. Start with its H2 heading "## ${section.heading}" — no H1, no other sections, no preamble or sign-off. Ground every figure, quote, name, and relationship in the RESEARCH below; never invent specifics. Where the research is thin, write qualitatively rather than fabricating. For any ${deps.brandName} references use relative-path links only — never a promotional line or CTA (the system appends the CTA after publication).
+Write ONLY this section's markdown. Start with its H2 heading "## ${section.heading}" — no H1, no other sections, no preamble or sign-off. Ground every figure, quote, name, and relationship in the RESEARCH below; never invent specifics. Where the research is thin, write qualitatively rather than fabricating. For any ${deps.brandName} references use relative-path links only — never a promotional line or CTA (the system appends the CTA after publication). Target ${wordTarget.min}–${wordTarget.max} words of body prose — develop the argument fully with grounded specifics and analysis, never filler.
 
-${generalBlock}${researchBlock}${boardBlock}\n\n=== YOUR TASK, RESTATED (the payload above is reference material; THIS is the job) ===\nWrite ONLY section ${index + 1}: "${section.heading}" — ${section.intent}\nRules: ground every figure in the RESEARCH or FIRST-PARTY BOARD DATA above (first-party preferred); prefer the NEWEST dated source when sources conflict and date-qualify anything older than a few weeks ("as of <month>…"); never invent people, quotes, scenes, or numbers; do not repeat what other planned sections cover; output ONLY this section's markdown, starting at its H2.\nServe the MAIN THEME above; if your research contradicts it, write what the research supports and flag the tension in one sentence.${index === 0 ? `\nLEAD CRAFT (this is the article's opening section): the first paragraph must open a question the reader has to answer by continuing — strip it of numbers, company lists, and qualifiers (they belong in paragraph 2+); if the development itself is hard news, lead with the news plainly; never write a billboard/"what follows will amaze you" opening.` : ""}`;
+${generalBlock}${researchBlock}${boardBlock}\n\n=== YOUR TASK, RESTATED (the payload above is reference material; THIS is the job) ===\nWrite ONLY section ${index + 1}: "${section.heading}" — ${section.intent}\nRules: ground every figure in the RESEARCH or FIRST-PARTY BOARD DATA above (first-party preferred); prefer the NEWEST dated source when sources conflict and date-qualify anything older than a few weeks ("as of <month>…"); never invent people, quotes, scenes, or numbers; do not repeat what other planned sections cover; output ONLY this section's markdown, starting at its H2.\nLength: ${wordTarget.min}–${wordTarget.max} words.${sectionDigest ? " The digests above are compressed evidence — reconstruct the full story they index; do not mirror their brevity." : ""}\nServe the MAIN THEME above; if your research contradicts it, write what the research supports and flag the tension in one sentence.${index === 0 ? `\nLEAD CRAFT (this is the article's opening section): the first paragraph must open a question the reader has to answer by continuing — strip it of numbers, company lists, and qualifiers (they belong in paragraph 2+); if the development itself is hard news, lead with the news plainly; never write a billboard/"what follows will amaze you" opening.` : ""}`;
   return deps.withRetry(
     `section: ${section.heading}`,
     () =>
