@@ -32,6 +32,7 @@
  * `runBlogAuto` → `main` → here.
  */
 import { discoverStory, planForTopic } from "./discovery";
+import { buildDigest } from "./digest";
 import { type Plan } from "./planning";
 import { type GeneratedPost, type RunInput } from "./ports";
 
@@ -58,17 +59,54 @@ export async function runPipeline(input: RunInput): Promise<GeneratedPost> {
   }
   const { discoveryDeps, generate, slugify, finalizePost } = internals;
 
+  // Part C: capture the pooled discovery corpus for the GENERAL research
+  // digest — only when the host turned digests on by supplying `digestSection`.
+  // The discovery deps are wrapped (spread copy — no mutation, no cross-run
+  // chain growth) with a capturing `onCorpus` that chains any host-registered
+  // observer. Without `digestSection` the deps pass through untouched and the
+  // whole run is byte-identical to the pre-digest engine.
+  let discoveryCorpus = "";
+  const discoDeps =
+    discoveryDeps.digestSection !== undefined
+      ? {
+          ...discoveryDeps,
+          onCorpus: (pool: string): void => {
+            discoveryCorpus = pool;
+            discoveryDeps.onCorpus?.(pool);
+          },
+        }
+      : discoveryDeps;
+
   // Phase 1 — discover + plan. A fixed topic plans THAT story (seeded, no
   // anti-repetition); otherwise discover a fresh, uncovered one from the signal.
   // `discoveryDeps.gatherSignal` IS `input.source.gatherSignal()` (the adapter
   // binds the Source into the deps bundle), so the Source owns the data and the
   // engine owns the discovery logic — exactly the port contract.
   const plan: Plan = input.topic
-    ? await planForTopic(input.topic, discoveryDeps)
-    : await discoverStory(discoveryDeps);
+    ? await planForTopic(input.topic, discoDeps)
+    : await discoverStory(discoDeps);
 
   // Stable, title-derived publish slug (must match across create→polish runs).
   const slug = slugify(plan.title);
+
+  // Part C: the GENERAL research digest — ONE extractive six-box digest of the
+  // whole discovery corpus, built AFTER planning and BEFORE the section writes,
+  // threaded into every section prompt as background context via
+  // `SectionWriterDeps.generalDigest`. Set on the SHARED deps bundle (the
+  // adapter binds this same object into `PipelineDeps.blogDeps` — see
+  // `EngineInternals.discoveryDeps`), the same in-place threading the theme
+  // uses for gateDeps. Always reassigned when digests are on — undefined when
+  // nothing was captured (e.g. the --topic path, which skips `discoverStory`)
+  // — so a prior run's digest can never leak through a reused bundle.
+  if (discoveryDeps.digestSection !== undefined) {
+    discoveryDeps.generalDigest = discoveryCorpus.trim()
+      ? await buildDigest(discoveryCorpus, "general", {
+          llm: discoveryDeps.llm,
+          model: discoveryDeps.model,
+          withRetry: discoveryDeps.withRetry,
+        })
+      : undefined;
+  }
 
   // Phase 2 — the section-research → gate-chain orchestration → article
   // (`generate` is the adapter-bound `runGeneration(plan, pipelineDeps)`).

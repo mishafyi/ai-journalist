@@ -270,6 +270,82 @@ async function run(): Promise<void> {
     ok("dryRun still returns the post", post.title === "A Stable Test Story");
   }
 
+  // 5. Part C: the GENERAL research digest. With `digestSection` on the deps
+  //    bundle, the entry captures the pooled discovery corpus (discoverStory's
+  //    onCorpus seam — chaining any host observer), builds ONE digest
+  //    (buildDigest → llm.complete) AFTER planning and BEFORE generate, and
+  //    sets it on the SHARED bundle's `generalDigest` (how the pipeline's
+  //    write closure reads it — EngineInternals.discoveryDeps IS the adapter's
+  //    blogDeps).
+  {
+    const trace = newTrace();
+    const input = makeInput(trace, {});
+    const deps = input.internals!.discoveryDeps;
+    const digestPrompts: string[] = [];
+    const baseLlm = deps.llm;
+    deps.llm = {
+      // Discovery's two passes are structured; any complete() here is the digest.
+      complete: async (args) => {
+        digestPrompts.push(args.prompt);
+        return "## SCOPE\n- digest bullet";
+      },
+      completeStructured: baseLlm.completeStructured,
+    };
+    let hostObserved = "";
+    deps.onCorpus = (pool) => {
+      hostObserved = pool;
+    };
+    deps.digestSection = async (raw) => raw;
+    let generalAtGenerate: string | undefined;
+    const baseGenerate = input.internals!.generate;
+    input.internals!.generate = async (p: Plan) => {
+      generalAtGenerate = deps.generalDigest;
+      return baseGenerate(p);
+    };
+    await runPipeline(input);
+    ok(
+      "digest wiring: host onCorpus still fires (chained), with the pool",
+      hostObserved.includes('### Search: "query one"') &&
+        hostObserved.includes("- a snippet"),
+      hostObserved.slice(0, 80),
+    );
+    ok(
+      "digest wiring: ONE general digest built from the captured corpus",
+      digestPrompts.length === 1 &&
+        digestPrompts[0].includes('### Search: "query one"') &&
+        digestPrompts[0].includes('("general")'),
+      `calls=${digestPrompts.length}`,
+    );
+    ok(
+      "digest wiring: generalDigest set on the shared bundle BEFORE generate",
+      generalAtGenerate === "## SCOPE\n- digest bullet",
+      String(generalAtGenerate),
+    );
+  }
+
+  // 6. Part C counter-case: NO digestSection → the entry neither captures nor
+  //    digests — zero free-text LLM calls, generalDigest never touched.
+  {
+    const trace = newTrace();
+    const input = makeInput(trace, {});
+    const deps = input.internals!.discoveryDeps;
+    let completeCalls = 0;
+    const baseLlm = deps.llm;
+    deps.llm = {
+      complete: async (args) => {
+        completeCalls += 1;
+        return baseLlm.complete(args);
+      },
+      completeStructured: baseLlm.completeStructured,
+    };
+    await runPipeline(input);
+    ok(
+      "no digestSection → no digest call, generalDigest untouched",
+      completeCalls === 0 && !("generalDigest" in deps),
+      `calls=${completeCalls} hasField=${"generalDigest" in deps}`,
+    );
+  }
+
   // The PipelineBoardCompany import is the contract anchor the entry preserves
   // (the adapter resolves the board generic before crossing the port boundary).
   const _board: PipelineBoardCompany | null = null;

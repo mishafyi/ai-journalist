@@ -309,7 +309,11 @@ import type { AssemblyDeps } from "./assembly";
 
 export interface EngineInternals {
   /** The discovery + section-writer + assembly deps (the adapter's `blogDeps`)
-   *  — what the engine's Phase-1 discovery drives. */
+   *  — what the engine's Phase-1 discovery drives. This must be the SAME
+   *  object the adapter binds into `PipelineDeps.blogDeps`: the entry threads
+   *  per-run values across the phase boundary through it — with `digestSection`
+   *  supplied, `generalDigest` (the discovery-corpus digest) is set here after
+   *  planning so the pipeline's section writes read it. */
   discoveryDeps: DiscoveryDeps & SectionWriterDeps & AssemblyDeps;
   /** Phase 2: the section-research → gate-chain orchestration, pre-bound to the
    *  adapter's full `PipelineDeps` (the proprietary DATA gathers + link tail +
