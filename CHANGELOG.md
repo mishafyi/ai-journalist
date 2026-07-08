@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-07-07
+
+### Added
+
+- **Main theme statement lifecycle (Part B).** `Plan` gains optional
+  `themeStatement` (1-2 action sentences of what the story SAYS), produced by
+  the plan prompts; `themeOf(plan)` is the single accessor (falls back to
+  `title — angle`, so pre-0.6.1 plans/fixtures stay valid). The theme is
+  threaded as a MAIN THEME anchor into the section-writer prompt (+ a
+  serve-the-theme line in the restatement block) and, via the new optional
+  `GateDeps.theme`, into the managing-editor (with an early-nut rule) ,
+  fact-guard, and headline prompts. Prompt/schema additions only — no
+  breaking API changes.
+
 ## [0.6.0] - 2026-07-07
 
 ### Changed
