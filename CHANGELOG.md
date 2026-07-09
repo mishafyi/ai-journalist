@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.8.2
+
+- Discovery query-gen prompt: operator guidance inverted — plain natural-language
+  queries, at most ONE quoted phrase, no site:/intitle:/negations. The old
+  "use operators where they sharpen" line produced operator-stuffed queries that
+  zero out on DDG-class search backends (measured: whole discovery rounds
+  returned no signal), while plain queries hit.
+
 ## 0.8.1
 
 - `GateDeps.auditInputChars?` (default 120000) — runFactCheckAudit's ground-truth
