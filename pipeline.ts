@@ -1343,7 +1343,16 @@ export async function runGeneration<TBoard extends PipelineBoardCompany>(
   // withRetry's input hook; here we just flag that it ran. Best-effort — a
   // failure must never block or fail the run.
   try {
-    await runFactCheckAudit(linkGate.content, groundTruth, gateDeps);
+    // First-party-first for the AUDIT: its input is sliced (auditInputChars),
+    // and the pool's natural order (research → datagod → board) parks the
+    // highest-authority material at the cut-off end. Reorder so board truth +
+    // gov data are ALWAYS inside the audit window; fact-guard keeps the
+    // unsliced pool, where order is irrelevant.
+    await runFactCheckAudit(
+      linkGate.content,
+      `${boardTruth}${datagodBlock}${research}`,
+      gateDeps,
+    );
     ctx.telemetry.article = {
       ...(ctx.telemetry.article ?? {}),
       factCheckAudited: true,

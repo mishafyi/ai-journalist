@@ -86,6 +86,13 @@ export interface GateDeps {
   /** How many article chars runSeo feeds the metadata prompt (adapter binds
    *  BLOG_SEO_INPUT_CHARS). Absent → 24000. runSeo-only. */
   seoInputChars?: number;
+  /** How much of the pooled ground truth runFactCheckAudit sees (default
+   *  120000 chars). Set from the host's model context reality: the 2026-07-09
+   *  containment audit found a 490K corpus sliced to 120K — with first-party
+   *  material at the END of the pool, well-grounded claims rated NOT FOUND and
+   *  inflated audit-forced DRAFTs. Pair with first-party-first ordering at the
+   *  call site. */
+  auditInputChars?: number;
   /** Headline-corpus exemplars for a category (the adapter folds corpusDomain +
    *  sampleExemplars over its HEADLINES module data). runTitle-only. */
   gatherExemplars: (category: string, count: number) => string[];
@@ -252,7 +259,7 @@ export async function runFactCheckAudit(
 Output ONLY a markdown table: | Claim | Rating | Evidence / derivation / note |. One row per checked claim; lead with the load-bearing numbers. Be concise. This is an informational audit for a human reviewer — do NOT rewrite or comment on the article.
 
 RESEARCH:
-${groundTruth.slice(0, 120000)}
+${groundTruth.slice(0, deps.auditInputChars ?? 120000)}
 
 ARTICLE:
 ${article}\n\n=== YOUR TASK, RESTATED ===\nRate every claim as instructed above. Then add one final line starting "MISSING: " naming the single most important thing a beat reporter would add to this story that the research could support (or "MISSING: nothing material").`;

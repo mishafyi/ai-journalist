@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.8.1
+
+- `GateDeps.auditInputChars?` (default 120000) — runFactCheckAudit's ground-truth
+  slice is now host-configurable. A 2026-07-09 containment audit of a live run
+  found a 490K-char corpus sliced to 120K (~24%), with the corpus assembled
+  research-first — so first-party data and late-section material sat exactly in
+  the cut-off region, rating well-grounded claims NOT FOUND and inflating
+  audit-forced DRAFTs.
+- The audit call now receives the pool FIRST-PARTY-FIRST (board truth + gov data
+  ahead of web research) so the highest-authority ground truth is always inside
+  the audit window. Fact-guard keeps the unsliced pool (order irrelevant there).
+
 ## 0.8.0
 
 - **Universality: publication identity fully externalized.** The last
