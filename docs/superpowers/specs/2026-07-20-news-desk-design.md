@@ -31,7 +31,12 @@ until it bumps the npm dependency).
   `out/runs/<runId>/` — every search, scrape, match, and gate verdict lands
   on disk, so "what was this article based on" is always answerable.
 - **Cadence:** manual runs v1; a launchd cron on the mini once quality
-  settles (the whole stack already lives there).
+  settles (the whole stack already lives there). When cron lands, "exit
+  non-zero, loudly" stops being enough (invisible under launchd — the
+  production lesson: a dead run silently stops publishing for days). Cheap
+  analogs of zerogtalent's alerting: flush run artifacts + the error to
+  `out/runs/<runId>/` on failure, one `osascript` notification per failed
+  run, and a small "list runs with gate blockers" summarizer over `out/runs/`.
 - **Google search egress (hard rule):** if the SearXNG `google` engine is
   enabled for supplementary research, it MUST route through the Mac mini
   residential bridge via a per-engine proxy in `settings.yml` — the exact
@@ -128,8 +133,8 @@ experimentation-by-config: same story, different persona file, rerun.
 
 | File | Role |
 | --- | --- |
-| `sources/google-news.ts` | GN RSS → ranked `TrendingStory[]` (parse title/description/coverage list) |
-| `sources/newswire.ts` | multi-feed outlet RSS with `{url, outlet, region}` config; headline→URL index |
+| `sources/google-news.ts` | GN RSS → ranked `TrendingStory[]` — EXTENDS engine `news.ts` (it already owns the GN URL shape, the `<source>`→`sourceName` rss-parser customField, and title parsing); this module adds edition/topic feeds + the `<description>` `<ol>` coverage parsing only |
+| `sources/newswire.ts` | multi-feed outlet RSS with `{url, outlet, region}` config; headline→URL index. **Must NOT inherit `sources/rss.ts`'s fetch pattern** (serial loop, rss-parser's 60s default timeout, one dead feed throws the whole signal — with 10–15 feeds that's the slowest, most fragile step): parallel via p-limit, per-feed best-effort with loud logging, explicit 15s timeout (the pattern `news.ts` already uses) |
 | `matching.ts` | headline similarity (embedder w/ trigram fallback); pure |
 | `research.ts` | upstreamed zerogtalent stack: sanitizeQuery/relaxQuery, throttled search + breaker, source tiering, primary chase, antibot skip-list; + the generalized chunked page-extractor |
 | `parallels.ts` | propose → verify (official Wikipedia REST API) → select |

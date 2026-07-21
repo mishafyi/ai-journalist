@@ -178,15 +178,15 @@ git commit -m "feat(research): query hygiene — sanitizeQuery/relaxQuery (upstr
 
 ---
 
-### Task 2: Source tiering — `hostOf` / `sourceTier` / `isSkipHost`
+### Task 2: Source tiering — `hostOf` / `sourceTier` (+ REUSE `news.ts` skip-hosts)
 
 **Files:**
 - Modify: `research.ts` (append)
 - Modify: `research.checks.ts` (append)
 
 **Interfaces:**
-- Consumes: nothing (pure).
-- Produces: `hostOf(url: string): string`; `sourceTier(url: string, res?: TierRes): 1 | 2 | 3`; `isSkipHost(host: string, skipHosts: string[]): boolean`; `DEFAULT_TIER1_RE: RegExp`; `DEFAULT_LOWTIER_RE: RegExp`; `DEFAULT_CHASE_SKIP_HOSTS: string[]`; `interface TierRes { tier1?: RegExp; low?: RegExp }`. Task 4 ranks and filters with these.
+- Consumes: **`isBlockedHost` and `DEFAULT_BLOCKED_HOSTS` from `./news`** — the engine ALREADY exports the identical six-host list (wsj/bloomberg/nytimes/reuters/ft/mckinsey) with the same `.mil` + subdomain-suffix matching (news.ts:23–47). Do NOT re-implement; a second copy under new names would drift. `research.ts` re-exports them so stack consumers have one import.
+- Produces: `hostOf(url: string): string`; `sourceTier(url: string, res?: TierRes): 1 | 2 | 3`; `DEFAULT_TIER1_RE: RegExp`; `DEFAULT_LOWTIER_RE: RegExp`; `interface TierRes { tier1?: RegExp; low?: RegExp }`; re-exports `isBlockedHost`, `DEFAULT_BLOCKED_HOSTS`. Task 4 ranks and filters with these (skip-host knob defaults to `DEFAULT_BLOCKED_HOSTS`).
 
 - [ ] **Step 1: Append failing checks to `research.checks.ts`** (before the exit block)
 
@@ -194,8 +194,8 @@ git commit -m "feat(research): query hygiene — sanitizeQuery/relaxQuery (upstr
 import {
   hostOf,
   sourceTier,
-  isSkipHost,
-  DEFAULT_CHASE_SKIP_HOSTS,
+  isBlockedHost,
+  DEFAULT_BLOCKED_HOSTS,
 } from "./research";
 
 ok("hostOf strips www and survives junk", hostOf("https://www.reuters.com/x") === "reuters.com" && hostOf("not a url") === "",
@@ -209,10 +209,10 @@ ok("content-farm class pattern is tier 3",
   String(sourceTier("https://bestof-insightshub.net/top10")));
 ok("unknown host is tier 2", sourceTier("https://example-blog.io/post") === 2,
   String(sourceTier("https://example-blog.io/post")));
-ok("skip-host matches subdomains and .mil",
-  isSkipHost("cn.wsj.com", DEFAULT_CHASE_SKIP_HOSTS) &&
-    isSkipHost("af.mil", DEFAULT_CHASE_SKIP_HOSTS) &&
-    !isSkipHost("theguardian.com", DEFAULT_CHASE_SKIP_HOSTS),
+ok("skip-host reuse: news.ts matcher covers subdomains and .mil",
+  isBlockedHost("cn.wsj.com", DEFAULT_BLOCKED_HOSTS) &&
+    isBlockedHost("af.mil", DEFAULT_BLOCKED_HOSTS) &&
+    !isBlockedHost("theguardian.com", DEFAULT_BLOCKED_HOSTS),
   "wsj-subdomain/.mil/guardian triple");
 ```
 
@@ -221,16 +221,16 @@ ok("skip-host matches subdomains and .mil",
 - [ ] **Step 3: Append implementation to `research.ts`**
 
 ```ts
+/** Skip-host classification is REUSED from ./news (identical list + matcher
+ *  already shipped there) and re-exported for one-import consumption. */
+export { isBlockedHost, DEFAULT_BLOCKED_HOSTS } from "./news";
+
 /** Class patterns, not an offender blocklist — ported with provenance from
  *  the production adapter (they classified where a name-list classified 0/20). */
 export const DEFAULT_TIER1_RE =
   /(\.gov|\.edu|\.mil)$|(^|\.)(reuters|apnews|bloomberg|wsj|nytimes|washingtonpost|ft|theinformation|axios|cnbc|techcrunch|arstechnica|theverge|wired|ieee|nature|sciencemag|spacenews|aviationweek|defensenews|breakingdefense|globenewswire|businesswire|prnewswire|sec|mckinsey|deloitte|gartner|isg-one|burtchworks)\.(com|org|net)$/i;
 export const DEFAULT_LOWTIER_RE =
   /course|staffing|recruit|career|jobdescription|jobright|salesfolk|interviewquery|unteachable|usbusinessnews|automateamerica|bestof|top10|insights?hub|guestpost/i;
-/** Antibot/paywalled hosts a scrape can never land — skip before burning attempts. */
-export const DEFAULT_CHASE_SKIP_HOSTS: string[] = [
-  "wsj.com", "bloomberg.com", "nytimes.com", "reuters.com", "mckinsey.com", "ft.com",
-];
 
 export function hostOf(url: string): string {
   try {
@@ -251,13 +251,6 @@ export function sourceTier(url: string, res?: TierRes): 1 | 2 | 3 {
   if ((res?.low ?? DEFAULT_LOWTIER_RE).test(host)) return 3;
   return 2;
 }
-
-export function isSkipHost(host: string, skipHosts: string[]): boolean {
-  return (
-    host.endsWith(".mil") ||
-    skipHosts.some((h) => host === h || host.endsWith(`.${h}`))
-  );
-}
 ```
 
 - [ ] **Step 4: Run to verify pass** — `npx tsx research.checks.ts` → all PASS.
@@ -265,7 +258,7 @@ export function isSkipHost(host: string, skipHosts: string[]): boolean {
 
 ```bash
 git add research.ts research.checks.ts
-git commit -m "feat(research): source tiering + skip-host classifier (upstreamed)"
+git commit -m "feat(research): source tiering; skip-hosts reused from news.ts (upstreamed)"
 ```
 
 ---
@@ -286,11 +279,12 @@ interface ResearchKnobs {
   primaryChaseMax: number;      // 2
   primaryChaseMaxChars: number; // 60000
   chasedMinChars: number;       // 500
-  chaseSkipHosts: string[];     // DEFAULT_CHASE_SKIP_HOSTS
+  chaseSkipHosts: string[];     // DEFAULT_BLOCKED_HOSTS (reused from ./news)
   searchMinGapMs: number;       // 3000
   searchEmptyRetries: number;   // 2
   searchEmptyRetryBaseMs: number; // 10000
   searchBreakerAfter: number;   // 8
+  thinRetryUrls: number;        // 3 — retryThin scrape budget per call
 }
 interface ResearchStackOpts {
   search: SearchClient;
@@ -308,8 +302,24 @@ interface ResearchStackOpts {
 interface ResearchStack {
   throttledSearch(query: string, label: string): Promise<SearchResult[]>;
   gatherResearch(topic: string): Promise<{ block: string; sources: { title: string; url: string }[] }>; // Task 4
+  /** Last-resort thin-section backfill: drain up to knobs.thinRetryUrls
+   *  pooled URLs, scrape (memoized, gated), 500-char floor, 60K cap,
+   *  "### Source" blocks — "" when the pool is dry. Task 4. Preset adapts it
+   *  to the engine seam: retryThin: (s) => stack.retryThin(s.heading). */
+  retryThin(label: string): Promise<string>;
+  /** Hardened SearchClient facade: search = sanitize+throttle+breaker,
+   *  scrape = memoized passthrough. Pass THIS as the preset's `search` port
+   *  so discovery/snippet paths — where the junk queries actually happened —
+   *  inherit the hardening and share the process-wide gap gate. Task 4. */
+  asSearchClient(): SearchClient;
+  /** Late-bind hooks the preset can only supply AFTER its factory ran
+   *  (withRetry / recordArtifact chicken-and-egg — see Task 6.5). */
+  bind(hooks: {
+    withRetry?: ResearchStackOpts["withRetry"];
+    recordArtifact?: ResearchStackOpts["recordArtifact"];
+  }): void;
   drainDroppedUrls(count: number): string[];  // Task 4
-  resetRunState(): void;
+  resetRunState(): void; // clears gate/breaker/pool/chase-dedupe AND the scrape memo
 }
 export function createResearchStack(opts: ResearchStackOpts): ResearchStack
 ```
@@ -390,15 +400,15 @@ git commit -m "feat(research): throttled search — gap gate, relaxed empty-retr
 
 ---
 
-### Task 4: `gatherResearch` — tier-ranked block, primary chase, dropped-URL pool
+### Task 4: `gatherResearch` — tier-ranked block, primary chase, pool + `retryThin` + facade
 
 **Files:**
 - Modify: `research.ts` (append into the factory)
 - Modify: `research.checks.ts` (append)
 
 **Interfaces:**
-- Consumes: Task 3's factory internals; `SearchClient.scrape?`.
-- Produces: `stack.gatherResearch(topic)` → `{ block, sources }` (satisfies the preset seam `(topic: string) => Promise<{ block: string }>` structurally); `stack.drainDroppedUrls(count)`.
+- Consumes: Task 3's factory internals; `SearchClient.scrape?`; `isBlockedHost`/`DEFAULT_BLOCKED_HOSTS` (Task 2).
+- Produces: `stack.gatherResearch(topic)` → `{ block, sources }` (satisfies the preset seam `(topic: string) => Promise<{ block: string }>` structurally); `stack.retryThin(label)` (drains the pool the chase/overflow feeds — WITHOUT this the pool is dead weight; source: generate.ts:3257–3298); `stack.asSearchClient()` (hardened facade — extends sanitize/throttle/breaker to the discovery/snippet paths where the dictionary-junk incident actually happened, and restores process-wide search spacing); `stack.drainDroppedUrls(count)`. All scrapes (chase, retryThin, facade) go through ONE per-instance memo `Map<url, string>` — sections researching in parallel share top hits, and on a memory-bound Firecrawl VPS every avoided re-scrape is real latency back; cleared by `resetRunState()`.
 
 - [ ] **Step 1: Append failing checks.** Fake search returns 3 hits: one tier-1 (apnews, content present), one tier-2 whose content hyperlinks `https://apnews.com/orig/story` (chase candidate), one tier-3 content-farm. Fake `scrape` returns a 600-char body for the chased URL. Assert:
 
@@ -445,6 +455,11 @@ git commit -m "feat(research): throttled search — gap gate, relaxed empty-retr
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement.** Adapt `generate.ts:1313–1524`. **Port-field mapping — two distinct sites (do not blanket-replace):** chase-link extraction reads `content ?? ""` (matches source line 1373); the RANKED BODY read is `content ?? snippet` (source: `r.markdown ?? r.description ?? ""` — a blanket `content ?? ""` would silently kill the snippet fallback for unscraped hits, and no fixture would catch it). Flow: search via `throttledSearch` → filter `isSkipHost` hits into the pool → tier-rank (`sort by tier asc`) → chase loop (regex URLs out of each non-tier-1 content, tier-1 only, per-instance `chasedUrls` dedupe, root-path guard `pathname.length <= 1`, skip-host pooling, `scrape` via port when defined through the `withRetry` hook with `maxAttempts: 2`, `chasedMinChars` floor, `primaryChaseMaxChars` cap with truncation marker) → **cap every RANKED body at `primaryChaseMaxChars` too, with the `[... truncated: document continues]` marker** (source lines 1467–1478 — "direct results were the one uncapped door into the block"; a 1.03M-char SEC filing once ballooned every downstream prompt) → assemble `### Source P{n}` chased blocks first, then ranked blocks with tier labels (tier-1 `" (tier 1 — primary/wire/major outlet)"`, tier-3 the full LOW-AUTHORITY warning string from the source, verbatim) → record ONE composition artifact per topic via `recordArtifact` (tier counts, chased URLs, block char size — source lines 1502–1524) → return `{ block, sources }`. `search.scrape === undefined` → skip chase entirely, `log` once. Zero results after retries → throw `Error("No search results for \"<topic>\" after N spaced attempts — cannot ground the article")`.
 
+Also implement in this task (same factory, shared internals):
+- **`retryThin(label)`** — port generate.ts:3257–3298: splice up to `knobs.thinRetryUrls` from the pool, scrape each through the memoized/gated scrape path (`withRetry` maxAttempts 2), keep bodies ≥ `chasedMinChars`, cap at `primaryChaseMaxChars` with the truncation marker, return `### Source (thin-retry): <url>` blocks joined, `""` when nothing lands. Record one artifact per call (label, drained URLs, kept count).
+- **`asSearchClient()`** — ~8 lines: `{ search: (q, o) => throttledSearch-with-per-call-limit, scrape: memoized passthrough (undefined when the underlying client has none) }`. This facade is what makes the sanitizer guard the preset's BROAD snippet path too (zerog parity: its searchSnippets routes through throttledSearch, generate.ts:1533–1545 — the engine preset's does not).
+- **Scrape memo** — one `Map<string, string>` used by chase + retryThin + facade; `resetRunState()` clears it along with pool/dedupe/breaker/gate state.
+
 Additional check to append alongside Step 1's (cap + fallback + artifact):
 
 ```ts
@@ -471,6 +486,34 @@ Additional check to append alongside Step 1's (cap + fallback + artifact):
   ok("a research-composition artifact is recorded",
     artifacts.some((l) => l.toLowerCase().includes("research")), artifacts.join("|"));
 }
+{
+  // retryThin drains the pool; facade hardens + memoizes
+  let scrapes = 0;
+  const sc4 = {
+    async search(): Promise<SearchResult[]> {
+      return [{ title: "B", url: "https://blog.io/p", snippet: "s",
+        content: `see https://www.reuters.com/world/deep/x ${"z".repeat(500)}` }];
+    },
+    async scrape(url: string): Promise<string> { scrapes += 1; return `BACKFILL ${"b".repeat(600)} ${url}`; },
+  } as SearchClient;
+  const stack4 = createResearchStack({ search: sc4, ...instant });
+  await stack4.gatherResearch("pool feeder topic here");
+  const thin = await stack4.retryThin("Thin Section");
+  ok("retryThin scrapes pooled URLs into ### Source blocks",
+    thin.includes("### Source") && thin.includes("reuters.com"), thin.slice(0, 120));
+  ok("retryThin is empty when the pool is dry",
+    (await stack4.retryThin("again")) === "", "second drain");
+
+  const facade = stack4.asSearchClient();
+  const facadeHits = await facade.search("reasons: psychological - ", { limit: 3 });
+  ok("facade sanitizes: scaffold query returns [] without a backend call",
+    facadeHits.length === 0, String(facadeHits.length));
+  const before = scrapes;
+  await facade.scrape?.("https://memo.example/page");
+  await facade.scrape?.("https://memo.example/page");
+  ok("facade scrape is memoized (second call = no backend hit)",
+    scrapes === before + 1, `scrapes=${scrapes - before}`);
+}
 ```
 - [ ] **Step 4: Run to verify pass.**
 - [ ] **Step 5: Full gate** — `npm run build && npm run test:checks` → green.
@@ -495,6 +538,18 @@ git commit -m "feat(research): gatherResearch — tier-ranked corpus, primary ch
 - Produces:
 
 ```ts
+/** Standalone chunk-and-extract core — EXPORTED separately because Phase 2's
+ *  news desk extracts from RESOLVED URLs (not search hits); burying this in
+ *  the search-driven closure would force a re-implementation there. */
+export function extractEvidence(args: {
+  llm: LlmClient;
+  topic: string;
+  page: { url: string; title: string; content: string };
+  chunkChars: number;       // 24000
+  maxChunksPerPage: number; // 4
+  log?: (line: string) => void;
+}): Promise<string[]> // extracted bullet blocks, [] when all chunks reply NONE
+
 export function createExtractiveResearch(opts: {
   llm: LlmClient;
   search: SearchClient;
@@ -503,7 +558,13 @@ export function createExtractiveResearch(opts: {
   maxChunksPerPage: number; // 4
   minContentChars: number;  // 400 — content-quality floor: shorter scrapes fall back to snippet
   log?: (line: string) => void;
-}): (topic: string) => Promise<{ block: string }>
+}): (topic: string) => Promise<{ block: string; sources: { title: string; url: string }[] }>
+// Returns {block, sources} like gatherResearch — the seam accepts the extra
+// field structurally, and Phase 2's retell needs per-outlet sources; widening
+// the return AFTER an npm publish would be a breaking change.
+// REUSE pre-scraped content: `hit.content ?? await scrape(hit.url)` — when the
+// client is constructed with searchDefaults {scrape:true} (Task 6), results
+// arrive pre-scraped; always re-scraping would double-hit the memory-bound VPS.
 ```
 
 - [ ] **Step 1: Append failing checks.** Fake `search` (2 hits) + fake `scrape` (one 30k-char body → expect 2 extraction calls; one throwing → expect snippet fallback) + fake `llm.complete` capturing prompts and returning `"- fact"` for part 1 and `"NONE"` for part 2. Assert: chunk math (`PAGE … (part 1/2)` and `part 2/2` prompts seen), `NONE` parts filtered, failed scrape degrades to `- <title>: <snippet>` line, sub-`minContentChars` scrape also degrades, block concatenates `SOURCE <title> (<url>):` sections.
@@ -525,11 +586,14 @@ git commit -m "feat(research): chunked extractive research factory; politics exa
 
 ---
 
-### Task 6: Firecrawl client — construction-time search defaults
+### Task 6: Client construction defaults — Firecrawl search + Ollama context
 
 **Files:**
 - Modify: `clients/firecrawl-search.ts`
 - Modify: `clients/firecrawl-search.checks.ts` (create if absent — live-skip style like `clients/searxng-search.checks.ts`)
+- Modify: `clients/ollama-llm.ts` + `clients/ollama-llm.checks.ts`
+
+**Ollama context defaults (same "construction defaults" shape, second file):** `createOllamaLlm` gains `options?: { numCtx?: number; keepAlive?: string }`, forwarded into BOTH call sites' request `options` (`num_ctx`) / top-level `keep_alive`. Rationale: the client today sends only `temperature`; Ollama silently truncates over-long prompts server-side (a server log line, no client error), and this plan institutionalizes 24K-char extraction chunks and research-block section prompts — on the target mini, truncation means extraction/audit silently run on partial evidence. Recommended wiring in docs: `options: { numCtx: 32768, keepAlive: "30m" }`. Extend the existing mocked-fetch checks: construct with both options, assert the captured request body carries `options.num_ctx === 32768` and `keep_alive === "30m"`, and that omitting them sends neither key (server env stays authoritative when unset).
 
 **Interfaces:**
 - Consumes: `firecrawl` SDK (already a dep).
@@ -551,8 +615,31 @@ Expected: PASS lines (content present on scraped results).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add clients/firecrawl-search.ts clients/firecrawl-search.checks.ts
-git commit -m "feat(clients): firecrawl searchDefaults (sources/tbs/scrape) — excludeDomains stays banned"
+git add clients/firecrawl-search.ts clients/firecrawl-search.checks.ts clients/ollama-llm.ts clients/ollama-llm.checks.ts
+git commit -m "feat(clients): firecrawl searchDefaults + ollama numCtx/keepAlive construction defaults"
+```
+
+---
+
+### Task 6.5: Preset integration — `research` option + gate-cap knobs
+
+**Files:**
+- Modify: `presets/default.ts`
+- Modify: `presets/default.checks.ts` (append new checks ONLY — existing locks stay byte-identical)
+
+**Interfaces:**
+- Consumes: `ResearchStack` (Tasks 3–4).
+- Produces: `DefaultInternalsOptions.research?: ResearchStack` — one option that resolves the withRetry/recordArtifact chicken-and-egg (both are built INSIDE `createDefaultInternals`, so a pre-constructed stack can't receive them; Task 7's naive wiring would silently run with no telemetry). When present the factory: (1) calls `research.bind({ withRetry, recordArtifact })` with its own internals, (2) defaults `gatherResearch` to `(t) => research.gatherResearch(t)` (an explicit `opts.gatherResearch` still wins), (3) wires `retryThin: (s) => research.retryThin(s.heading)` into the section-writer deps **on the shared deps object BEFORE the `discoveryDeps` spread-copy** (the copy trap: `discoveryDeps = {...blogDeps}` — wiring after the spread reaches only one of the two consumers). Also: `DefaultKnobs` gains `auditInputChars` (120000), `seoInputChars` (24000), `editWordFloor` (1200) passed through to `gateDeps` — the gates already accept all three (gates.ts:88–124), zerogtalent binds them from env, and a 120K-char audit prompt is unusable on the local-model target; the preset simply couldn't set them until now.
+
+- [ ] **Step 1: Failing checks** — append to `presets/default.checks.ts`: build internals with a FAKE stack (records `bind` args; `gatherResearch`/`retryThin` return sentinels) and (a) assert `bind` received a function `withRetry` and a function `recordArtifact`; (b) assert knobs `{ auditInputChars: 9000 }` reaches `gateDeps` (expose via the existing checks-file introspection pattern used for other knobs in that file — follow its local style); (c) assert explicit `opts.gatherResearch` overrides the stack's.
+- [ ] **Step 2: Run** — `npx tsx presets/default.checks.ts` → new FAILs, existing locks green.
+- [ ] **Step 3: Implement** the option + knobs as specified above.
+- [ ] **Step 4: Run** — checks green; then `npm run build && npm run test:checks && npm run test:example` (whole suite — this task touches the preset every adopter runs).
+- [ ] **Step 5: Commit**
+
+```bash
+git add presets/default.ts presets/default.checks.ts
+git commit -m "feat(preset): research-stack option (bind telemetry, retryThin) + gate input-cap knobs"
 ```
 
 ---
@@ -570,31 +657,32 @@ git commit -m "feat(clients): firecrawl searchDefaults (sources/tbs/scrape) — 
 ```ts
 import { createResearchStack, createExtractiveResearch } from "ai-journalist/research";
 
-// Tiered corpus + primary chase (production-grade grounding).
+// Production-grade grounding in three lines.
 // IMPORTANT: construct the client with searchDefaults — the port's
-// search(query, {limit}) cannot pass scrape/sources per call, so without
-// these defaults results carry no content: the chase finds no links and
-// every body silently degrades to its snippet.
-const search = createFirecrawlSearch({
+// search(query, {limit}) cannot pass scrape/sources per call; without them
+// results carry no content and every body silently degrades to its snippet.
+const raw = createFirecrawlSearch({
   searchDefaults: { scrape: true, sources: ["news"] },
 });
-const stack = createResearchStack({
-  search,
-  // Optional provenance: without this, artifacts go nowhere — the preset's
-  // internal RunContext is NOT exposed, so pass your own sink (e.g. append
-  // to out/runs/<runId>/research.log).
-  recordArtifact: (label, input, output) => myRunLog.append({ label, input, output }),
+const stack = createResearchStack({ search: raw });
+const internals = createDefaultInternals({
+  llm, brand, source,
+  search: stack.asSearchClient(), // sanitize+throttle+breaker on EVERY engine search (discovery snippets included)
+  research: stack,                // binds gatherResearch + retryThin + run-telemetry hooks in one shot
 });
-const internals = createDefaultInternals({ llm, search, brand, source,
-  gatherResearch: (t) => stack.gatherResearch(t) });
 
 // Or: full-page scrape + chunked LLM extraction (small-model friendly):
-const internals2 = createDefaultInternals({ llm, search, brand, source,
-  gatherResearch: createExtractiveResearch({ llm, search, pagesPerTopic: 3,
+const internals2 = createDefaultInternals({ llm, brand, source,
+  search: stack.asSearchClient(),
+  gatherResearch: createExtractiveResearch({ llm, search: raw, pagesPerTopic: 3,
     chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400 }) });
 ```
 
-Also add `"./research": "./research.ts"` to `package.json` `exports`.
+Add a **"Local stack (Ollama on a small box)"** paragraph right below it: set `sectionConcurrency: 1–2` and `researchConcurrency: 1–2` (the preset's 3/4 defaults were tuned for cloud APIs — one Ollama server queues parallel requests, and `OLLAMA_NUM_PARALLEL` *divides* the loaded context between slots), keep search `limit ≤ 3` against a memory-bound self-hosted Firecrawl (its own `MAX_CONCURRENCY` 2–3), and construct the LLM with `options: { numCtx: 32768, keepAlive: "30m" }` (or set `OLLAMA_CONTEXT_LENGTH` server-side) — silent server-side prompt truncation is the failure mode.
+
+Also add to `package.json` `exports`: `"./research": "./research.ts"`, and fix the two existing gaps found in review — `"./testing/replay": "./testing/replay.ts"` and `"./clients/ollama-llm": "./clients/ollama-llm.ts"` (both exist but are unimportable by npm consumers today).
+
+- [ ] **Step 1b (optional, operator-run): recorded integration fixture.** Using `testing/replay.ts` (sha256-keyed record/replay, purpose-built for these ports): record ONE live `stack.gatherResearch("<fixed topic>")` through `recordSearchClient` against the real Firecrawl (operator env), commit the fixture JSON, and add a replay-driven section to `research.checks.ts` that runs the REAL sanitize→throttle→tier→chase flow offline against real payload shapes. This catches the field-mapping class of bug (content/snippet) that hand-scripted fakes can encode wrongly and still pass.
 
 - [ ] **Step 2: CHANGELOG** — add a `## Unreleased` heading above the latest version, with FLAT bullets matching the file's existing idiom (the file uses flat bullets under version headings, no `### Added` subheads — follow it): one bullet per module (query hygiene, tiering, throttled search + breaker, gatherResearch + chase, extractive research, firecrawl searchDefaults), each "opt-in; defaults unchanged".
 - [ ] **Step 3: Full gate.**
