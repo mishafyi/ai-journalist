@@ -89,7 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New dependencies: `ollama` (official client, `clients/ollama-embedder.ts`)
   and `cheerio` (Google News RSS `<description>` parsing).
 - npm subpath exports added: `./matching`, `./parallels`,
-  `./presets/news-desk`.
+  `./presets/news-desk`, `./clients/ollama-embedder`.
 
 ## 0.8.2
 

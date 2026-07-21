@@ -658,7 +658,11 @@ export function createExtractiveResearch(opts: {
       }
       if (isTeaserContent(content, minContentChars)) {
         log?.(
-          `        deep-scrape THIN ${hit.url} (${content.length} chars < ${minContentChars}) — using snippet`,
+          `        deep-scrape THIN ${hit.url} (${
+            content.length < minContentChars
+              ? `${content.length} chars < ${minContentChars}`
+              : "teaser/paywall markers"
+          }) — using snippet`,
         );
         useSnippet();
         continue;

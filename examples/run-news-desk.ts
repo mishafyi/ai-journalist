@@ -70,7 +70,10 @@ async function main(): Promise<void> {
       } catch {
         // first run
       }
-      ledger.push({ title: post.title, slug: post.slug, date: new Date().toISOString() });
+      const gnHeadline = typeof post.telemetry?.topic === "string" ? post.telemetry.topic : post.title;
+      // Ledger keyed to the GN headline — next-run dedup probes with raw GN
+      // headlines, not the runTitle-rewritten one (final-review finding).
+      ledger.push({ title: gnHeadline, slug: post.slug, date: new Date().toISOString() });
       await writeFile("out/covered.json", JSON.stringify(ledger, null, 2));
       return { url: path, status: "DRAFT" };
     },
