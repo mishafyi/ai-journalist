@@ -12,6 +12,9 @@
  *   3. `completeStructured` sends the JSON Schema as `format` and returns the
  *      Zod-validated object.
  *   4. An empty completion throws (retryable) instead of returning "".
+ *   5. `cfg.options.numCtx`/`keepAlive` forward into BOTH call sites' request
+ *      (`options.num_ctx`, top-level `keep_alive`); omitted keys are sent
+ *      ABSENT so the server's own env config stays authoritative.
  */
 import { z } from "zod";
 import { createOllamaLlm } from "./ollama-llm";
@@ -19,6 +22,8 @@ import { createOllamaLlm } from "./ollama-llm";
 interface CapturedRequest {
   model: string;
   format?: unknown;
+  options?: { temperature?: number; num_ctx?: number };
+  keep_alive?: string;
 }
 
 async function main(): Promise<void> {
@@ -82,6 +87,39 @@ async function main(): Promise<void> {
       threw = true;
     }
     ok("empty completion throws (retryable)", threw, "resolved with blank text");
+
+    nextContent = "hello";
+    const withOptions = createOllamaLlm({
+      baseUrl: "http://mock:11434",
+      model: "default-model",
+      options: { numCtx: 32768, keepAlive: "30m" },
+    });
+    await withOptions.complete({ prompt: "p" });
+    const completeCap = captured[captured.length - 1];
+    ok(
+      "numCtx/keepAlive forward on complete()",
+      completeCap?.options?.num_ctx === 32768 && completeCap?.keep_alive === "30m",
+      `options=${JSON.stringify(completeCap?.options)} keep_alive=${JSON.stringify(completeCap?.keep_alive)}`,
+    );
+
+    nextContent = JSON.stringify({ headline: "h2" });
+    await withOptions.completeStructured({
+      messages: [{ role: "user", content: "u" }],
+      schema: z.object({ headline: z.string() }),
+      schemaName: "test",
+    });
+    const structuredCap = captured[captured.length - 1];
+    ok(
+      "numCtx/keepAlive forward on completeStructured()",
+      structuredCap?.options?.num_ctx === 32768 && structuredCap?.keep_alive === "30m",
+      `options=${JSON.stringify(structuredCap?.options)} keep_alive=${JSON.stringify(structuredCap?.keep_alive)}`,
+    );
+
+    ok(
+      "omitted numCtx/keepAlive send neither key (server env stays authoritative)",
+      !("num_ctx" in (captured[0]?.options ?? {})) && !("keep_alive" in (captured[0] ?? {})),
+      `options=${JSON.stringify(captured[0]?.options)} top-level keys=${Object.keys(captured[0] ?? {}).join(",")}`,
+    );
   } finally {
     globalThis.fetch = realFetch;
   }

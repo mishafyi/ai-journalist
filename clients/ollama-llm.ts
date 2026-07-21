@@ -16,6 +16,18 @@ export interface OllamaLlmConfig {
   baseUrl: string;
   /** Model tag every call uses unless it passes its own, e.g. "gemma4:e4b". */
   model: string;
+  /** Context-window / keep-alive overrides forwarded into every request
+   *  (`options.num_ctx`, top-level `keep_alive`). The client today sends only
+   *  `temperature`; Ollama silently truncates over-long prompts server-side
+   *  (a server log line, no client error) — this engine's 24K-char extraction
+   *  chunks and research-block section prompts mean truncation would run
+   *  extraction/audit on partial evidence. Omitted keys are sent ABSENT so
+   *  the server's own env config stays authoritative. Recommended:
+   *  `{ numCtx: 32768, keepAlive: "30m" }`. */
+  options?: {
+    numCtx?: number;
+    keepAlive?: string;
+  };
 }
 
 interface OllamaChatMessage {
@@ -33,13 +45,20 @@ async function chat(args: {
   messages: OllamaChatMessage[];
   temperature: number | undefined;
   format: Record<string, unknown> | undefined;
+  numCtx: number | undefined;
+  keepAlive: string | undefined;
 }): Promise<string> {
+  const options = {
+    ...(args.temperature === undefined ? {} : { temperature: args.temperature }),
+    ...(args.numCtx === undefined ? {} : { num_ctx: args.numCtx }),
+  };
   const body = JSON.stringify({
     model: args.model,
     messages: args.messages,
     stream: false,
     ...(args.format === undefined ? {} : { format: args.format }),
-    options: args.temperature === undefined ? {} : { temperature: args.temperature },
+    options,
+    ...(args.keepAlive === undefined ? {} : { keep_alive: args.keepAlive }),
   });
   const res = await fetch(`${args.baseUrl}/api/chat`, {
     method: "POST",
@@ -77,6 +96,8 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
         messages,
         temperature,
         format: undefined,
+        numCtx: cfg.options?.numCtx,
+        keepAlive: cfg.options?.keepAlive,
       });
     },
 
@@ -93,6 +114,8 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
         messages: args.messages,
         temperature: args.temperature,
         format: z.toJSONSchema(args.schema) as Record<string, unknown>,
+        numCtx: cfg.options?.numCtx,
+        keepAlive: cfg.options?.keepAlive,
       });
       let parsed: unknown;
       try {

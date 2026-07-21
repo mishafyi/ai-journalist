@@ -328,6 +328,23 @@ function fakeLlm(
     scrapes === 0 && block.includes("- pre fact"), `scrapes=${scrapes} | ${block}`);
 }
 {
+  // pre-scraped content STILL owes the minContentChars floor — a refactor
+  // that special-cased "already have content" could otherwise exempt it.
+  const sc: SearchClient = {
+    async search(): Promise<SearchResult[]> {
+      return [{ title: "PreThin", url: "https://reuters.com/prethin",
+        snippet: "prethin snippet", content: "x".repeat(100) }];
+    },
+  };
+  const llm = fakeLlm(() => "- must never be asked");
+  const research = createExtractiveResearch({ llm, search: sc, pagesPerTopic: 3,
+    chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400 });
+  const { block, sources } = await research("pre-scraped thin topic");
+  ok("pre-scraped content below the floor degrades to the snippet line (zero LLM calls)",
+    block === "- PreThin: prethin snippet" && llm.prompts.length === 0 && sources.length === 1,
+    `${block} | prompts=${llm.prompts.length}`);
+}
+{
   // no scrape() port at all: content-less hits degrade to snippets, ONE log
   // line per topic (not per hit)
   const sc: SearchClient = {
