@@ -38,6 +38,7 @@
     "./presets": "./presets/default.ts",
     "./sources": "./sources/index.ts",
     "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
+    "./clients/ollama-llm": "./clients/ollama-llm.ts",
     "./clients/firecrawl-search": "./clients/firecrawl-search.ts",
     "./clients/searxng-search": "./clients/searxng-search.ts",
     "./gates": "./gates.ts",
@@ -50,6 +51,8 @@
     "./news": "./news.ts",
     "./primitives": "./primitives.ts",
     "./gate": "./gate.ts",
+    "./research": "./research.ts",
+    "./testing/replay": "./testing/replay.ts",
     "./headlines.json": "./headlines.json"
   },
   "files": [

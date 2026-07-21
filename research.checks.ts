@@ -225,6 +225,41 @@ const instant = { sleep: async (): Promise<void> => {}, now: (): number => 0 };
   ok("facade scrape is memoized (second call = no backend hit)",
     scrapes === before + 1, `scrapes=${scrapes - before}`);
 }
+{
+  // facade per-call limit pass-through (Task 7 review absorb): the facade
+  // must forward the CALLER's limit to the backend search() call, not
+  // knobs.researchLimit (5) — a dropped o?.limit anywhere on that path would
+  // silently widen/narrow every engine-side search routed through the facade.
+  const seenLimits: (number | undefined)[] = [];
+  const sc5 = {
+    async search(_query: string, opts?: { limit?: number }): Promise<SearchResult[]> {
+      seenLimits.push(opts?.limit);
+      return [HIT];
+    },
+  } as SearchClient;
+  const stack5 = createResearchStack({ search: sc5, ...instant });
+  await stack5.asSearchClient().search("valid query here", { limit: 2 });
+  ok("facade forwards the caller's per-call limit, not the knob default",
+    seenLimits[0] === 2, `limit seen=${seenLimits[0]}, expected 2`);
+}
+{
+  // memo cleared on reset (Task 7 review absorb): scrape the same URL through
+  // the facade, resetRunState(), scrape again — the backend must be hit
+  // TWICE. Sibling to the memoization check above, which proves the OPPOSITE
+  // case (no reset → the second scrape hits the memo, not the backend).
+  let scrapeCalls = 0;
+  const sc6 = {
+    async search(): Promise<SearchResult[]> { return []; },
+    async scrape(url: string): Promise<string> { scrapeCalls += 1; return `BODY ${url}`; },
+  } as SearchClient;
+  const stack6 = createResearchStack({ search: sc6, ...instant });
+  const facade6 = stack6.asSearchClient();
+  await facade6.scrape?.("https://memo.example/reset-check");
+  stack6.resetRunState();
+  await facade6.scrape?.("https://memo.example/reset-check");
+  ok("resetRunState clears the scrape memo (second scrape re-hits the backend)",
+    scrapeCalls === 2, `scrapeCalls=${scrapeCalls}, expected 2`);
+}
 
 // extractEvidence / createExtractiveResearch — chunked extraction (Task 5).
 // Byte-lock: the extraction system prompt moved UNCHANGED from the live-tested

@@ -331,6 +331,55 @@ accumulates in a `RunContext` ([`run-context.ts`](./run-context.ts)) and rides
 out on the finished post's `telemetry`. Read `post.telemetry` after a run for the
 gate results and per-run metrics.
 
+## DEEP research → `createResearchStack` / `createExtractiveResearch`
+
+The preset's default `gatherResearch` is a cheap snippet block from `search()`.
+[`research.ts`](./research.ts) is an opt-in upgrade through the SAME seam —
+`search` and `research`/`gatherResearch` on `createDefaultInternals` — no new
+port to implement:
+
+```ts
+import { createResearchStack, createExtractiveResearch } from "ai-journalist/research";
+
+// Production-grade grounding in three lines.
+// IMPORTANT: construct the client with searchDefaults — the port's
+// search(query, {limit}) cannot pass scrape/sources per call; without them
+// results carry no content and every body silently degrades to its snippet.
+const raw = createFirecrawlSearch({
+  searchDefaults: { scrape: true, sources: ["news"] },
+});
+const stack = createResearchStack({ search: raw });
+const internals = createDefaultInternals({
+  llm, brand, source,
+  search: stack.asSearchClient(), // sanitize+throttle+breaker on EVERY engine search (discovery snippets included)
+  research: stack,                // binds gatherResearch + retryThin + run-telemetry hooks in one shot
+});
+
+// Or: full-page scrape + chunked LLM extraction (small-model friendly):
+const internals2 = createDefaultInternals({ llm, brand, source,
+  search: stack.asSearchClient(),
+  gatherResearch: createExtractiveResearch({ llm, search: raw, pagesPerTopic: 3,
+    chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400 }) });
+```
+
+`createResearchStack` adds query hygiene, source tiering, a throttled
+gap-gated search with a dead-upstream breaker, primary-source chase, and a
+dropped-URL thin-section backfill pool; `asSearchClient()` hands that SAME
+hardening to every engine-side search call, not just `gatherResearch`.
+`createExtractiveResearch` instead scrapes full pages and has the LLM extract
+dense evidence bullets chunk by chunk — more LLM calls, but grounding that
+holds up on small/local models. Both are opt-in; the preset's snippet default
+is unchanged either way.
+
+**"Local stack (Ollama on a small box)"**: set `sectionConcurrency: 1–2` and
+`researchConcurrency: 1–2` (the preset's 3/4 defaults were tuned for cloud
+APIs — one Ollama server queues parallel requests, and `OLLAMA_NUM_PARALLEL`
+*divides* the loaded context between slots), keep search `limit ≤ 3` against a
+memory-bound self-hosted Firecrawl (its own `MAX_CONCURRENCY` 2–3), and
+construct the LLM with `options: { numCtx: 32768, keepAlive: "30m" }` (or set
+`OLLAMA_CONTEXT_LENGTH` server-side) — silent server-side prompt truncation is
+the failure mode.
+
 ---
 
 ## Escalation path

@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Query hygiene (`sanitizeQuery`/`relaxQuery` in `research.ts`): normalizes
+  typographic quotes, rejects ideation-scaffold lines and empty query slots,
+  and strips leading interrogatives that make search backends return
+  dictionary junk; `relaxQuery` strips site:/intitle:/negation/quote operators
+  for the empty-result retry form. Opt-in; defaults unchanged.
+- Source tiering (`sourceTier`/`hostOf` in `research.ts`): classifies
+  wire/.gov/.edu/major-outlet hosts as tier 1 and content-farm patterns as
+  tier 3 for research-corpus ranking; skip-hosts reused from `news.ts`.
+  Opt-in; defaults unchanged.
+- Throttled search + breaker (`createResearchStack`'s `throttledSearch`): a
+  gap-gated search wrapper with a relaxed-query empty-retry and a
+  consecutive-empty circuit breaker against a suspected-blocked upstream.
+  Opt-in; defaults unchanged.
+- `gatherResearch` + primary-source chase (`createResearchStack`): a
+  tier-ranked scraped research corpus with one-hop primary-source chase
+  (re-tell blocks fetch the original tier-1 article), a dropped-URL pool, and
+  `retryThin` thin-section backfill. Opt-in; defaults unchanged.
+- Extractive research (`createExtractiveResearch`/`extractEvidence` in
+  `research.ts`): full-page scrape + chunked LLM extraction of dense evidence
+  bullets, small-model friendly; degrades to the snippet line below
+  `minContentChars` or on scrape failure. Opt-in; defaults unchanged.
+- Firecrawl `searchDefaults` (`createFirecrawlSearch`): construction-wide
+  `scrape`/`sources`/`tbs` merged under each call's own opts (per-call wins)
+  — the port's `search(query, {limit})` alone cannot request scraped content
+  per call. Opt-in; defaults unchanged.
+
 ## 0.8.2
 
 - Discovery query-gen prompt: operator guidance inverted — plain natural-language
