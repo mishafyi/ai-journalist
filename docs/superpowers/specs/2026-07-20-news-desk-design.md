@@ -27,6 +27,11 @@ until it bumps the npm dependency).
 - **Region:** US edition first (`hl=en-US&gl=US&ceid=US:en`). Worldwide later
   is config, not code: more feeds + more GN editions.
 - **Output:** files (`out/<slug>.md`), DRAFT. Publishing sink deferred.
+- **Provenance:** the runner wires the run-context artifact sink to
+  `out/runs/<runId>/` — every search, scrape, match, and gate verdict lands
+  on disk, so "what was this article based on" is always answerable.
+- **Cadence:** manual runs v1; a launchd cron on the mini once quality
+  settles (the whole stack already lives there).
 - **Scrapable outlets only:** the curated outlet feed list IS the scrape
   allowlist. Hosts that fail antibot land on a runtime skip-list.
 
@@ -59,8 +64,18 @@ carries the real article URL). Match = embedding similarity between headlines
   probe check at implementation time): AP, BBC, Guardian, Al Jazeera, NPR,
   Politico, The Hill, CNBC, DW, France24 — final list = whatever passes the
   probe, target 10–15. Config shape: `{url, outlet, region}`.
+- Resolution matches the story against **every configured outlet's index**,
+  not only the outlets GN's coverage list names — our feeds often carry the
+  story even when GN's description omits them.
 - A trending story with **< 3 resolved scrapable sources → skip to next GN
   story** (loudly logged). Never write thin.
+- **Cross-run memory:** a covered-stories ledger (`out/covered.json`: slug,
+  title, ISO date) feeds the engine's `coveredTopics` port; already-covered
+  stories are skipped to the next trending one. Follow-up coverage of a
+  covered story is the series feature — out of scope v1.
+- **GN terms note:** the GN RSS copyright text permits personal,
+  non-commercial feed use. Fine for v1 (private drafts). Before any public
+  publishing, swap the trending oracle (GDELT / direct feeds / licensed).
 
 ## Pipeline (one run = one story)
 
@@ -72,8 +87,10 @@ outlet feeds ──────ingest──▶ headline→URL index per outlet
         └─▶ chunked per-source extraction (facts/figures/dates/quotes,
             verbatim, attributed; ~24K chars per LLM call, full content
             always processed — proven pattern from 2026-07-20 runs)
-        └─▶ RETELL sections from merged evidence; per-outlet attribution
-            enforced; sources list appended
+        └─▶ RETELL on a FIXED template — What happened / The numbers &
+            reactions / Context — the model fills sections, never designs
+            them (extends the gemma-narrowing rule to structure);
+            per-outlet attribution enforced; sources list appended
         └─▶ PARALLELS: gemma proposes 3–5 candidates {era, event, actors,
             claimed_similarity} → each verified: templated Wikipedia lookup
             via SearXNG + scrape + evidence-overlap score → best wins;
@@ -134,6 +151,9 @@ Host-coupled machinery is NOT upstreamed as implementation — only interfaces
 
 - Scrape failure → skip that outlet, log, continue; < 3 surviving sources →
   abort story, take next GN story; 0 stories survive → exit non-zero, loudly.
+- **Content-quality floor:** a "successful" scrape below a min-length knob or
+  matching paywall/teaser markers ("subscribe to read", etc.) is demoted to
+  skipped — stub pages must not enter the evidence corpus.
 - Antibot failures append to the runtime skip-list (in-run; persisted list is
   a knob).
 - Search breaker (from zerogtalent) guards the SearXNG/Wikipedia path.
