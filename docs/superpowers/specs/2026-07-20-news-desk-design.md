@@ -32,6 +32,14 @@ until it bumps the npm dependency).
   on disk, so "what was this article based on" is always answerable.
 - **Cadence:** manual runs v1; a launchd cron on the mini once quality
   settles (the whole stack already lives there).
+- **Google search egress (hard rule):** if the SearXNG `google` engine is
+  enabled for supplementary research, it MUST route through the Mac mini
+  residential bridge via a per-engine proxy in `settings.yml` — the exact
+  pattern zerogtalent already runs for DDG (`scripts/vps/searx-ddg-bridge`).
+  Never hit Google from the VPS IP directly (captcha/block within queries).
+  Optional ops task alongside Phase 1; the news desk itself does not depend
+  on it (GN RSS is fetched directly; Wikipedia verification uses the
+  existing wikipedia engine).
 - **Scrapable outlets only:** the curated outlet feed list IS the scrape
   allowlist. Hosts that fail antibot land on a runtime skip-list.
 
