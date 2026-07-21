@@ -36,6 +36,7 @@
     "./ports": "./ports.ts",
     "./pipeline": "./pipeline.ts",
     "./presets": "./presets/default.ts",
+    "./presets/news-desk": "./presets/news-desk.ts",
     "./sources": "./sources/index.ts",
     "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
     "./clients/ollama-llm": "./clients/ollama-llm.ts",
