@@ -52,6 +52,8 @@
     "./primitives": "./primitives.ts",
     "./gate": "./gate.ts",
     "./research": "./research.ts",
+    "./matching": "./matching.ts",
+    "./parallels": "./parallels.ts",
     "./testing/replay": "./testing/replay.ts",
     "./headlines.json": "./headlines.json"
   },
