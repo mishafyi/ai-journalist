@@ -7,7 +7,7 @@
  *
  * Output: out/<slug>.md — DRAFT, never published anywhere.
  */
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { runPipeline } from "../index";
 import { createDefaultInternals } from "../presets/default";
 import { createExtractiveResearch, createResearchStack } from "../research";
@@ -49,30 +49,40 @@ function createPoliticsSource(): Source {
   return {
     async gatherSignal(): Promise<DiscoverySignal> {
       const signal = await rss.gatherSignal();
+      const today = new Date().toISOString().slice(0, 10);
       return {
         ...signal,
         framing:
-          "US and European political news, last 24-48h. Pick the SINGLE hottest named political story from the signal items — an election, government decision, legislation, diplomatic clash, or scandal that is happening NOW. The article must be about that specific event and its players, not a general theme or explainer.",
+          `Today is ${today}. US and European political news, last 24-48h. Pick the SINGLE hottest named political story from the signal items — an election, government decision, legislation, diplomatic clash, or scandal that is happening NOW. The article must be about that specific event and its players, not a general theme or explainer. Events older than about 7 days are background context only — never present them as the breaking story.`,
       };
     },
     async coveredTopics(): Promise<CoveredTopic[]> {
-      let files: string[];
+      // Primary: the publish-time ledger (real titles). Fallback: slug-derived
+      // titles for legacy articles that predate the ledger. Dedupe by slug.
+      const bySlug = new Map<string, CoveredTopic>();
+      try {
+        const ledger = JSON.parse(await readFile("out/covered.json", "utf8")) as CoveredTopic[];
+        for (const c of ledger) if (c.slug !== undefined) bySlug.set(c.slug, c);
+      } catch {
+        // no ledger yet — legacy fallback below covers it
+      }
+      let files: string[] = [];
       try {
         files = await readdir("out");
       } catch {
-        return [];
+        return [...bySlug.values()];
       }
-      const covered: CoveredTopic[] = [];
       for (const f of files.filter((f) => f.endsWith(".md"))) {
         const slug = f.replace(/\.md$/, "");
+        if (bySlug.has(slug)) continue;
         const info = await stat(`out/${f}`);
-        covered.push({
+        bySlug.set(slug, {
           title: slug.replace(/-/g, " "),
           slug,
           date: info.mtime.toISOString(),
         });
       }
-      return covered;
+      return [...bySlug.values()];
     },
   };
 }
@@ -86,16 +96,40 @@ async function main(): Promise<void> {
   const search = createFirecrawlSearch({
     apiKey: process.env.FIRECRAWL_API_KEY,
     apiUrl: process.env.FIRECRAWL_API_URL,
-    searchDefaults: { sources: ["news"] },
+    // qdr:w = past-week freshness filter — live-verified non-zeroing on the
+    // SearXNG-backed self-hosted /v2/search (2026-07-21).
+    searchDefaults: { sources: ["news"], tbs: "qdr:w" },
   });
   const stack = createResearchStack({ search });
   const source = createPoliticsSource();
+
+  /** Every source the deep research contributed this run — the sink publishes
+   *  them alongside the article so attribution is visible on the site. */
+  const runSources: { title: string; url: string }[] = [];
+  const seenSourceUrls = new Set<string>();
+  const recordSources = (sources: { title: string; url: string }[]): void => {
+    for (const s of sources) {
+      if (seenSourceUrls.has(s.url)) continue;
+      seenSourceUrls.add(s.url);
+      runSources.push(s);
+    }
+  };
 
   const sink: Sink = {
     async publish(post: GeneratedPost): Promise<PublishResult> {
       await mkdir("out", { recursive: true });
       const path = `out/${post.slug}.md`;
       await writeFile(path, post.markdown);
+      await writeFile(`out/${post.slug}.sources.json`, JSON.stringify(runSources, null, 2));
+      // Publish-time covered ledger: REAL titles for future runs' dedup.
+      let ledger: { title: string; slug: string; date: string }[] = [];
+      try {
+        ledger = JSON.parse(await readFile("out/covered.json", "utf8"));
+      } catch {
+        // first run — fresh ledger
+      }
+      ledger.push({ title: post.title, slug: post.slug, date: new Date().toISOString() });
+      await writeFile("out/covered.json", JSON.stringify(ledger, null, 2));
       return { url: path, status: "DRAFT" };
     },
   };
@@ -111,16 +145,24 @@ async function main(): Promise<void> {
     research: stack,
     // Explicit gatherResearch wins over the stack's: sections stay on the
     // full-scrape + chunked-extraction path (scrapes its own pages via the
-    // raw client the stack wraps).
-    gatherResearch: createExtractiveResearch({
-      llm,
-      search,
-      pagesPerTopic: 3,
-      chunkChars: 24_000,
-      maxChunksPerPage: 4,
-      minContentChars: 400,
-      log: (l) => process.stdout.write(l + "\n"),
-    }),
+    // raw client the stack wraps). Wrapped to accumulate contributing sources
+    // for the sink's sources.json.
+    gatherResearch: (() => {
+      const extractive = createExtractiveResearch({
+        llm,
+        search,
+        pagesPerTopic: 3,
+        chunkChars: 24_000,
+        maxChunksPerPage: 4,
+        minContentChars: 400,
+        log: (l) => process.stdout.write(l + "\n"),
+      });
+      return async (topic: string) => {
+        const result = await extractive(topic);
+        recordSources(result.sources);
+        return result;
+      };
+    })(),
   });
 
   const post = await runPipeline({
