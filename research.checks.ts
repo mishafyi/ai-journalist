@@ -134,6 +134,96 @@ const instant = { sleep: async (): Promise<void> => {}, now: (): number => 0 };
     String(sc.queries.length));
 }
 
+// gatherResearch — tier-ranked block, primary chase, dropped-URL pool (Task 4).
+{
+  const results: SearchResult[] = [
+    { title: "AP", url: "https://apnews.com/a/b", snippet: "s1", content: "wire body ".repeat(60) },
+    { title: "Blog", url: "https://some-blog.io/p", snippet: "s2",
+      content: `retold from https://apnews.com/orig/story with commentary ${"x".repeat(500)}` },
+    { title: "Farm", url: "https://top10-insightshub.net/x", snippet: "s3", content: "junk ".repeat(120) },
+  ];
+  const sc = {
+    async search(): Promise<SearchResult[]> { return results; },
+    async scrape(url: string): Promise<string> { return `PRIMARY BODY ${"y".repeat(600)} (${url})`; },
+  } as SearchClient;
+  const stack = createResearchStack({ search: sc, ...instant });
+  const { block, sources } = await stack.gatherResearch("EU tariff ruling coverage");
+  ok("tier-1 outranks tier-3 in block order",
+    block.indexOf("apnews.com/a/b") < block.indexOf("top10-insightshub.net"), "ordering");
+  ok("low-authority block carries the suspicion label",
+    block.includes("LOW-AUTHORITY"), block.slice(0, 200));
+  ok("primary chase fetched the tier-1 original",
+    block.includes("PRIMARY SOURCE (chased from some-blog.io)") &&
+      block.includes("apnews.com/orig/story"), "chase");
+  ok("sources list includes chased + ranked", sources.length === 4,
+    String(sources.length));
+}
+{
+  // skip-hosted chase candidate lands in the dropped pool instead
+  const sc2 = {
+    async search(): Promise<SearchResult[]> {
+      return [{ title: "B", url: "https://blog.io/p", snippet: "s",
+        content: `see https://www.reuters.com/world/x ${"z".repeat(500)}` }];
+    },
+    async scrape(): Promise<string> { return ""; },
+  } as SearchClient;
+  const stack2 = createResearchStack({ search: sc2, ...instant });
+  await stack2.gatherResearch("anything long enough");
+  ok("antibot tier-1 chase is pooled, not scraped",
+    stack2.drainDroppedUrls(5).some((u) => u.includes("reuters.com")), "pool");
+}
+{
+  // ranked-body cap, snippet fallback for unscraped hits, composition artifact
+  const artifacts: string[] = [];
+  const sc3 = {
+    async search(): Promise<SearchResult[]> {
+      return [
+        { title: "Huge", url: "https://apnews.com/big/doc", snippet: "s",
+          content: "x".repeat(70_000) },
+        { title: "Unscraped", url: "https://cnbc.com/only/snippet", snippet: "the snippet body" },
+      ];
+    },
+  } as SearchClient;
+  const stack3 = createResearchStack({ search: sc3, ...instant,
+    recordArtifact: (label) => { artifacts.push(label); } });
+  const { block } = await stack3.gatherResearch("cap and fallback check");
+  ok("ranked body is capped with the truncation marker",
+    block.includes("[... truncated: document continues]") && block.length < 75_000,
+    `len=${block.length}`);
+  ok("unscraped hit falls back to its snippet",
+    block.includes("the snippet body"), "snippet fallback");
+  ok("a research-composition artifact is recorded",
+    artifacts.some((l) => l.toLowerCase().includes("research")), artifacts.join("|"));
+}
+{
+  // retryThin drains the pool; facade hardens + memoizes
+  let scrapes = 0;
+  const sc4 = {
+    async search(): Promise<SearchResult[]> {
+      return [{ title: "B", url: "https://blog.io/p", snippet: "s",
+        content: `see https://www.reuters.com/world/deep/x ${"z".repeat(500)}` }];
+    },
+    async scrape(url: string): Promise<string> { scrapes += 1; return `BACKFILL ${"b".repeat(600)} ${url}`; },
+  } as SearchClient;
+  const stack4 = createResearchStack({ search: sc4, ...instant });
+  await stack4.gatherResearch("pool feeder topic here");
+  const thin = await stack4.retryThin("Thin Section");
+  ok("retryThin scrapes pooled URLs into ### Source blocks",
+    thin.includes("### Source") && thin.includes("reuters.com"), thin.slice(0, 120));
+  ok("retryThin is empty when the pool is dry",
+    (await stack4.retryThin("again")) === "", "second drain");
+
+  const facade = stack4.asSearchClient();
+  const facadeHits = await facade.search("reasons: psychological - ", { limit: 3 });
+  ok("facade sanitizes: scaffold query returns [] without a backend call",
+    facadeHits.length === 0, String(facadeHits.length));
+  const before = scrapes;
+  await facade.scrape?.("https://memo.example/page");
+  await facade.scrape?.("https://memo.example/page");
+  ok("facade scrape is memoized (second call = no backend hit)",
+    scrapes === before + 1, `scrapes=${scrapes - before}`);
+}
+
   if (failures > 0) {
     process.exitCode = 1;
     return;
