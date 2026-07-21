@@ -73,9 +73,10 @@ carries the real article URL). Match = embedding similarity between headlines
   title, ISO date) feeds the engine's `coveredTopics` port; already-covered
   stories are skipped to the next trending one. Follow-up coverage of a
   covered story is the series feature — out of scope v1.
-- **GN terms note:** the GN RSS copyright text permits personal,
-  non-commercial feed use. Fine for v1 (private drafts). Before any public
-  publishing, swap the trending oracle (GDELT / direct feeds / licensed).
+- **GN terms note:** the GN RSS copyright text scopes the feed to personal,
+  non-commercial use — which is exactly this project's use (open-source
+  tooling, private drafts). No blocker. Revisit the trending oracle
+  (GDELT / direct feeds) only if this ever becomes a public outlet.
 
 ## Pipeline (one run = one story)
 
