@@ -12,8 +12,10 @@ import {
   isBlockedHost,
   DEFAULT_BLOCKED_HOSTS,
   createResearchStack,
+  extractEvidence,
+  createExtractiveResearch,
 } from "./research";
-import type { SearchClient, SearchResult } from "./ports";
+import type { LlmClient, SearchClient, SearchResult } from "./ports";
 
 let failures = 0;
 const ok = (name: string, cond: boolean, detail: string): void => {
@@ -222,6 +224,155 @@ const instant = { sleep: async (): Promise<void> => {}, now: (): number => 0 };
   await facade.scrape?.("https://memo.example/page");
   ok("facade scrape is memoized (second call = no backend hit)",
     scrapes === before + 1, `scrapes=${scrapes - before}`);
+}
+
+// extractEvidence / createExtractiveResearch — chunked extraction (Task 5).
+// Byte-lock: the extraction system prompt moved UNCHANGED from the live-tested
+// examples/run-politics.ts runner.
+const EXTRACT_SYSTEM =
+  "You extract evidence for a news article. From the page text, list every concrete fact, statistic, date, named person or institution, and direct quote (verbatim, in quotation marks, with who said it) relevant to the topic. Dense bullet points only, no commentary. If nothing is relevant, reply exactly: NONE";
+
+function fakeLlm(
+  reply: (prompt: string) => string,
+): LlmClient & { prompts: string[]; systems: string[] } {
+  const prompts: string[] = [];
+  const systems: string[] = [];
+  return {
+    prompts,
+    systems,
+    async complete(args: { system?: string; prompt: string }): Promise<string> {
+      systems.push(args.system ?? "");
+      prompts.push(args.prompt);
+      return reply(args.prompt);
+    },
+    async completeStructured(): Promise<never> {
+      throw new Error("completeStructured is not used by extraction");
+    },
+  };
+}
+
+{
+  // chunk math (30k → 2 parts at 24k), NONE filtering, failed-scrape snippet
+  // fallback, SOURCE-block concatenation, sources = contributing pages.
+  const sc: SearchClient = {
+    async search(): Promise<SearchResult[]> {
+      return [
+        { title: "Long", url: "https://apnews.com/long", snippet: "long snippet" },
+        { title: "Broken", url: "https://cnbc.com/broken", snippet: "broken snippet" },
+      ];
+    },
+    async scrape(url: string): Promise<string> {
+      if (url.includes("broken")) throw new Error("403 blocked");
+      return "w".repeat(30_000);
+    },
+  };
+  const llm = fakeLlm((p) => (p.includes("part 2/2") ? "NONE" : "- fact: 42"));
+  const logs: string[] = [];
+  const research = createExtractiveResearch({
+    llm, search: sc, pagesPerTopic: 3, chunkChars: 24_000, maxChunksPerPage: 4,
+    minContentChars: 400, log: (l) => logs.push(l),
+  });
+  const { block, sources } = await research("chunk math topic");
+  ok("30k page splits into exactly 2 extraction calls (24k chunks)",
+    llm.prompts.length === 2 &&
+      llm.prompts[0].includes("(part 1/2)") && llm.prompts[1].includes("(part 2/2)"),
+    JSON.stringify(llm.prompts.map((p) => p.slice(0, 70))));
+  ok("extraction system prompt is byte-locked",
+    llm.systems.length > 0 && llm.systems.every((s) => s === EXTRACT_SYSTEM),
+    llm.systems[0] ?? "no system captured");
+  ok("NONE chunks are filtered out of the SOURCE block",
+    block.includes("- fact: 42") && !block.includes("NONE"), block);
+  ok("block concatenates SOURCE <title> (<url>): sections",
+    block.includes("SOURCE Long (https://apnews.com/long):\n- fact: 42"), block);
+  ok("failed scrape degrades to the snippet line (logged)",
+    block.includes("- Broken: broken snippet") && logs.some((l) => l.includes("FAILED")),
+    `${block} | ${logs.join("|")}`);
+  ok("sources = contributing pages, snippet-fallback hit included",
+    JSON.stringify(sources) === JSON.stringify([
+      { title: "Long", url: "https://apnews.com/long" },
+      { title: "Broken", url: "https://cnbc.com/broken" },
+    ]), JSON.stringify(sources));
+}
+{
+  // minContentChars floor: a SUCCESSFUL scrape below the floor degrades to the
+  // snippet line exactly like a failed scrape — no extraction calls burned.
+  const sc: SearchClient = {
+    async search(): Promise<SearchResult[]> {
+      return [{ title: "Thin", url: "https://ft.com/thin", snippet: "thin snippet" }];
+    },
+    async scrape(): Promise<string> { return "only one hundred chars? no."; },
+  };
+  const llm = fakeLlm(() => "- must never be asked");
+  const research = createExtractiveResearch({ llm, search: sc, pagesPerTopic: 3,
+    chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400 });
+  const { block, sources } = await research("thin topic");
+  ok("sub-minContentChars scrape degrades to the snippet line (no LLM calls)",
+    block === "- Thin: thin snippet" && llm.prompts.length === 0 && sources.length === 1,
+    `${block} | prompts=${llm.prompts.length}`);
+}
+{
+  // reuse rule: hit.content ?? scrape — pre-scraped hits never re-hit the backend
+  let scrapes = 0;
+  const sc: SearchClient = {
+    async search(): Promise<SearchResult[]> {
+      return [{ title: "Pre", url: "https://reuters.com/pre", snippet: "s",
+        content: "pre-scraped body ".repeat(30) }];
+    },
+    async scrape(): Promise<string> { scrapes += 1; return "never used"; },
+  };
+  const llm = fakeLlm(() => "- pre fact");
+  const research = createExtractiveResearch({ llm, search: sc, pagesPerTopic: 3,
+    chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400 });
+  const { block } = await research("reuse topic");
+  ok("pre-scraped hit.content is reused — scrape() never called",
+    scrapes === 0 && block.includes("- pre fact"), `scrapes=${scrapes} | ${block}`);
+}
+{
+  // no scrape() port at all: content-less hits degrade to snippets, ONE log
+  // line per topic (not per hit)
+  const sc: SearchClient = {
+    async search(): Promise<SearchResult[]> {
+      return [
+        { title: "A", url: "https://a.example/1", snippet: "sa" },
+        { title: "B", url: "https://b.example/2", snippet: "sb" },
+      ];
+    },
+  };
+  const llm = fakeLlm(() => "unused");
+  const logs: string[] = [];
+  const research = createExtractiveResearch({ llm, search: sc, pagesPerTopic: 3,
+    chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400,
+    log: (l) => logs.push(l) });
+  const { block, sources } = await research("no scrape topic");
+  ok("no scrape() port: snippet fallback for every content-less hit, logged once",
+    block === "- A: sa\n\n- B: sb" && sources.length === 2 &&
+      logs.filter((l) => l.includes("no scrape")).length === 1,
+    `${block} | logs=${JSON.stringify(logs)}`);
+}
+{
+  // all-NONE page contributes nothing: empty block, no source row
+  const sc: SearchClient = {
+    async search(): Promise<SearchResult[]> {
+      return [{ title: "Irrelevant", url: "https://x.example/i", snippet: "s",
+        content: "z".repeat(500) }];
+    },
+  };
+  const llm = fakeLlm(() => "NONE");
+  const research = createExtractiveResearch({ llm, search: sc, pagesPerTopic: 3,
+    chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400 });
+  const { block, sources } = await research("nothing relevant");
+  ok("all-NONE page contributes nothing (empty block, no source row)",
+    block === "" && sources.length === 0, JSON.stringify({ block, sources }));
+}
+{
+  // extractEvidence standalone — Phase 2 feeds RESOLVED urls, no SearchClient
+  const llm = fakeLlm((p) => (p.includes("part 1/1") ? "- solo fact" : "NONE"));
+  const parts = await extractEvidence({ llm, topic: "t",
+    page: { url: "https://u.example/p", title: "T", content: "abc".repeat(200) },
+    chunkChars: 24_000, maxChunksPerPage: 4 });
+  ok("extractEvidence standalone: single chunk → trimmed parts, no search dep",
+    JSON.stringify(parts) === JSON.stringify(["- solo fact"]) && llm.prompts.length === 1,
+    JSON.stringify(parts));
 }
 
   if (failures > 0) {

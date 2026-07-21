@@ -6,7 +6,7 @@
  * Everything here is OPT-IN — presets keep their cheap snippet default.
  */
 import pLimit from "p-limit";
-import type { SearchClient, SearchResult } from "./ports";
+import type { LlmClient, SearchClient, SearchResult } from "./ports";
 import { DEFAULT_BLOCKED_HOSTS, isBlockedHost } from "./news";
 
 const DOUBLE_QUOTES = /[„“”«»]/g;
@@ -83,7 +83,7 @@ export function sourceTier(url: string, res?: TierRes): 1 | 2 | 3 {
 // Research stack factory — throttled search (gap gate + relaxed empty-retry +
 // dead-upstream breaker), tier-ranked gatherResearch with primary-source
 // chase, dropped-URL pool + retryThin backfill, hardened SearchClient facade;
-// chunked extraction lands in a later task. All run state (gate timestamp,
+// chunked extraction is its own factory below. All run state (gate timestamp,
 // breaker counter, pool, dedupe, scrape memo, …) is INSTANCE state, so hosts
 // running several stacks — or several runs in one process — never share it.
 // ───────────────────────────────────────────────────────────────────────────
@@ -549,5 +549,123 @@ export function createResearchStack(opts: ResearchStackOpts): ResearchStack {
       droppedUrls.length = 0;
       scrapeMemo.clear();
     },
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Chunked extractive research — upstreamed verbatim from the live-tested
+// examples/run-politics.ts runner (2026-07-20), plus one addition the runner
+// did not have: the minContentChars content-quality floor. Long pages are
+// split across extraction calls (the model can't hold a full page + prompt at
+// once), so full content is always processed, never truncated.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Standalone chunk-and-extract core — EXPORTED separately because Phase 2's
+ *  news desk extracts from RESOLVED URLs (not search hits); burying this in
+ *  the search-driven closure would force a re-implementation there.
+ *  Returns the extracted bullet blocks, [] when every chunk replied NONE. */
+export async function extractEvidence(args: {
+  llm: LlmClient;
+  topic: string;
+  page: { url: string; title: string; content: string };
+  chunkChars: number; // 24000
+  maxChunksPerPage: number; // 4
+  log?: (line: string) => void;
+}): Promise<string[]> {
+  const { llm, topic, page, chunkChars, maxChunksPerPage, log } = args;
+  const chunks: string[] = [];
+  for (let i = 0; i < page.content.length && chunks.length < maxChunksPerPage; i += chunkChars) {
+    chunks.push(page.content.slice(i, i + chunkChars));
+  }
+  log?.(
+    `        deep-scrape ${page.url} (${page.content.length} chars, ${chunks.length} extraction calls)`,
+  );
+  const parts: string[] = [];
+  for (const [i, chunk] of chunks.entries()) {
+    const extracted = await llm.complete({
+      system:
+        "You extract evidence for a news article. From the page text, list every concrete fact, statistic, date, named person or institution, and direct quote (verbatim, in quotation marks, with who said it) relevant to the topic. Dense bullet points only, no commentary. If nothing is relevant, reply exactly: NONE",
+      prompt: `TOPIC: ${topic}\n\nPAGE ${page.url} (part ${i + 1}/${chunks.length}):\n${chunk}`,
+      temperature: 0.1,
+    });
+    if (extracted.trim() !== "NONE") {
+      parts.push(extracted.trim());
+    }
+  }
+  return parts;
+}
+
+/** Search-driven wrapper: scrape the top hits for a topic in full and
+ *  LLM-extract the evidence (facts, figures, dates, named people, verbatim
+ *  quotes) chunk by chunk via extractEvidence. Degrades to the hit's snippet
+ *  line when a page can't ground properly: scrape failed, scrape came back
+ *  under the minContentChars floor, or no scrape() port and no pre-scraped
+ *  content. Pre-scraped hit.content is REUSED, never re-scraped (searchDefaults
+ *  {scrape:true} clients would otherwise double-hit a memory-bound backend).
+ *  Returns {block, sources} — sources = the pages that actually contributed,
+ *  snippet-fallback hits included. */
+export function createExtractiveResearch(opts: {
+  llm: LlmClient;
+  search: SearchClient;
+  pagesPerTopic: number; // 3
+  chunkChars: number; // 24000
+  maxChunksPerPage: number; // 4
+  minContentChars: number; // 400 — content-quality floor: shorter scrapes fall back to snippet
+  log?: (line: string) => void;
+}): (topic: string) => Promise<{ block: string; sources: { title: string; url: string }[] }> {
+  const { llm, search, pagesPerTopic, chunkChars, maxChunksPerPage, minContentChars, log } = opts;
+  const scrape = search.scrape?.bind(search);
+
+  return async (
+    topic: string,
+  ): Promise<{ block: string; sources: { title: string; url: string }[] }> => {
+    const hits = await search.search(topic, { limit: pagesPerTopic });
+    const pieces: string[] = [];
+    const sources: { title: string; url: string }[] = [];
+    let noScrapeLogged = false; // one line per topic, not per hit
+    for (const hit of hits) {
+      const useSnippet = (): void => {
+        pieces.push(`- ${hit.title}: ${hit.snippet}`);
+        sources.push({ title: hit.title, url: hit.url });
+      };
+      let content = hit.content; // reuse pre-scraped content — never re-scrape
+      if (content === undefined) {
+        if (scrape === undefined) {
+          if (!noScrapeLogged) {
+            noScrapeLogged = true;
+            log?.("        no scrape() port — content-less hits degrade to snippets");
+          }
+          useSnippet();
+          continue;
+        }
+        try {
+          content = await scrape(hit.url);
+        } catch (err: unknown) {
+          log?.(`        deep-scrape FAILED ${hit.url}: ${String(err)} — using snippet`);
+          useSnippet();
+          continue;
+        }
+      }
+      if (content.length < minContentChars) {
+        log?.(
+          `        deep-scrape THIN ${hit.url} (${content.length} chars < ${minContentChars}) — using snippet`,
+        );
+        useSnippet();
+        continue;
+      }
+      const parts = await extractEvidence({
+        llm,
+        topic,
+        page: { url: hit.url, title: hit.title, content },
+        chunkChars,
+        maxChunksPerPage,
+        log,
+      });
+      if (parts.length > 0) {
+        pieces.push(`SOURCE ${hit.title} (${hit.url}):\n${parts.join("\n")}`);
+        sources.push({ title: hit.title, url: hit.url });
+      }
+    }
+    return { block: pieces.join("\n\n"), sources };
   };
 }
