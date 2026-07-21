@@ -15,12 +15,15 @@ import type { BrandProfile, CoveredTopic, GeneratedPost, PublishResult, Sink } f
 
 /** PASSing set from examples/probe-feeds.ts — edit after each probe run. */
 const FEEDS: OutletFeed[] = [
+  // Probe run 2026-07-21: these 7 PASS end-to-end (feed fetch + Firecrawl
+  // scrape). Politico (feed 403), The Hill (antibot), AP (dead feed host) FAIL.
   { url: "https://feeds.bbci.co.uk/news/world/rss.xml", outlet: "BBC", region: "EU" },
   { url: "https://www.theguardian.com/world/rss", outlet: "The Guardian", region: "EU" },
   { url: "https://www.aljazeera.com/xml/rss/all.xml", outlet: "Al Jazeera", region: "MENA" },
   { url: "https://feeds.npr.org/1001/rss.xml", outlet: "NPR", region: "US" },
-  { url: "https://rss.politico.com/politics-news.xml", outlet: "Politico", region: "US" },
-  { url: "https://thehill.com/homenews/feed/", outlet: "The Hill", region: "US" },
+  { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", outlet: "CNBC", region: "US" },
+  { url: "https://rss.dw.com/rdf/rss-en-all", outlet: "DW", region: "EU" },
+  { url: "https://www.france24.com/en/rss", outlet: "France 24", region: "EU" },
 ];
 
 const brand: BrandProfile = {
