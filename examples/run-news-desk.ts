@@ -96,7 +96,7 @@ async function main(): Promise<void> {
     knobs: {
       trendingLimit: 20, minSources: 3, pagesMax: 6,
       chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400,
-      matchThreshold: 0.62, coveredThreshold: 0.62,
+      matchThreshold: 0.62, coveredThreshold: 0.55, // 0.62→0.55 2026-07-21: three same-arc articles in four — clustering trigger hit,
       parallelCount: 4, parallelMinScore: 0.3, analysisAttempts: 3,
     },
     coveredTopics: async (): Promise<CoveredTopic[]> => {
