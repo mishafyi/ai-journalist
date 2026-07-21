@@ -101,9 +101,10 @@ outlet feeds ──────ingest──▶ headline→URL index per outlet
             them (extends the gemma-narrowing rule to structure);
             per-outlet attribution enforced; sources list appended
         └─▶ PARALLELS: gemma proposes 3–5 candidates {era, event, actors,
-            claimed_similarity} → each verified: templated Wikipedia lookup
-            via SearXNG + scrape + evidence-overlap score → best wins;
-            none survive → Analysis runs without a parallel and says so
+            claimed_similarity} → each verified against the official
+            Wikipedia REST API (opensearch → page summary; keyless, no
+            SearXNG/VPS in the core path) + evidence-overlap score → best
+            wins; none survive → Analysis runs without a parallel, says so
         └─▶ OPINION: persona config writes Analysis under the contract
         └─▶ gates: existing chain on retell; analysis profile on opinion
         └─▶ out/<slug>.md [DRAFT]
@@ -131,16 +132,30 @@ experimentation-by-config: same story, different persona file, rerun.
 | `sources/newswire.ts` | multi-feed outlet RSS with `{url, outlet, region}` config; headline→URL index |
 | `matching.ts` | headline similarity (embedder w/ trigram fallback); pure |
 | `research.ts` | upstreamed zerogtalent stack: sanitizeQuery/relaxQuery, throttled search + breaker, source tiering, primary chase, antibot skip-list; + the generalized chunked page-extractor |
-| `parallels.ts` | propose → verify (templated Wikipedia via SearXNG) → select |
+| `parallels.ts` | propose → verify (official Wikipedia REST API) → select |
 | `gates.ts` (extend) | analysis gate profile (contract above) |
 | `presets/news-desk.ts` | wires everything; persona type + examples |
-| `clients/ollama-embedder.ts` | `Embedder` port via Ollama embeddings API (mini pulls `nomic-embed-text`, ~274 MB) |
+| `clients/ollama-embedder.ts` | `Embedder` port via the official `ollama` npm client (mini pulls `nomic-embed-text`, ~274 MB) |
 | `examples/run-news-desk.ts` | operator runner (files sink, mini Ollama) |
 | `ports.ts` (extend) | optional `outlet` on `SignalItem`; `PersonaProfile` |
 
 Existing seams reused: `gatherResearch` override (added 2026-07-20),
 `Embedder` port, `coveredTopics`, gate chain, chunked extractor pattern,
 `clients/ollama-llm.ts`.
+
+## Dependencies (audited 2026-07-20; reuse over hand-rolling)
+
+**New in v1:** `ollama` (official JS client — embedder; LLM adapter refactor
+optional), `cheerio` (GN description `<ol>` parsing + entity decoding).
+**Fallback tier:** `@mozilla/readability` + `linkedom` — plain-fetch
+extraction when Firecrawl fails on an outlet serving ordinary HTML (same
+content-quality floor). **Infra option (v1.5):** self-hosted RSSHub if the
+scrapability probe leaves the outlet set thin.
+**No new dep needed:** Wikipedia REST API (keyless fetch), cosine similarity
+(pure math), GN RSS (standard RSS 2.0 → existing `rss-parser`).
+**Rejected:** GN URL-decoder packages (low-adoption, internal-endpoint-
+dependent), GN wrapper npms, string-similarity libs (embeddings + existing
+trigram), node-cron (launchd), `ollama-helpers` (YAGNI at this volume).
 
 ## Upstreaming plan (zero risk to zerogtalent)
 
