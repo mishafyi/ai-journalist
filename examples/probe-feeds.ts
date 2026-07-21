@@ -23,6 +23,11 @@ export const CANDIDATE_FEEDS: OutletFeed[] = [
   { url: "https://www.cnbc.com/id/100003114/device/rss/rss.html", outlet: "CNBC", region: "US" },
   { url: "https://rss.dw.com/rdf/rss-en-all", outlet: "DW", region: "EU" },
   { url: "https://www.france24.com/en/rss", outlet: "France 24", region: "EU" },
+  { url: "https://abcnews.go.com/abcnews/topstories", outlet: "ABC News", region: "US" },
+  { url: "https://www.cbsnews.com/latest/rss/main", outlet: "CBS News", region: "US" },
+  { url: "https://feeds.skynews.com/feeds/rss/home.xml", outlet: "Sky News", region: "EU" },
+  { url: "https://www.euronews.com/rss", outlet: "Euronews", region: "EU" },
+  { url: "https://timesofindia.indiatimes.com/rssfeedstopstories.cms", outlet: "Times of India", region: "Asia" },
 ];
 
 async function main(): Promise<void> {
