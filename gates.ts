@@ -956,3 +956,49 @@ export function structureBlockers(
   }
   return out;
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// News-desk analysis contract (Phase 2) — MECHANICAL acceptance for the
+// persona-written Analysis section. No LLM judging: the persona prompt
+// promises exactly what this verifies. Appended module — nothing above edited.
+// ───────────────────────────────────────────────────────────────────────────
+
+export const NO_PARALLEL_PHRASE =
+  "No verified historical parallel survived fact-checking for this story.";
+export const DISANALOGY_MARKER = "**Where the parallel breaks down:**";
+
+export interface AnalysisContractArgs {
+  personaName: string;
+  outletNames: readonly string[];
+  parallelEvent: string | null;
+}
+
+export function checkAnalysisContract(
+  analysis: string,
+  args: AnalysisContractArgs,
+): { ok: boolean; failures: string[] } {
+  const failures: string[] = [];
+  if (!analysis.trimStart().startsWith(`## Analysis — ${args.personaName}`)) {
+    failures.push(`must open with "## Analysis — ${args.personaName}"`);
+  }
+  const cited = args.outletNames.filter((o) => analysis.includes(o));
+  if (cited.length < 2) {
+    failures.push(
+      `must cite ≥2 outlets by name from [${args.outletNames.join(", ")}] — found ${cited.length}`,
+    );
+  }
+  if (args.parallelEvent === null) {
+    if (!analysis.includes(NO_PARALLEL_PHRASE)) {
+      failures.push(`must state verbatim: "${NO_PARALLEL_PHRASE}"`);
+    }
+  } else {
+    if (!analysis.includes(args.parallelEvent)) {
+      failures.push(`must name the verified parallel "${args.parallelEvent}"`);
+    }
+    const at = analysis.indexOf(DISANALOGY_MARKER);
+    if (at === -1 || analysis.slice(at + DISANALOGY_MARKER.length).trim().length < 40) {
+      failures.push(`must contain "${DISANALOGY_MARKER}" followed by substantive text`);
+    }
+  }
+  return { ok: failures.length === 0, failures };
+}
