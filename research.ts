@@ -595,6 +595,16 @@ export async function extractEvidence(args: {
   return parts;
 }
 
+/** Paywall/teaser stub markers — a "successful" scrape carrying one of these
+ *  is a stub page and must not enter the evidence corpus (spec: content-
+ *  quality floor, Phase-2 half; the length half shipped in Phase 1). */
+const TEASER_MARKER_RE =
+  /subscribe to (read|continue)|sign in to (read|continue)|create a free account|to continue reading|enable javascript and cookies|are you a robot|access to this (page|site) has been (denied|blocked)/i;
+
+export function isTeaserContent(content: string, minChars: number): boolean {
+  return content.length < minChars || TEASER_MARKER_RE.test(content);
+}
+
 /** Search-driven wrapper: scrape the top hits for a topic in full and
  *  LLM-extract the evidence (facts, figures, dates, named people, verbatim
  *  quotes) chunk by chunk via extractEvidence. Degrades to the hit's snippet
@@ -646,7 +656,7 @@ export function createExtractiveResearch(opts: {
           continue;
         }
       }
-      if (content.length < minContentChars) {
+      if (isTeaserContent(content, minContentChars)) {
         log?.(
           `        deep-scrape THIN ${hit.url} (${content.length} chars < ${minContentChars}) — using snippet`,
         );
