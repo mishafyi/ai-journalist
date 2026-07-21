@@ -388,6 +388,53 @@ breaker, scrape memo). Reusing ONE stack across scheduler runs: call
 backfill from article A's pool and chase dedupe suppresses re-chases — and
 pass `research:` again so `bind()` re-attaches the new run's telemetry.
 
+## NEWS desk → `createNewsDesk`
+
+A second, self-contained preset ([`presets/news-desk.ts`](./presets/news-desk.ts))
+for the "hot story, retold + analyzed" format: trending (Google News) →
+resolution against your own curated outlet feeds → full-scrape evidence →
+persona Analysis, wired directly (no `runPipeline`) — see
+[`examples/run-news-desk.ts`](./examples/run-news-desk.ts) for the full wiring:
+
+```ts
+import { createNewsDesk, PERSONAS } from "ai-journalist/presets/news-desk";
+import { createOllamaLlm } from "ai-journalist/clients/ollama-llm";
+import { createOllamaEmbedder } from "ai-journalist/clients/ollama-embedder";
+import { createFirecrawlSearch } from "ai-journalist/clients/firecrawl-search";
+
+const desk = createNewsDesk({
+  llm: createOllamaLlm({ baseUrl: "http://localhost:11434", model: "gemma4:e4b" }),
+  embedder: createOllamaEmbedder({ host: "http://localhost:11434", model: "embeddinggemma" }),
+  search: createFirecrawlSearch({ apiUrl: process.env.FIRECRAWL_API_URL }),
+  feeds, // OutletFeed[] — your curated allowlist; see the probe workflow below
+  persona: PERSONAS.historian, // or .realist / .systems, or your own PersonaProfile
+  brand, sink,
+  knobs: { trendingLimit: 20, minSources: 3, pagesMax: 6, chunkChars: 24_000,
+    maxChunksPerPage: 4, minContentChars: 400, matchThreshold: 0.62,
+    coveredThreshold: 0.62, parallelCount: 4, parallelMinScore: 0.3, analysisAttempts: 3 },
+});
+const post = await desk.run();
+```
+
+The retell template is FIXED — `buildRetellPlan`'s three sections (What
+happened / The numbers and reactions / Context) — so the model fills them
+from evidence and never designs the structure. The persona Analysis is gated
+by a MECHANICAL contract (`checkAnalysisContract` in `gates.ts`) requiring the
+`## Analysis — {persona.name}` opening, citations of at least two named
+outlets, and either the verified historical parallel with its disanalogy
+paragraph or the verbatim honest-absence phrase, retrying failed attempts with
+the failures fed back into the prompt. Your outlet feed list is a scrape
+allowlist, not a guess — run [`examples/probe-feeds.ts`](./examples/probe-feeds.ts)
+against your operator Firecrawl and edit `examples/run-news-desk.ts`'s `FEEDS`
+down to whichever outlets come back PASS.
+
+Scheduling this as a cron job: provenance already accumulates incrementally
+via `recordArtifact` as each stage completes (not only at the end), so a
+mid-run failure still leaves the completed stages' trail under
+`out/runs/<runId>/` — add the usual cron-failure analogs on top at adoption
+time, e.g. an `osascript` desktop notification on a nonzero exit plus a
+blockers summarizer over the run's log.
+
 ## Escalation path
 
 Reach for the least invasive seam that does the job, in this order:

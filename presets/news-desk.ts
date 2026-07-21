@@ -399,6 +399,10 @@ export function createNewsDesk(opts: {
         try {
           const audit = await runFactCheckAudit(finalArticle.content, evidence, {
             llm,
+            // model: "" is safe — createOllamaLlm's resolveModel treats blank as
+            // the configured default (check-locked in clients/ollama-llm.checks.ts
+            // — "blank model resolves to the configured default"); no model knob
+            // needed on this call.
             model: "",
             withRetry: async (_label, fn) => fn(),
             ctx: createRunContext("news-desk-audit"),
