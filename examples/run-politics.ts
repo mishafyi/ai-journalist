@@ -150,7 +150,10 @@ async function main(): Promise<void> {
     gatherResearch: (() => {
       const extractive = createExtractiveResearch({
         llm,
-        search,
+        // Through the hardened facade — section-topic queries get the
+        // sanitizer/throttle/breaker too (raw client here let junk queries
+        // reach search and dictionary pages into published sources, 2026-07-21).
+        search: stack.asSearchClient(),
         pagesPerTopic: 3,
         chunkChars: 24_000,
         maxChunksPerPage: 4,
