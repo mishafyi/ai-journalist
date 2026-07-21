@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — the port's `search(query, {limit})` alone cannot request scraped content
   per call. Opt-in; defaults unchanged.
 
+- Ollama client construction defaults (`clients/ollama-llm.ts` `options`):
+  `numCtx`/`keepAlive` forwarded as `num_ctx`/`keep_alive` on both call
+  sites; omitted keys are sent absent so server env stays authoritative.
+  Opt-in; defaults unchanged.
+- Preset `research` option + gate input-cap knobs
+  (`createDefaultInternals({ research })`): late-binds the factory's
+  `withRetry`/`recordArtifact` into the stack, defaults `gatherResearch` to
+  the stack's, wires `retryThin` thin-section backfill; new knobs
+  `auditInputChars`/`seoInputChars`/`editWordFloor` mirror the gates'
+  internal defaults (120000/24000/1200). Opt-in; defaults unchanged.
+- npm subpath exports added: `./research`, `./testing/replay`,
+  `./clients/ollama-llm`.
+
 ## 0.8.2
 
 - Discovery query-gen prompt: operator guidance inverted — plain natural-language

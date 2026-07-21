@@ -371,7 +371,7 @@ dense evidence bullets chunk by chunk — more LLM calls, but grounding that
 holds up on small/local models. Both are opt-in; the preset's snippet default
 is unchanged either way.
 
-**"Local stack (Ollama on a small box)"**: set `sectionConcurrency: 1–2` and
+**Local stack (Ollama on a small box)**: set `sectionConcurrency: 1–2` and
 `researchConcurrency: 1–2` (the preset's 3/4 defaults were tuned for cloud
 APIs — one Ollama server queues parallel requests, and `OLLAMA_NUM_PARALLEL`
 *divides* the loaded context between slots), keep search `limit ≤ 3` against a
@@ -381,6 +381,12 @@ construct the LLM with `options: { numCtx: 32768, keepAlive: "30m" }` (or set
 the failure mode.
 
 ---
+
+Run lifecycle: the stack holds per-run state (dropped-URL pool, chase dedupe,
+breaker, scrape memo). Reusing ONE stack across scheduler runs: call
+`stack.resetRunState()` between runs — otherwise article B's thin sections
+backfill from article A's pool and chase dedupe suppresses re-chases — and
+pass `research:` again so `bind()` re-attaches the new run's telemetry.
 
 ## Escalation path
 
