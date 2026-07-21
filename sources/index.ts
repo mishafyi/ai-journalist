@@ -24,3 +24,4 @@ export {
   type TrendingStory,
   type CoverageEntry,
 } from "./google-news";
+export { createNewswire, type OutletFeed, type OutletItem } from "./newswire";
