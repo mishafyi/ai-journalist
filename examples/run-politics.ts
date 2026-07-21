@@ -10,12 +10,13 @@
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { runPipeline } from "../index";
 import { createDefaultInternals } from "../presets/default";
-import { createExtractiveResearch, createResearchStack } from "../research";
+import { createExtractiveResearch, createResearchStack, hostOf } from "../research";
 import { createOllamaLlm } from "../clients/ollama-llm";
 import { createFirecrawlSearch } from "../clients/firecrawl-search";
 import { createRssSource } from "../sources/rss";
 import type {
   BrandProfile,
+  SearchClient,
   CoveredTopic,
   DiscoverySignal,
   GeneratedPost,
@@ -87,6 +88,17 @@ function createPoliticsSource(): Source {
   };
 }
 
+/** Dictionary/thesaurus/video hosts never ground a news section — drop them
+ *  before extraction regardless of how plausible the query looked. */
+const REFERENCE_JUNK_RE =
+  /(^|\.)(merriam-webster\.com|dictionary\.cambridge\.org|iciba\.com|wiktionary\.org|thesaurus\.com|vocabulary\.com|youtube\.com)$/i;
+function referenceFiltered(client: SearchClient): SearchClient {
+  return {
+    search: async (q, o) => (await client.search(q, o)).filter((r) => !REFERENCE_JUNK_RE.test(hostOf(r.url))),
+    ...(client.scrape === undefined ? {} : { scrape: client.scrape.bind(client) }),
+  };
+}
+
 async function main(): Promise<void> {
   const llm = createOllamaLlm({
     baseUrl: "http://localhost:11434",
@@ -153,7 +165,11 @@ async function main(): Promise<void> {
         // Through the hardened facade — section-topic queries get the
         // sanitizer/throttle/breaker too (raw client here let junk queries
         // reach search and dictionary pages into published sources, 2026-07-21).
-        search: stack.asSearchClient(),
+        // PLUS a reference-site drop: the sanitizer can't stop a well-formed
+        // common word ("international") from surfacing dictionaries — proven
+        // by article #6's sources, generated WITH the facade. Kill the domain
+        // class, not the query (Phase 2's mechanical queries retire this).
+        search: referenceFiltered(stack.asSearchClient()),
         pagesPerTopic: 3,
         chunkChars: 24_000,
         maxChunksPerPage: 4,
