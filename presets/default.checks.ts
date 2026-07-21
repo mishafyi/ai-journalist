@@ -41,6 +41,7 @@ import type {
   Sink,
   Source,
 } from "../ports";
+import type { ResearchStack } from "../research";
 
 let failures = 0;
 const ok = (name: string, cond: boolean, detail: string): void => {
@@ -378,8 +379,194 @@ async function runEmbedderChecks(): Promise<void> {
   }
 }
 
+/**
+ * Task 6.5 — the `research` option: a pre-built `ResearchStack` (see
+ * `createResearchStack`) handed to the factory. Proves the factory:
+ *   (a) late-binds its OWN `withRetry` + `recordArtifact` into the stack via
+ *       `bind()` — both are built INSIDE `createDefaultInternals`, so a
+ *       pre-constructed stack cannot receive them any earlier; without the
+ *       bind the stack would silently run with no run telemetry;
+ *   (b) passes the gate input-cap knobs through to `gateDeps` —
+ *       `knobs.auditInputChars` caps the fact-check-audit RESEARCH slice,
+ *       observed through a REAL `generate()` run with the marker-slice
+ *       introspection gates.checks.ts uses for `seoInputChars`;
+ *   (c) defaults `gatherResearch` to the stack's while an explicit
+ *       `opts.gatherResearch` still wins, and wires
+ *       `retryThin: (s) => stack.retryThin(s.heading)` BEFORE the
+ *       `discoveryDeps = { ...blogDeps }` spread-copy, so BOTH consumers see
+ *       it: `discoveryDeps` is introspected directly; the pipeline
+ *       (`blogDeps`) side is proven by the generate() run, whose thin
+ *       section's write prompt must carry the stack's retryThin sentinel.
+ */
+async function runResearchStackChecks(): Promise<void> {
+  const RETRYTHIN_SENTINEL =
+    "RETRYTHIN_SENTINEL: dropped-pool source block for the thin section.";
+  const AUDIT_IN = "AUDIT_CAP_MARKER_INSIDE";
+  const AUDIT_OUT = "AUDIT_CAP_MARKER_BEYOND_9000";
+  // ~12.6K chars: AUDIT_IN opens the pooled ground truth (well inside a
+  // 9000-char slice), AUDIT_OUT sits past char 12600 — so an audit prompt
+  // sliced at knobs.auditInputChars=9000 keeps IN and drops OUT, while the
+  // unsliced default (120000) would keep both.
+  const bigBlock = `${AUDIT_IN} ${"ground truth filler. ".repeat(600)}${AUDIT_OUT}`;
+
+  // Fake ResearchStack — records bind() args + retryThin() labels; research
+  // methods return sentinels.
+  const bindSaw: { withRetry?: unknown; recordArtifact?: unknown }[] = [];
+  const retryThinSaw: string[] = [];
+  const stack: ResearchStack = {
+    async throttledSearch() {
+      return [];
+    },
+    async gatherResearch(topic: string) {
+      return { block: `STACK_RESEARCH_BLOCK for ${topic}`, sources: [] };
+    },
+    async retryThin(label: string) {
+      retryThinSaw.push(label);
+      return RETRYTHIN_SENTINEL;
+    },
+    asSearchClient() {
+      return fakeSearch;
+    },
+    bind(hooks) {
+      bindSaw.push(hooks);
+    },
+    drainDroppedUrls() {
+      return [];
+    },
+    resetRunState() {
+      /* no-op */
+    },
+  };
+
+  // Prompt-capturing LLM — the flagship fake's fixtures, plus a record of every
+  // free-text prompt so the audit slice + per-section research are observable.
+  const prompts: string[] = [];
+  const capturingLlm: LlmClient = {
+    async complete(args) {
+      prompts.push(args.prompt);
+      return ARTICLE_BODY;
+    },
+    completeStructured: fakeLlm.completeStructured,
+  };
+
+  // Internals with the stack + a 9000-char audit cap + an EXPLICIT
+  // gatherResearch (override must win) that returns the marker block for
+  // section 1 and EMPTY for section 2 — forcing the section writer through the
+  // stack's retryThin for the thin section.
+  const internals = createDefaultInternals({
+    llm: capturingLlm,
+    search: fakeSearch,
+    brand,
+    source,
+    runId: "research_stack_run",
+    research: stack,
+    knobs: { auditInputChars: 9000 },
+    gatherResearch: async (topic: string) =>
+      topic === "Thin Tail" ? { block: "" } : { block: bigBlock },
+  });
+
+  // (a) bind() received the factory's own hooks — one call, both functions.
+  ok(
+    "research: bind() called once with a function withRetry + recordArtifact",
+    bindSaw.length === 1 &&
+      typeof bindSaw[0].withRetry === "function" &&
+      typeof bindSaw[0].recordArtifact === "function",
+    `bindSaw=${JSON.stringify(bindSaw.map((h) => [typeof h.withRetry, typeof h.recordArtifact]))}`,
+  );
+
+  // (c) an explicit opts.gatherResearch overrides the stack's…
+  const overridden = await internals.discoveryDeps.gatherResearch("anything");
+  ok(
+    "research: explicit opts.gatherResearch overrides the stack's",
+    overridden.block === bigBlock,
+    `block=${JSON.stringify(overridden.block.slice(0, 60))}`,
+  );
+  // …and WITHOUT an explicit one, gatherResearch defaults to the stack's.
+  const stackDefault = createDefaultInternals({
+    llm: fakeLlm,
+    search: fakeSearch,
+    brand,
+    source,
+    research: stack,
+  });
+  ok(
+    "research: gatherResearch defaults to the stack's",
+    (await stackDefault.discoveryDeps.gatherResearch("t")).block ===
+      "STACK_RESEARCH_BLOCK for t",
+    "expected the stack's sentinel block",
+  );
+
+  // retryThin pre-spread wiring, side 1: discoveryDeps (direct introspection) —
+  // present, adapts the section object to the stack's heading label.
+  const discoveryRetryThin = internals.discoveryDeps.retryThin;
+  ok(
+    "research: retryThin wired into discoveryDeps, adapts section → heading",
+    typeof discoveryRetryThin === "function" &&
+      (await discoveryRetryThin({ heading: "H", intent: "i", queries: [] })) ===
+        RETRYTHIN_SENTINEL &&
+      retryThinSaw.includes("H"),
+    `retryThin=${typeof discoveryRetryThin} saw=${JSON.stringify(retryThinSaw)}`,
+  );
+
+  // No research option → retryThin stays unwired (defaults unchanged).
+  const stackless = createDefaultInternals({
+    llm: fakeLlm,
+    search: fakeSearch,
+    brand,
+    source,
+  });
+  ok(
+    "no research option: retryThin absent from discoveryDeps",
+    stackless.discoveryDeps.retryThin === undefined,
+    "retryThin must stay unwired without opts.research",
+  );
+
+  // The REAL generate() run — proves (b) + the blogDeps side of the spread.
+  const article = await internals.generate({
+    title: "Acme Robotics Goes on a Hiring Spree",
+    angle: "a single company's hiring reveals a sector-wide talent race",
+    category: "technology",
+    searchSeed: "acme robotics hiring",
+    sections: [
+      { heading: "What Happened", intent: "establish the news", queries: [] },
+      { heading: "Thin Tail", intent: "the thin section", queries: [] },
+    ],
+  });
+  ok(
+    "research: generate() resolves with the stack wired",
+    typeof article.content === "string" && article.content.length > 0,
+    "expected a generated article",
+  );
+  // retryThin pre-spread wiring, side 2: the pipeline's blogDeps — the thin
+  // section's write prompt grounds in the stack's retryThin sentinel.
+  ok(
+    "research: thin section grounded via the stack's retryThin (blogDeps side of the spread)",
+    prompts.some(
+      (p) =>
+        p.includes("RESEARCH FOR THIS SECTION:") &&
+        p.includes(RETRYTHIN_SENTINEL),
+    ) && retryThinSaw.includes("Thin Tail"),
+    `retryThinSaw=${JSON.stringify(retryThinSaw)}`,
+  );
+  // (b) knobs.auditInputChars=9000 reached gateDeps: the fact-check-audit
+  // prompt's RESEARCH slice keeps the <9000 marker and drops the >12600 one.
+  const auditPrompt = prompts.find((p) =>
+    p.startsWith("You are a fact-checker reviewing a PUBLISHED article"),
+  );
+  ok(
+    "knobs: auditInputChars=9000 caps the fact-check-audit research slice",
+    auditPrompt !== undefined &&
+      auditPrompt.includes(AUDIT_IN) &&
+      !auditPrompt.includes(AUDIT_OUT),
+    auditPrompt
+      ? `in=${auditPrompt.includes(AUDIT_IN)} out=${auditPrompt.includes(AUDIT_OUT)}`
+      : "no fact-check-audit prompt captured",
+  );
+}
+
 runFlagship()
   .then(runEmbedderChecks)
+  .then(runResearchStackChecks)
   .then(() => {
     process.stdout.write(failures ? `\n${failures} FAILED\n` : "\nALL passed\n");
     if (failures) process.exit(1);

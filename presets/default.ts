@@ -36,7 +36,8 @@ import { createRunContext } from "../run-context";
 import type { DiscoveryDeps } from "../discovery";
 import type { SectionWriterDeps } from "../section-writer";
 import type { AssemblyDeps } from "../assembly";
-import type { Plan } from "../planning";
+import type { Plan, PlanSection } from "../planning";
+import type { ResearchStack } from "../research";
 import type {
   BrandProfile,
   Embedder,
@@ -98,6 +99,15 @@ export interface DefaultKnobs {
   titleCollisionSim: number;
   titleEmbedSim: number;
   searchTermsCount: number;
+  // ── gate input caps (gates.ts internal defaults, passed through verbatim) ──
+  /** Chars of pooled ground truth the fact-check audit sees (120000). Lower to
+   *  fit small-context local models — a 120K-char audit prompt is unusable
+   *  there. */
+  auditInputChars: number;
+  /** Chars of finished article runSeo feeds the metadata prompt (24000). */
+  seoInputChars: number;
+  /** Word floor injected into the runEdit/runFinalEdit prompts (1200). */
+  editWordFloor: number;
 }
 
 /** The engine's documented defaults for every knob. */
@@ -126,6 +136,12 @@ const DEFAULT_KNOBS: DefaultKnobs = {
   titleCollisionSim: 0.45,
   titleEmbedSim: 0.9,
   searchTermsCount: 12,
+  // MUST equal the gates' internal `??` defaults (gates.ts) so non-opting
+  // adopters see byte-identical prompts — passing the same value through is a
+  // no-op.
+  auditInputChars: 120_000,
+  seoInputChars: 24_000,
+  editWordFloor: 1_200,
 };
 
 /** One headline-corpus entry — `headlines.json` is an array of these. */
@@ -168,9 +184,21 @@ export interface DefaultInternalsOptions {
   fetchPriorTitles?: () => Promise<string[]>;
   /** System prompt; omit → a generic-journalist prompt built from brand. */
   systemPrompt?: () => string;
-  /** Deep per-section researcher; omit → a snippet block from `search()`.
-   *  Supply to ground sections in scraped full pages instead of snippets. */
+  /** Deep per-section researcher; omit → a snippet block from `search()` (or
+   *  `research.gatherResearch` when a stack is supplied — an explicit value
+   *  here still wins). Supply to ground sections in scraped full pages instead
+   *  of snippets. */
   gatherResearch?: (topic: string) => Promise<{ block: string }>;
+  /** Pre-built research stack (`createResearchStack`). Present → the factory
+   *  late-binds its OWN `withRetry` + `recordArtifact` into it via
+   *  `research.bind(...)` — both are constructed inside this factory, so a
+   *  pre-built stack cannot receive them any earlier; the bind is what routes
+   *  the stack's transport retries + artifacts into the run's telemetry.
+   *  Also defaults `gatherResearch` to the stack's (see above) and wires the
+   *  section-writer's thin-section backfill
+   *  `retryThin: (s) => research.retryThin(s.heading)`. Absent → nothing
+   *  changes. */
+  research?: ResearchStack;
 }
 
 /** Per-factory monotonic counter for the default run id. */
@@ -240,6 +268,13 @@ export function createDefaultInternals(
     throw lastError;
   };
 
+  // ── 2.5. research-stack late-bind — a pre-built stack can only receive the
+  //      factory's withRetry/recordArtifact NOW (both are constructed above);
+  //      bind() routes its transport retries + artifacts into THIS run's
+  //      telemetry. Absent → no-op.
+  const research = opts.research;
+  research?.bind({ withRetry, recordArtifact });
+
   // ── 3. system prompt — generic staff-journalist prompt built from the brand
   //      (no literals; guard-safe).
   const systemPrompt =
@@ -253,14 +288,18 @@ export function createDefaultInternals(
 
   // ── 5. deep research block — one gatherResearch per section primary query.
   //      Overridable (opts.gatherResearch) so hosts can ground sections in
-  //      scraped full pages; the default stays the cheap snippet block.
+  //      scraped full pages; with a research stack the default is the stack's
+  //      tier-ranked scraping gather; otherwise the cheap snippet block.
   const gatherResearch =
     opts.gatherResearch ??
-    (async (topic: string): Promise<{ block: string }> => ({
-      block: (await search.search(topic, { limit: knobs.snippetsPerQuery }))
-        .map((r) => `- ${r.title}: ${r.snippet}`)
-        .join("\n"),
-    }));
+    (research
+      ? (topic: string): Promise<{ block: string }> =>
+          research.gatherResearch(topic)
+      : async (topic: string): Promise<{ block: string }> => ({
+          block: (await search.search(topic, { limit: knobs.snippetsPerQuery }))
+            .map((r) => `- ${r.title}: ${r.snippet}`)
+            .join("\n"),
+        }));
 
   // ── 6. covered topics + prior titles — both derive from source.coveredTopics.
   const gatherCoveredTopics = async (): Promise<string[]> =>
@@ -352,6 +391,9 @@ export function createDefaultInternals(
     titleCollisionSim: knobs.titleCollisionSim,
     titleEmbedSim: knobs.titleEmbedSim,
     searchTermsCount: knobs.searchTermsCount,
+    auditInputChars: knobs.auditInputChars,
+    seoInputChars: knobs.seoInputChars,
+    editWordFloor: knobs.editWordFloor,
   };
 
   // ── 9. section-writer + assembly deps. The REAL editor passes bound to
@@ -366,6 +408,13 @@ export function createDefaultInternals(
     } = {
     llm,
     gatherResearch,
+    // Thin-section backfill — the stack's dropped-URL retry adapted to the
+    // section-writer seam. Wired HERE, on the shared deps object BEFORE the
+    // `discoveryDeps = { ...blogDeps }` spread-copy below, so BOTH consumers
+    // (pipelineDeps.blogDeps AND discoveryDeps) see it.
+    retryThin: research
+      ? (s: PlanSection): Promise<string> => research.retryThin(s.heading)
+      : undefined,
     searchSnippets,
     systemPrompt,
     withRetry,
