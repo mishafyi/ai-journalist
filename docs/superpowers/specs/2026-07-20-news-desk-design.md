@@ -135,7 +135,7 @@ experimentation-by-config: same story, different persona file, rerun.
 | `parallels.ts` | propose → verify (official Wikipedia REST API) → select |
 | `gates.ts` (extend) | analysis gate profile (contract above) |
 | `presets/news-desk.ts` | wires everything; persona type + examples |
-| `clients/ollama-embedder.ts` | `Embedder` port via the official `ollama` npm client (mini pulls `nomic-embed-text`, ~274 MB) |
+| `clients/ollama-embedder.ts` | `Embedder` port via the official `ollama` npm client (mini pulls `embeddinggemma`, ~622 MB — 2025-class quality, multilingual for worldwide v2) |
 | `examples/run-news-desk.ts` | operator runner (files sink, mini Ollama) |
 | `ports.ts` (extend) | optional `outlet` on `SignalItem`; `PersonaProfile` |
 
@@ -147,9 +147,11 @@ Existing seams reused: `gatherResearch` override (added 2026-07-20),
 
 **New in v1:** `ollama` (official JS client — embedder; LLM adapter refactor
 optional), `cheerio` (GN description `<ol>` parsing + entity decoding).
-**Fallback tier:** `@mozilla/readability` + `linkedom` — plain-fetch
-extraction when Firecrawl fails on an outlet serving ordinary HTML (same
-content-quality floor). **Infra option (v1.5):** self-hosted RSSHub if the
+**Fallback tier:** `defuddle` — plain-fetch extraction when Firecrawl fails
+on an outlet serving ordinary HTML; actively maintained (Obsidian Web
+Clipper), multi-pass recovery, native Markdown output matching Firecrawl's
+(same content-quality floor). Conservative alternative if it misbehaves:
+`@mozilla/readability` + `linkedom` (huge install base, barely maintained). **Infra option (v1.5):** self-hosted RSSHub if the
 scrapability probe leaves the outlet set thin.
 **No new dep needed:** Wikipedia REST API (keyless fetch), cosine similarity
 (pure math), GN RSS (standard RSS 2.0 → existing `rss-parser`).
