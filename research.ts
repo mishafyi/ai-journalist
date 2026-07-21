@@ -44,3 +44,34 @@ export function relaxQuery(query: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+/** Skip-host classification is REUSED from ./news (identical list + matcher
+ *  already shipped there) and re-exported for one-import consumption. */
+export { isBlockedHost, DEFAULT_BLOCKED_HOSTS } from "./news";
+
+/** Class patterns, not an offender blocklist — ported with provenance from
+ *  the production adapter (they classified where a name-list classified 0/20). */
+export const DEFAULT_TIER1_RE =
+  /(\.gov|\.edu|\.mil)$|(^|\.)(reuters|apnews|bloomberg|wsj|nytimes|washingtonpost|ft|theinformation|axios|cnbc|techcrunch|arstechnica|theverge|wired|ieee|nature|sciencemag|spacenews|aviationweek|defensenews|breakingdefense|globenewswire|businesswire|prnewswire|sec|mckinsey|deloitte|gartner|isg-one|burtchworks)\.(com|org|net)$/i;
+export const DEFAULT_LOWTIER_RE =
+  /course|staffing|recruit|career|jobdescription|jobright|salesfolk|interviewquery|unteachable|usbusinessnews|automateamerica|bestof|top10|insights?hub|guestpost/i;
+
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+export interface TierRes {
+  tier1?: RegExp;
+  low?: RegExp;
+}
+
+export function sourceTier(url: string, res?: TierRes): 1 | 2 | 3 {
+  const host = hostOf(url);
+  if ((res?.tier1 ?? DEFAULT_TIER1_RE).test(host)) return 1;
+  if ((res?.low ?? DEFAULT_LOWTIER_RE).test(host)) return 3;
+  return 2;
+}
