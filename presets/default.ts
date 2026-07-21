@@ -168,6 +168,9 @@ export interface DefaultInternalsOptions {
   fetchPriorTitles?: () => Promise<string[]>;
   /** System prompt; omit → a generic-journalist prompt built from brand. */
   systemPrompt?: () => string;
+  /** Deep per-section researcher; omit → a snippet block from `search()`.
+   *  Supply to ground sections in scraped full pages instead of snippets. */
+  gatherResearch?: (topic: string) => Promise<{ block: string }>;
 }
 
 /** Per-factory monotonic counter for the default run id. */
@@ -249,13 +252,15 @@ export function createDefaultInternals(
     (await search.search(q, { limit })).map((r) => `${r.title} — ${r.snippet}`);
 
   // ── 5. deep research block — one gatherResearch per section primary query.
-  const gatherResearch = async (
-    topic: string,
-  ): Promise<{ block: string }> => ({
-    block: (await search.search(topic, { limit: knobs.snippetsPerQuery }))
-      .map((r) => `- ${r.title}: ${r.snippet}`)
-      .join("\n"),
-  });
+  //      Overridable (opts.gatherResearch) so hosts can ground sections in
+  //      scraped full pages; the default stays the cheap snippet block.
+  const gatherResearch =
+    opts.gatherResearch ??
+    (async (topic: string): Promise<{ block: string }> => ({
+      block: (await search.search(topic, { limit: knobs.snippetsPerQuery }))
+        .map((r) => `- ${r.title}: ${r.snippet}`)
+        .join("\n"),
+    }));
 
   // ── 6. covered topics + prior titles — both derive from source.coveredTopics.
   const gatherCoveredTopics = async (): Promise<string[]> =>
