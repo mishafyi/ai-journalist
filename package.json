@@ -79,6 +79,7 @@
   },
   "dependencies": {
     "@openrouter/sdk": "^0.13.21",
+    "cheerio": "^1.2.0",
     "date-fns": "^4.1.0",
     "firecrawl": "^4.25.2",
     "ollama": "^0.6.3",
