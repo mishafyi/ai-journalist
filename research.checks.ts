@@ -11,7 +11,9 @@ import {
   sourceTier,
   isBlockedHost,
   DEFAULT_BLOCKED_HOSTS,
+  createResearchStack,
 } from "./research";
+import type { SearchClient, SearchResult } from "./ports";
 
 let failures = 0;
 const ok = (name: string, cond: boolean, detail: string): void => {
@@ -77,6 +79,60 @@ ok("skip-host reuse: news.ts matcher covers subdomains and .mil",
     isBlockedHost("af.mil", DEFAULT_BLOCKED_HOSTS) &&
     !isBlockedHost("theguardian.com", DEFAULT_BLOCKED_HOSTS),
   "wsj-subdomain/.mil/guardian triple");
+
+// throttledSearch — gap gate, relaxed empty-retry, circuit breaker (Task 3).
+function fakeSearch(script: SearchResult[][]): SearchClient & { queries: string[] } {
+  const queries: string[] = [];
+  return {
+    queries,
+    async search(q: string): Promise<SearchResult[]> {
+      queries.push(q);
+      return script.shift() ?? [];
+    },
+  } as SearchClient & { queries: string[] };
+}
+const HIT: SearchResult = { title: "t", url: "https://apnews.com/a/b", snippet: "s" };
+const instant = { sleep: async (): Promise<void> => {}, now: (): number => 0 };
+
+{
+  // empty first attempt → retried with the RELAXED form
+  const sc = fakeSearch([[], [HIT]]);
+  const stack = createResearchStack({ search: sc, ...instant });
+  const r = await stack.throttledSearch('site:apnews.com "EU tariff ruling"', "check");
+  ok("empty retry re-runs the relaxed form",
+    r.length === 1 && sc.queries[1] === "EU tariff ruling",
+    JSON.stringify(sc.queries));
+}
+{
+  // scaffold query is skipped without any search call
+  const sc = fakeSearch([[HIT]]);
+  const stack = createResearchStack({ search: sc, ...instant });
+  const r = await stack.throttledSearch("reasons: psychological - ", "check");
+  ok("scaffold query short-circuits to []", r.length === 0 && sc.queries.length === 0,
+    JSON.stringify(sc.queries));
+}
+{
+  // breaker: after 8 all-empty searches, further calls short-circuit.
+  // NOTE the arithmetic: an exhausted throttledSearch issues 1 + searchEmptyRetries
+  // = 3 search() calls (empty retries re-run the SAME query when the relaxed form
+  // is identical — suspected-block semantics, zerog parity). So 8 exhausted calls
+  // = 24 fake-search calls before the breaker opens.
+  const script: SearchResult[][] = []; // every shift() → undefined → []
+  const sc = fakeSearch(script);
+  const stack = createResearchStack({ search: sc, ...instant });
+  for (let i = 0; i < 8; i++) await stack.throttledSearch(`dead query ${i} xxxx`, "check");
+  const callsBefore = sc.queries.length; // 8 × 3 attempts = 24
+  await stack.throttledSearch("one more dead query", "check");
+  ok("breaker opens after 8 consecutive empties (no further search calls)",
+    sc.queries.length === callsBefore,
+    `calls before=${callsBefore} after=${sc.queries.length}`);
+  stack.resetRunState();
+  script.push([HIT]); // fresh backend after reset — first attempt hits
+  await stack.throttledSearch("fresh after reset xxxx", "check");
+  ok("resetRunState closes the breaker (hit on first attempt = exactly one call)",
+    sc.queries.length === callsBefore + 1,
+    String(sc.queries.length));
+}
 
   if (failures > 0) {
     process.exitCode = 1;
