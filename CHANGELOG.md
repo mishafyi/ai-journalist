@@ -46,6 +46,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm subpath exports added: `./research`, `./testing/replay`,
   `./clients/ollama-llm`.
 
+- Google News trending source (`sources/google-news.ts` `fetchTrendingStories`):
+  ranked, pre-clustered top stories parsed from the GN RSS `<description>`
+  coverage list (cheerio); item links are JS-redirect stubs and are NEVER
+  decoded or scraped — resolution happens by headline-matching against your
+  own outlet feeds instead. Opt-in; defaults unchanged.
+- Newswire outlet index (`sources/newswire.ts` `createNewswire`): a parallel
+  (p-limit), per-feed best-effort headline→URL index over a curated
+  `OutletFeed[]` allowlist — one dead feed logs and drops, it never kills the
+  run. Opt-in; defaults unchanged.
+- Headline matcher (`matching.ts` `createHeadlineMatcher`): mechanical
+  trending/outlet-headline similarity for covered-story dedup and coverage
+  resolution — embeddings via the `Embedder` port when configured, trigram
+  fallback otherwise; the model never ranks. Opt-in; defaults unchanged.
+- Historical parallels (`parallels.ts` `proposeParallels`/`selectParallel`):
+  the LLM proposes schema-constrained candidates, Wikipedia's keyless REST API
+  verifies (opensearch → summary), and a mechanical token-overlap score
+  selects; none surviving verification is reported as honest absence, never
+  fabricated. Opt-in; defaults unchanged.
+- News-desk analysis contract + persona port (`gates.ts`
+  `checkAnalysisContract`, `ports.ts` `PersonaProfile`): mechanical acceptance
+  for a persona-written Analysis section — the required opening label, ≥2
+  named-outlet citations, and either the verified parallel with its
+  disanalogy paragraph or the verbatim honest-absence phrase; failing drafts
+  retry with the failures fed back into the prompt. Opt-in; defaults unchanged.
+- News-desk preset + runner + probe (`presets/news-desk.ts`
+  `createNewsDesk`/`PERSONAS`, `examples/run-news-desk.ts`,
+  `examples/probe-feeds.ts`): trending → cross-outlet resolution (≥`minSources`
+  scrapable floor) → full-scrape chunked evidence extraction → the FIXED
+  three-section retell → verified-parallel + contract-gated persona Analysis →
+  `## Sources`, with per-stage provenance artifacts under `out/runs/<runId>/`
+  and a covered-story ledger. The feed-probe script scrapes one article per
+  candidate outlet through Firecrawl to gate the runner's `FEEDS` allowlist
+  before it ships. Opt-in; defaults unchanged.
+- Ollama embedder client (`clients/ollama-embedder.ts` `createOllamaEmbedder`):
+  `Embedder` port via the official `ollama` npm client (model of record
+  `embeddinggemma`) for headline matching and covered-story dedup.
+- Teaser/paywall content-quality floor (`research.ts` `isTeaserContent`): a
+  stub-page marker regex (subscribe/sign-in/paywall language) joins the
+  existing length floor so a scraped teaser or paywall page never enters the
+  evidence corpus. Opt-in; defaults unchanged.
+- New dependencies: `ollama` (official client, `clients/ollama-embedder.ts`)
+  and `cheerio` (Google News RSS `<description>` parsing).
+- npm subpath exports added: `./matching`, `./parallels`,
+  `./presets/news-desk`, `./clients/ollama-embedder`.
+
 ## 0.8.2
 
 - Discovery query-gen prompt: operator guidance inverted — plain natural-language

@@ -61,6 +61,8 @@ export interface SignalItem {
   weight?: number;
   /** Opaque passthrough the adapter round-trips (e.g. a slug/id it needs later). */
   meta?: Record<string, unknown>;
+  /** Publishing outlet, when the signal item came from a named feed. */
+  outlet?: string;
 }
 
 /**
@@ -384,3 +386,10 @@ export interface RunInput {
 }
 
 export type RunPipeline = (input: RunInput) => Promise<GeneratedPost>;
+
+// ───────────────────────────────────────────────────────────────────────────
+// News-desk persona (Phase 2) — the analyst identity a host injects; the
+// analysis contract (gates.ts checkAnalysisContract) verifies its label.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface PersonaProfile { name: string; method: string; priors: string; voice: string }

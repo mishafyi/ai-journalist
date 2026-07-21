@@ -426,6 +426,30 @@ function fakeLlm(
     JSON.stringify(parts) === JSON.stringify(["- solo fact"]) && llm.prompts.length === 1,
     JSON.stringify(parts));
 }
+{
+  const { isTeaserContent } = await import("./research");
+  ok("teaser: under-floor is teaser", isTeaserContent("short", 400), "short/400");
+  ok("teaser: marker text is teaser even when long",
+    isTeaserContent(`${"x".repeat(500)} Subscribe to continue reading ${"y".repeat(200)}`, 400),
+    "subscribe marker");
+  ok("teaser: long clean content is NOT teaser",
+    !isTeaserContent("clean article body ".repeat(60), 400), "clean 1000+ chars");
+  // extractive path demotes a marker page to its snippet with zero LLM calls
+  const llmT = { prompts: [] as string[],
+    async complete(): Promise<string> { llmT.prompts.push("x"); return "- fact"; },
+    async completeStructured(): Promise<never> { throw new Error("unused"); } };
+  const scT = {
+    async search(): Promise<import("./ports").SearchResult[]> {
+      return [{ title: "Paywalled", url: "https://p.example/a", snippet: "the snippet",
+        content: `${"z".repeat(600)} Sign in to continue reading` }];
+    },
+  } as import("./ports").SearchClient;
+  const extractiveT = createExtractiveResearch({ llm: llmT as unknown as import("./ports").LlmClient,
+    search: scT, pagesPerTopic: 1, chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400 });
+  const rT = await extractiveT("teaser demotion check");
+  ok("extractive: marker page demoted to snippet, zero LLM calls",
+    rT.block.includes("the snippet") && llmT.prompts.length === 0, `${rT.block.slice(0, 60)} calls=${llmT.prompts.length}`);
+}
 
   if (failures > 0) {
     process.exitCode = 1;

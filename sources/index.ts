@@ -15,3 +15,13 @@ export { createHttpSource, type HttpSourceConfig } from "./http";
 export { createRssSource, type RssSource, type RssSourceConfig } from "./rss";
 export { createFileSource, type FileSourceConfig } from "./file";
 export { composeSources } from "./compose";
+export {
+  fetchTrendingStories,
+  parseTrending,
+  googleNewsTopUrl,
+  GN_US,
+  type GnEdition,
+  type TrendingStory,
+  type CoverageEntry,
+} from "./google-news";
+export { createNewswire, type OutletFeed, type OutletItem } from "./newswire";
