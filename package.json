@@ -81,6 +81,7 @@
     "@openrouter/sdk": "^0.13.21",
     "date-fns": "^4.1.0",
     "firecrawl": "^4.25.2",
+    "ollama": "^0.6.3",
     "p-limit": "^7.3.0",
     "remark": "^15.0.1",
     "remark-gfm": "^4.0.1",
