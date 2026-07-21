@@ -285,6 +285,10 @@ interface ResearchStackOpts {
   tierRes?: TierRes;
   recordArtifact?: (label: string, input: string, output: string) => void;
   log?: (line: string) => void;
+  /** Optional retry wrapper for scrape/search transport attempts — pass the
+   *  preset's withRetry so attempts land in run telemetry (zerogtalent
+   *  parity). Default: plain 2-attempt inline retry, no recording. */
+  withRetry?: <T>(label: string, fn: () => Promise<T>, o?: { maxAttempts?: number }) => Promise<T>;
   sleep?: (ms: number) => Promise<void>; // injectable for checks
   now?: () => number;                    // injectable for checks
 }
@@ -419,7 +423,7 @@ git commit -m "feat(research): throttled search — gap gate, relaxed empty-retr
 ```
 
 - [ ] **Step 2: Run to verify failure.**
-- [ ] **Step 3: Implement.** Adapt `generate.ts:1313–1480`: search via `throttledSearch` → filter `isSkipHost` hits into the pool → tier-rank (`sort by tier asc`) → chase loop (regex URLs out of each non-tier-1 content, tier-1 only, per-instance `chasedUrls` dedupe, root-path guard `pathname.length <= 1`, skip-host pooling, `scrape` via port when defined with 2 inline attempts, `chasedMinChars` floor, `primaryChaseMaxChars` cap with truncation marker) → assemble `### Source P{n}` chased blocks first, then ranked blocks with tier labels (tier-1 `" (tier 1 — primary/wire/major outlet)"`, tier-3 the full LOW-AUTHORITY warning string from the source, verbatim) → return `{ block, sources }`. `search.scrape === undefined` → skip chase entirely, `log` once. Zero results after retries → throw `Error("No search results for \"<topic>\" after N spaced attempts — cannot ground the article")`.
+- [ ] **Step 3: Implement.** Adapt `generate.ts:1313–1480`. **Port-field mapping (do not guess):** zerogtalent reads the Firecrawl hit's `r.markdown ?? r.description`; the engine port's equivalents are `SearchResult.content` (full page text when scraped) and `SearchResult.snippet` — so every `markdown` read becomes `content ?? ""` and every `description` read becomes `snippet`. Flow: search via `throttledSearch` → filter `isSkipHost` hits into the pool → tier-rank (`sort by tier asc`) → chase loop (regex URLs out of each non-tier-1 content, tier-1 only, per-instance `chasedUrls` dedupe, root-path guard `pathname.length <= 1`, skip-host pooling, `scrape` via port when defined with 2 inline attempts, `chasedMinChars` floor, `primaryChaseMaxChars` cap with truncation marker) → assemble `### Source P{n}` chased blocks first, then ranked blocks with tier labels (tier-1 `" (tier 1 — primary/wire/major outlet)"`, tier-3 the full LOW-AUTHORITY warning string from the source, verbatim) → return `{ block, sources }`. `search.scrape === undefined` → skip chase entirely, `log` once. Zero results after retries → throw `Error("No search results for \"<topic>\" after N spaced attempts — cannot ground the article")`.
 - [ ] **Step 4: Run to verify pass.**
 - [ ] **Step 5: Full gate** — `npm run build && npm run test:checks` → green.
 - [ ] **Step 6: Commit**
@@ -547,6 +551,24 @@ git commit -m "docs: research stack opt-in guide + changelog (Phase 1 complete)"
 - [ ] **Step 5: STOP — do not publish.** Version bump + npm publish ride the repo's tag-publish CI and are the operator's call. Phase 2 (news desk) gets its own plan on top of these APIs.
 
 ---
+
+## Dependencies considered and rejected (do not re-litigate without new evidence)
+
+- **`p-throttle`** (would replace the gap gate): no injectable clock — our
+  deterministic checks would need real 3s sleeps or global timer mocks under
+  raw tsx. The hand-rolled gate exists for testability.
+- **`p-retry`** (would replace the empty-retry loop): retries the SAME
+  thunk on throw; our retry substitutes the RELAXED query form on an empty
+  (non-throwing) result — wrong shape.
+- **`opossum`** (circuit breaker): hystrix-class machinery for a 5-line
+  consecutive-empty counter.
+- **`linkify-it`** (chase URL extraction): proper extractor, but the ported
+  regex + punctuation trim carries production fixes documented in the source
+  comments; swap only if edge cases surface in practice.
+
+**Deferred to the Phase 2 plan:** teaser/paywall-marker half of the
+content-quality floor (Phase 1 ships `minContentChars` only); `tldts` for
+outlet-host parsing if URL edge cases appear in the newswire source.
 
 ## Self-review (done at write time)
 
