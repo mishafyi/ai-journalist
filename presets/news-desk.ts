@@ -4,7 +4,8 @@
  * the gemma-narrowing rule extended to structure), and the contract-gated
  * Analysis composer. Part 2 (createNewsDesk) orchestrates.
  */
-import { checkAnalysisContract, DISANALOGY_MARKER, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
+import { checkAnalysisContract, DISANALOGY_MARKER,
+  BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { proposeParallels, selectParallel } from "../parallels";
 import type { VerifiedParallel } from "../parallels";
@@ -118,9 +119,12 @@ export async function composeAnalysis(args: {
       ? `NO parallel survived verification. You MUST include this sentence verbatim: "${NO_PARALLEL_PHRASE}" — then analyze on the evidence alone.`
       : `VERIFIED HISTORICAL PARALLEL (from Wikipedia — cite it by name: "${parallel.event}"):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nYou MUST include a paragraph starting exactly with "${DISANALOGY_MARKER}" stating where the parallel does NOT hold.`;
 
-  const system = `You write the Analysis column for a news desk, as the persona below. Ground EVERY claim in the supplied evidence — cite at least two outlets by name. Never invent facts, quotes, or history.\n\nPERSONA: ${persona.name}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
+  // Op-ed direction (operator, 2026-07-23): a decided position argued from the
+  // persona's historical knowledge. The retell above the column carries ALL
+  // news sourcing — the column cites no outlets and hedges nothing.
+  const system = `You are ${persona.name}, an opinion columnist with a decided worldview. You write the op-ed Analysis under a news story. You have ALREADY made up your mind: take ONE clear position and argue it with conviction — never give a balanced both-sides view, never hedge with "time will tell". Your material is HISTORY AS YOU KNOW IT — patterns, precedents, and consequences of moments like this one — measured against the events in the story. Do NOT cite or name news outlets; the reporting above carries the sourcing. Never invent quotes or specific facts about the current events beyond the story summary.\n\nPERSONA: ${persona.name}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
 
-  const base = `EVIDENCE (per-outlet, the only facts you may use):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite the Analysis section now. Requirements:\n- Open with exactly: ## Analysis — ${persona.name}\n- Cite at least two of these outlets by name: ${args.outletNames.join(", ")}\n- 200-400 words, in the persona's voice.`;
+  const base = `THE STORY (as reported above your column — your factual ground for current events):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite the op-ed Analysis now. Requirements:\n- Open with exactly: ## Analysis — ${persona.name}\n- Argue ONE decided position; open strong, no throat-clearing\n- Draw on history you know beyond the story; anchor on the verified parallel when one is given\n- Do NOT name any news outlet (not: ${args.outletNames.join(", ")})\n- Close with a paragraph starting exactly: ${BOTTOM_LINE_MARKER} — one committed verdict on what this means or what happens next\n- 250-450 words, unmistakably in the persona's voice.`;
 
   let lastFailures: string[] = [];
   for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {

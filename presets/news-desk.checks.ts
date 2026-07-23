@@ -1,6 +1,6 @@
 import { PERSONAS, buildRetellPlan, composeAnalysis, createNewsDesk } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
-import { DISANALOGY_MARKER, NO_PARALLEL_PHRASE } from "../gates";
+import { BOTTOM_LINE_MARKER, DISANALOGY_MARKER, NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
 import type { createDefaultInternals } from "./default";
 import type { TrendingStory } from "../sources/google-news";
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
 
   // composeAnalysis: first draft violates the contract, second complies —
   // the retry must feed the failures back into the prompt.
-  const GOOD = `## Analysis — ${PERSONAS.historian.name}\n\nBBC documents the fee spike; CNN confirms the reroute. Suez Crisis dynamics apply.\n\n${DISANALOGY_MARKER} Unlike 1956 there is no canal seizure — the modern lever is insurance pricing, which reverses faster than occupations do.`;
+  const GOOD = `## Analysis — ${PERSONAS.historian.name}\n\nChokepoints are leverage, always were. Suez Crisis dynamics apply, and the verdict of that history is unambiguous.\n\n${DISANALOGY_MARKER} Unlike 1956 there is no canal seizure — the modern lever is insurance pricing, which reverses faster than occupations do.\n\n${BOTTOM_LINE_MARKER} Premiums will outlast the shooting, and reroutes will become the map.`;
   let call = 0;
   const seenPrompts: string[] = [];
   const llm = {
@@ -57,14 +57,14 @@ async function main(): Promise<void> {
   });
   ok("composeAnalysis: retries until the contract passes", call === 2 && analysis === GOOD, `calls=${call}`);
   ok("retry prompt carries the contract failures back to the model",
-    seenPrompts[1].includes("previous attempt failed") && seenPrompts[1].includes("≥2"), seenPrompts[1].slice(0, 200));
+    seenPrompts[1].includes("previous attempt failed") && seenPrompts[1].includes("bottom line"), seenPrompts[1].slice(0, 200));
 
   // Honest no-parallel path: the prompt must DEMAND the verbatim phrase.
   let sawPhrase = false;
   const llm2 = {
     async complete(args: { prompt: string }): Promise<string> {
       sawPhrase = args.prompt.includes(NO_PARALLEL_PHRASE);
-      return `## Analysis — ${PERSONAS.historian.name}\n\nBBC and CNN agree on the repricing. ${NO_PARALLEL_PHRASE} The evidence alone says: premiums are the new blockade.`;
+      return `## Analysis — ${PERSONAS.historian.name}\n\nThe repricing is the story. ${NO_PARALLEL_PHRASE} History without a twin still teaches: premiums are the new blockade.\n\n${BOTTOM_LINE_MARKER} Insurance desks, not admirals, now set the tempo of this conflict.`;
     },
     async completeStructured(): Promise<never> { throw new Error("unused"); },
   } as unknown as LlmClient;
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
   const llm3 = {
     async complete(args: { prompt: string }): Promise<string> {
       sawPhraseEmpty = args.prompt.includes(NO_PARALLEL_PHRASE);
-      return `## Analysis — ${PERSONAS.historian.name}\n\nBBC and CNN agree on the repricing. ${NO_PARALLEL_PHRASE} The evidence alone says: premiums are the new blockade.`;
+      return `## Analysis — ${PERSONAS.historian.name}\n\nThe repricing is the story. ${NO_PARALLEL_PHRASE} History without a twin still teaches: premiums are the new blockade.\n\n${BOTTOM_LINE_MARKER} Insurance desks, not admirals, now set the tempo of this conflict.`;
     },
     async completeStructured(): Promise<never> { throw new Error("unused"); },
   } as unknown as LlmClient;
@@ -175,8 +175,9 @@ async function orchestrationChecks(): Promise<void> {
 
   // Routing fake llm: extractEvidence prompts start "TOPIC:"; everything else
   // (composeAnalysis + the assembled-markdown fact-check audit) gets a
-  // contract-compliant Analysis naming the parallel + both surviving outlets.
-  const ANALYSIS = `## Analysis — ${PERSONAS.historian.name}\n\nWire reports the 50-point move; Beacon confirms the market fall. The Panic of 1907 is the closest rhyme: a systemic liquidity squeeze halted by a lender of last resort.\n\n${DISANALOGY_MARKER} Unlike 1907, today's backstop is institutional — no private financier had to improvise the rescue, so the modern squeeze reverses faster.`;
+  // contract-v2-compliant Analysis: names the parallel, cites NO outlets
+  // (op-ed direction 2026-07-23), and carries the bottom-line verdict.
+  const ANALYSIS = `## Analysis — ${PERSONAS.historian.name}\n\nThe Panic of 1907 is the closest rhyme to this squeeze: a systemic liquidity halt ended only by a lender of last resort, and the lesson has not aged a day.\n\n${DISANALOGY_MARKER} Unlike 1907, today's backstop is institutional — no private financier had to improvise the rescue, so the modern squeeze reverses faster.\n\n${BOTTOM_LINE_MARKER} Central banks will blink first, exactly as they always have since 1907.`;
   const prompts: string[] = [];
   const llm = {
     async complete(args: { system?: string; prompt: string }): Promise<string> {

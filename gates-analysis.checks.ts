@@ -1,4 +1,4 @@
-import { checkAnalysisContract, NO_PARALLEL_PHRASE, DISANALOGY_MARKER } from "./gates";
+import { checkAnalysisContract, NO_PARALLEL_PHRASE, DISANALOGY_MARKER, BOTTOM_LINE_MARKER } from "./gates";
 
 async function main(): Promise<void> {
   let failures = 0;
@@ -13,9 +13,11 @@ async function main(): Promise<void> {
   const OUTLETS = ["BBC", "CNN", "NPR"] as const;
   const GOOD = `## Analysis — The Historian
 
-As BBC reported, fees tripled; CNN adds that insurers repriced within a week. The dynamic echoes the Suez Crisis: a chokepoint turned into leverage.
+Chokepoints have never been neutral infrastructure — they are leverage, and every power that has held one has eventually priced it. The Suez Crisis proved the pattern: control the artery and the world pays your politics. The same logic is repricing today's trade.
 
-${DISANALOGY_MARKER} Unlike 1956, no state actor has physically seized the waterway — the pressure is priced in, not imposed by occupation, and the coalition landscape is entirely different.`;
+${DISANALOGY_MARKER} Unlike 1956, no canal has been seized — the modern lever is insurance pricing, which reverses far faster than occupations do.
+
+${BOTTOM_LINE_MARKER} Risk premiums are now doing openly what blockades once did covertly, and they will outlast the shooting.`;
 
   const pass = checkAnalysisContract(GOOD, { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Suez Crisis" });
   ok("contract: compliant analysis passes", pass.ok, pass.failures.join("|"));
@@ -24,9 +26,12 @@ ${DISANALOGY_MARKER} Unlike 1956, no state actor has physically seized the water
     { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Suez Crisis" });
   ok("contract: missing persona label fails", !noLabel.ok && noLabel.failures.some((f) => f.includes("Analysis —")), noLabel.failures.join("|"));
 
-  const oneOutlet = checkAnalysisContract(GOOD.replace("CNN adds that insurers repriced within a week", "insurers repriced"),
+  const cites = checkAnalysisContract(GOOD.replace("every power that has held one", "as BBC reported, every power that has held one"),
     { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Suez Crisis" });
-  ok("contract: <2 outlet citations fails", !oneOutlet.ok && oneOutlet.failures.some((f) => f.includes("≥2")), oneOutlet.failures.join("|"));
+  ok("contract v2: citing a news outlet fails", !cites.ok && cites.failures.some((f) => f.includes("must NOT cite")), cites.failures.join("|"));
+  const noVerdict = checkAnalysisContract(GOOD.replace(BOTTOM_LINE_MARKER, "**In sum:**"),
+    { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Suez Crisis" });
+  ok("contract v2: missing bottom-line verdict fails", !noVerdict.ok && noVerdict.failures.some((f) => f.includes("bottom line") || f.includes("The bottom line")), noVerdict.failures.join("|"));
 
   const noParallelNamed = checkAnalysisContract(GOOD.replace(/Suez Crisis/g, "that old canal affair"),
     { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Suez Crisis" });
@@ -36,7 +41,7 @@ ${DISANALOGY_MARKER} Unlike 1956, no state actor has physically seized the water
     { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Suez Crisis" });
   ok("contract: missing disanalogy marker fails", !noDisanalogy.ok, noDisanalogy.failures.join("|"));
 
-  const honest = `## Analysis — The Historian\n\nBBC and NPR both document the repricing. ${NO_PARALLEL_PHRASE} What the evidence supports on its own terms: risk premiums are doing the work sanctions once did.`;
+  const honest = `## Analysis — The Historian\n\nHistory offers no clean twin for this moment. ${NO_PARALLEL_PHRASE} On its own terms, the evidence points one way: risk premiums are doing the work sanctions once did.\n\n${BOTTOM_LINE_MARKER} The market, not any navy, will decide how long this lasts.`;
   ok("contract: honest no-parallel path passes",
     checkAnalysisContract(honest, { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: null }).ok,
     "honest path");

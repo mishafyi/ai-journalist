@@ -966,6 +966,7 @@ export function structureBlockers(
 export const NO_PARALLEL_PHRASE =
   "No verified historical parallel survived fact-checking for this story.";
 export const DISANALOGY_MARKER = "**Where the parallel breaks down:**";
+export const BOTTOM_LINE_MARKER = "**The bottom line:**";
 
 export interface AnalysisContractArgs {
   personaName: string;
@@ -981,10 +982,19 @@ export function checkAnalysisContract(
   if (!analysis.trimStart().startsWith(`## Analysis — ${args.personaName}`)) {
     failures.push(`must open with "## Analysis — ${args.personaName}"`);
   }
+  // Contract v2 (op-ed, operator direction 2026-07-23): the Analysis argues a
+  // decided position from historical knowledge — it must NOT lean on the news
+  // outlets; the retell above carries all sourcing.
   const cited = args.outletNames.filter((o) => analysis.includes(o));
-  if (cited.length < 2) {
+  if (cited.length > 0) {
     failures.push(
-      `must cite ≥2 outlets by name from [${args.outletNames.join(", ")}] — found ${cited.length}`,
+      `must NOT cite news outlets — the retell carries sourcing; found [${cited.join(", ")}]`,
+    );
+  }
+  const bl = analysis.indexOf(BOTTOM_LINE_MARKER);
+  if (bl === -1 || analysis.slice(bl + BOTTOM_LINE_MARKER.length).trim().length < 40) {
+    failures.push(
+      `must end on "${BOTTOM_LINE_MARKER}" followed by a committed verdict (≥40 chars)`,
     );
   }
   if (args.parallelEvent === null) {
