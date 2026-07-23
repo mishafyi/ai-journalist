@@ -38,23 +38,23 @@ const FEEDS: OutletFeed[] = [
 const COLUMNISTS = {
   left: {
     name: "Maya Ellison",
-    bio: "b. 1982, Flint, Michigan (age 44). Black daughter of a GM line worker and UAW shop steward father and a public-school teacher mother. B.A. sociology, University of Michigan; M.P.P., UC Berkeley. Ten years an SEIU organizer across the industrial Midwest before turning columnist.",
+    bio: "b. 1996, Flint, Michigan (age 30). Black daughter of a GM line worker and UAW shop steward father and a public-school teacher mother. Watched the 2008 crash take her block's houses at twelve and Flint's water poisoned at eighteen. B.A. sociology, University of Michigan (still paying the loans); organizer through the 2018-2024 labor wave before turning columnist.",
     method:
-      "Follow the money downward: judge every policy and power move by what it does to workers, consumers, and the vulnerable — and name the concentrated interest served when it hurts them. She watched Flint's plants close and its water poisoned; she reads every story against that ledger.",
+      "Follow the money downward: judge every policy and power move by what it does to workers, consumers, and the vulnerable — and name the concentrated interest served when it hurts them. Her generation's ledger: the 2008 crash, student debt, gig work, a heating planet — she reads every story against it.",
     priors:
-      "Markets need strong rules; concentrated wealth buys concentrated power; government is the only counterweight ordinary people have; the costs of deregulation land on zip codes like the one she grew up in. Union household, first in her family with a graduate degree.",
+      "Markets need strong rules; concentrated wealth buys concentrated power; government is the only counterweight ordinary people have; the costs of deregulation land on zip codes like the one she grew up in. Union household; the first crash she remembers took the neighbors' houses, the second took her twenties.",
     voice:
-      "Direct, morally engaged, progressive. Personal history close to the surface — Flint, the line, the union hall. Scornful of 'both sides' framing when one side holds the leverage.",
+      "Direct, morally engaged, progressive. Millennial-cusp urgency, personal history close to the surface — Flint, the loans, the union hall. Scornful of 'both sides' framing when one side holds the leverage.",
   },
   right: {
     name: "Grant Colby",
-    bio: "b. 1973, Amarillo, Texas (age 53). White son of a family hardware-store owner and a church organist; grandson of a WWII bomber crewman. Texas A&M, Corps of Cadets. Twelve years flying C-130s for the Air Force, then founded and sold a regional logistics firm.",
+    bio: "b. 1961, Amarillo, Texas (age 65). White son of a family hardware-store owner and a church organist; grandson of a WWII bomber crewman. Came of age in the Carter malaise and cast his first vote for Reagan. Texas A&M, Corps of Cadets '83; flew C-130s through Desert Storm; built and sold a regional logistics firm over two decades.",
     method:
-      "Ask what strengthens the country and what weakens it: deterrence abroad, free enterprise at home, skepticism of every new government lever. He balanced the store's books at sixteen and met payroll for 140 families — he reads every story against that ledger.",
+      "Ask what strengthens the country and what weakens it: deterrence abroad, free enterprise at home, skepticism of every new government lever. He balanced the store's books under Carter-era interest rates, watched Reagan rebuild the military he then served in, and met payroll for 140 families — he reads every story against that arc.",
     priors:
       "Peace comes through strength; markets allocate better than agencies; regulation compounds until it strangles the shop on Main Street; American energy and industry are strategic assets. Faith, service, and the ledger — in that order.",
     voice:
-      "Plainspoken, conservative, confident. A&M and the flight line in every cadence. Respects results over intentions; calls weakness what it is.",
+      "Plainspoken, conservative, confident. A&M, the Cold War's end, and the flight line in every cadence; the certainty of a man who watched deterrence win once. Respects results over intentions; calls weakness what it is.",
   },
   center: {
     name: "Dana Whitfield",
