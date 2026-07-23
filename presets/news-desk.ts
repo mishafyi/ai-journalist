@@ -7,7 +7,7 @@
 import { checkAnalysisContract, DISANALOGY_MARKER,
   BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
-import { proposeParallels, selectParallel } from "../parallels";
+import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
 import type { VerifiedParallel } from "../parallels";
 import type { Plan } from "../planning";
 import type {
@@ -117,7 +117,7 @@ export async function composeAnalysis(args: {
   const parallelBlock =
     parallel === null
       ? `NO parallel survived verification. You MUST include this sentence verbatim: "${NO_PARALLEL_PHRASE}" — then analyze on the evidence alone.`
-      : `VERIFIED HISTORICAL PARALLEL (from Wikipedia — cite it by name: "${parallel.event}"):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nYou MUST include a paragraph starting exactly with "${DISANALOGY_MARKER}" stating where the parallel does NOT hold.`;
+      : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument, and include a paragraph starting exactly with "${DISANALOGY_MARKER}" stating where the parallel does NOT hold.`;
 
   // Op-ed direction (operator, 2026-07-23): a decided position argued from the
   // persona's historical knowledge. The retell above the column carries ALL
@@ -356,12 +356,43 @@ export function createNewsDesk(opts: {
           storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
           count: knobs.parallelCount,
         });
-        const parallel = await selectParallel({
+        let parallel = await selectParallel({
           candidates,
           minScore: knobs.parallelMinScore,
           ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }),
           log,
         });
+        // Memory-vs-record conflict (operator, 2026-07-23): when no candidate
+        // survives, regenerate ONCE with the verified record as corrective
+        // context instead of settling straight for honest absence. Use the
+        // first candidate whose page exists — its extract IS the record that
+        // contradicted the model's memory.
+        if (parallel === null && candidates.length > 0) {
+          let record = "";
+          for (const c of candidates) {
+            try {
+              const v = await verifyParallel({ candidate: c, ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }) });
+              if (v !== null && v.extract.trim() !== "") { record = `${v.wikipediaTitle}: ${v.extract}`; break; }
+            } catch {
+              // record hunt is best-effort; absence path remains below
+            }
+          }
+          if (record !== "") {
+            log?.("parallels: no candidate survived — one corrective re-propose with the verified record");
+            const retryCandidates = await proposeParallels({
+              llm,
+              storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
+              count: knobs.parallelCount,
+              correctiveContext: record.slice(0, 1200),
+            });
+            parallel = await selectParallel({
+              candidates: retryCandidates,
+              minScore: knobs.parallelMinScore,
+              ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }),
+              log,
+            });
+          }
+        }
         recordArtifact?.(
           "parallels",
           [
@@ -386,10 +417,9 @@ export function createNewsDesk(opts: {
 
         // Assembly: retell + Analysis + ## Sources (+ the parallel's Wikipedia
         // line when present).
+        // Verification is internal plumbing (operator, 2026-07-23): the reader
+        // never sees Wikipedia — no encyclopedia line in Sources.
         const sourceLines = contributing.map((c) => `- ${c.outlet}: [${c.title}](${c.url})`);
-        if (parallel !== null) {
-          sourceLines.push(`- Wikipedia: [${parallel.wikipediaTitle}](${parallel.wikipediaUrl})`);
-        }
         const finalArticle = {
           ...article,
           content: `${article.content}\n\n${analysis}\n\n## Sources\n${sourceLines.join("\n")}`,

@@ -284,8 +284,10 @@ async function orchestrationChecks(): Promise<void> {
   ok("## Sources lists exactly the 2 surviving outlets",
     md.includes("## Sources") && md.includes("- Wire: [") && md.includes("- Beacon: [") &&
       !md.includes("Teaser Daily") && !md.includes("Blocked Times"), md);
-  ok("parallel's Wikipedia URL line present in Sources",
-    md.includes("https://en.wikipedia.org/wiki/Panic_of_1907"), md);
+  // v2 (operator, 2026-07-23): verification is internal — the reader never
+  // sees Wikipedia. Sources must NOT carry an encyclopedia line.
+  ok("Sources carries NO Wikipedia line (verification is internal)",
+    !md.includes("- Wikipedia:") && !md.includes("wikipedia.org"), md.split("## Sources")[1] ?? md);
   ok("post returned = post published, slug from internals.slugify",
     post === (published as GeneratedPost | null) && post.slug === "central-bank-raises-interest-rates-to-twenty-year-high", post.slug);
   ok("evidence corpus threaded to internals via gatherResearch",

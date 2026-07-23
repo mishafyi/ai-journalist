@@ -29,6 +29,9 @@ export async function proposeParallels(args: {
   storySummary: string;
   count: number;
   model?: string;
+  /** Verified encyclopedia text from a failed round — the re-propose prompt
+   *  tells the model its memory conflicted and THIS record wins. */
+  correctiveContext?: string;
 }): Promise<ParallelCandidate[]> {
   const result = await args.llm.completeStructured({
     messages: [
@@ -39,7 +42,7 @@ export async function proposeParallels(args: {
       },
       {
         role: "user",
-        content: `STORY:\n${args.storySummary}\n\nPropose exactly ${args.count} candidate parallels. For each: era (the year or period, e.g. "1956"), event (the standard name, e.g. "Suez Crisis"), actors (1-6 principal parties), claimedSimilarity (one sentence: which dynamic matches).`,
+        content: `STORY:\n${args.storySummary}\n\nPropose exactly ${args.count} candidate parallels. For each: era (the year or period, e.g. "1956"), event (the standard name, e.g. "Suez Crisis"), actors (1-6 principal parties), claimedSimilarity (one sentence: which dynamic matches).${args.correctiveContext === undefined ? "" : `\n\nYOUR PREVIOUS CANDIDATES FAILED VERIFICATION — your memory of at least one event conflicted with the historical record. The verified record says:\n${args.correctiveContext}\nRe-propose candidates whose era, actors, and facts MATCH documented history; the record always wins over your memory.`}`,
       },
     ],
     schema: z.object({ candidates: z.array(ParallelCandidate).min(1).max(args.count) }),
