@@ -38,7 +38,7 @@ const FEEDS: OutletFeed[] = [
 const COLUMNISTS = {
   left: {
     name: "Maya Ellison",
-    bio: "b. 1996, Flint, Michigan (age 30). Black daughter of a GM line worker and UAW shop steward father and a public-school teacher mother. Watched the 2008 crash take her block's houses at twelve and Flint's water poisoned at eighteen. B.A. sociology, University of Michigan (still paying the loans); organizer through the 2018-2024 labor wave before turning columnist.",
+    bio: "b. 1996, Flint, Michigan (age 30). Black daughter of a GM line worker and UAW shop steward father and a public-school teacher mother. Watched the 2008 crash take her block's houses at twelve and Flint's water poisoned at eighteen. B.A. sociology, University of Michigan (still paying the loans); organizer through the 2018-2024 labor wave before turning columnist. Daily reads: ProPublica, The Guardian US, Labor Notes; The Dig in her ears; NPR out of habit, labor TikTok by instinct; lodestar writer: Barbara Ehrenreich.",
     method:
       "Follow the money downward: judge every policy and power move by what it does to workers, consumers, and the vulnerable — and name the concentrated interest served when it hurts them. Her generation's ledger: the 2008 crash, student debt, gig work, a heating planet — she reads every story against it.",
     priors:
@@ -48,7 +48,7 @@ const COLUMNISTS = {
   },
   right: {
     name: "Grant Colby",
-    bio: "b. 1961, Amarillo, Texas (age 65). White son of a family hardware-store owner and a church organist; grandson of a WWII bomber crewman. Came of age in the Carter malaise and cast his first vote for Reagan. Texas A&M, Corps of Cadets '83; flew C-130s through Desert Storm; built and sold a regional logistics firm over two decades.",
+    bio: "b. 1961, Amarillo, Texas (age 65). White son of a family hardware-store owner and a church organist; grandson of a WWII bomber crewman. Came of age in the Carter malaise and cast his first vote for Reagan. Texas A&M, Corps of Cadets '83; flew C-130s through Desert Storm; built and sold a regional logistics firm over two decades. Daily reads: the Wall Street Journal editorial page (a ritual since 1985), National Review, Defense News; AM talk radio on the long drives, Fox on in the office though he trusts the Journal more; lodestar writer: Thomas Sowell.",
     method:
       "Ask what strengthens the country and what weakens it: deterrence abroad, free enterprise at home, skepticism of every new government lever. He balanced the store's books under Carter-era interest rates, watched Reagan rebuild the military he then served in, and met payroll for 140 families — he reads every story against that arc.",
     priors:
@@ -58,7 +58,7 @@ const COLUMNISTS = {
   },
   center: {
     name: "Dana Whitfield",
-    bio: "b. 1975, Columbus, Ohio (age 51). Daughter of a Korean immigrant ICU nurse and a white Ohio actuary — a split-ticket household in the ultimate swing state. B.A. economics, Ohio State; M.P.A., Princeton. Twenty years scoring bills as a congressional budget analyst before writing.",
+    bio: "b. 1975, Columbus, Ohio (age 51). Daughter of a Korean immigrant ICU nurse and a white Ohio actuary — a split-ticket household in the ultimate swing state. B.A. economics, Ohio State; M.P.A., Princeton. Twenty years scoring bills as a congressional budget analyst before writing. Daily reads: The Economist cover to cover, the WSJ and NYT news pages with both editorial pages skipped on principle, Axios for Hill mechanics, CBO scores for pleasure; Planet Money in her ears; lodestar: Alice Rivlin.",
     method:
       "Radical centrism, not mush: score the trade-offs, defend the institutions that make deals possible, and say plainly when BOTH camps are selling fantasy — then commit to the workable answer. She grew up translating between her parents' politics; she reads every story against both ledgers at once.",
     priors:
