@@ -147,6 +147,25 @@ async function main(): Promise<void> {
       block === "" && logged.some((l) => l.includes("non-blocking")), logged.join("|"));
   }
 
+  // ── multi-column op-ed page (operator, 2026-07-23): every persona writes
+  // its own contract-gated column; bios render with the AI-persona marker ──
+  {
+    const second = { name: "Test Realist", method: "m", priors: "p", voice: "v", bio: "former test analyst" };
+    const mk = (name: string): string => `## Analysis — ${name}\n\nDecided take from ${name}. ${NO_PARALLEL_PHRASE} History still teaches.\n\n${BOTTOM_LINE_MARKER} ${name} calls it: this holds until it breaks, and it breaks late.`;
+    const llmMulti = {
+      async complete(args: { system?: string; prompt: string }): Promise<string> {
+        const who = args.prompt.includes("Test Realist") || (args.system ?? "").includes("Test Realist") ? "Test Realist" : PERSONAS.historian.name;
+        return mk(who);
+      },
+      async completeStructured(): Promise<never> { throw new Error("unused"); },
+    } as unknown as LlmClient;
+    const one = await composeAnalysis({ llm: llmMulti, persona: PERSONAS.historian, evidenceBlock: "…", outletNames: ["BBC"], parallel: null, maxAttempts: 1 });
+    const two = await composeAnalysis({ llm: llmMulti, persona: second, evidenceBlock: "…", outletNames: ["BBC"], parallel: null, maxAttempts: 1 });
+    ok("multi-column: each persona passes its own contract under its own name",
+      one.includes(`## Analysis — ${PERSONAS.historian.name}`) && two.includes("## Analysis — Test Realist"),
+      `${one.slice(0, 40)} | ${two.slice(0, 40)}`);
+  }
+
   if (failures > 0) {
     process.exitCode = 1;
     return;

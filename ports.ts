@@ -392,4 +392,13 @@ export type RunPipeline = (input: RunInput) => Promise<GeneratedPost>;
 // analysis contract (gates.ts checkAnalysisContract) verifies its label.
 // ───────────────────────────────────────────────────────────────────────────
 
-export interface PersonaProfile { name: string; method: string; priors: string; voice: string }
+export interface PersonaProfile {
+  name: string;
+  method: string;
+  priors: string;
+  voice: string;
+  /** Reader-facing one-liner rendered under the column header. Always
+   *  presented with an explicit AI-persona marker — invented bios must never
+   *  read as real humans. */
+  bio?: string;
+}

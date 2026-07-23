@@ -124,7 +124,7 @@ export async function composeAnalysis(args: {
   // Op-ed direction (operator, 2026-07-23): a decided position argued from the
   // persona's historical knowledge. The retell above the column carries ALL
   // news sourcing — the column cites no outlets and hedges nothing.
-  const system = `You are ${persona.name}, an opinion columnist with a decided worldview. You write the op-ed Analysis under a news story. You have ALREADY made up your mind: take ONE clear position and argue it with conviction — never give a balanced both-sides view, never hedge with "time will tell". Your material is HISTORY AS YOU KNOW IT — patterns, precedents, and consequences of moments like this one — measured against the events in the story. Do NOT cite or name news outlets; the reporting above carries the sourcing. Never invent quotes or specific facts about the current events beyond the story summary.\n\nPERSONA: ${persona.name}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
+  const system = `You are ${persona.name}, an opinion columnist with a decided worldview. You write the op-ed Analysis under a news story. You have ALREADY made up your mind: take ONE clear position and argue it with conviction — never give a balanced both-sides view, never hedge with "time will tell". Your material is HISTORY AS YOU KNOW IT — patterns, precedents, and consequences of moments like this one — measured against the events in the story. Do NOT cite or name news outlets; the reporting above carries the sourcing. Never invent quotes or specific facts about the current events beyond the story summary.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
 
   const base = `THE STORY (as reported above your column — your factual ground for current events):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite the op-ed Analysis now. Requirements:\n- Open with exactly: ## Analysis — ${persona.name}\n- Argue ONE decided position; open strong, no throat-clearing\n- Draw on history you know beyond the story; anchor on the verified parallel when one is given\n- Do NOT name any news outlet (not: ${args.outletNames.join(", ")})\n- Close with a paragraph starting exactly: ${BOTTOM_LINE_MARKER} — one committed verdict on what this means or what happens next\n- 250-450 words, unmistakably in the persona's voice.`;
 
@@ -340,6 +340,10 @@ export function createNewsDesk(opts: {
   embedder?: Embedder;
   feeds: readonly OutletFeed[];
   persona: PersonaProfile;
+  /** Optional additional columnists: when present, EVERY persona in
+   *  [persona, ...personas] writes its own contract-gated Analysis column
+   *  under the same retell + verified parallel — an op-ed page, one story. */
+  personas?: readonly PersonaProfile[];
   brand: BrandProfile;
   sink: Sink;
   knobs: NewsDeskKnobs;
@@ -574,15 +578,30 @@ export function createNewsDesk(opts: {
         );
 
         // Contract-gated persona Analysis over the same corpus.
-        const analysis = await composeAnalysis({
-          llm,
-          persona,
-          evidenceBlock: evidence,
-          outletNames: contributing.map((c) => c.outlet),
-          parallel,
-          maxAttempts: knobs.analysisAttempts,
-          log,
-        });
+        // One column per persona (op-ed page): same retell, same verified
+        // parallel, each columnist's own contract-gated take. Bios render
+        // under each header with an explicit AI-persona marker — invented
+        // bios must never read as real humans.
+        const columnists: readonly PersonaProfile[] = [persona, ...(opts.personas ?? [])];
+        const columns: string[] = [];
+        for (const columnist of columnists) {
+          const column = await composeAnalysis({
+            llm,
+            persona: columnist,
+            evidenceBlock: evidence,
+            outletNames: contributing.map((c) => c.outlet),
+            parallel,
+            maxAttempts: knobs.analysisAttempts,
+            log,
+          });
+          const header = `## Analysis — ${columnist.name}`;
+          columns.push(
+            columnist.bio === undefined
+              ? column
+              : column.replace(header, `${header}\n*AI columnist persona — ${columnist.bio}*`),
+          );
+        }
+        const analysis = columns.join("\n\n");
         recordArtifact?.("analysis", analysis);
 
         // Assembly: retell + Analysis + ## Sources (+ the parallel's Wikipedia
