@@ -29,6 +29,8 @@ import {
   DEFAULT_BLOCKED_HOSTS,
 } from "../research";
 import { createRunContext } from "../run-context";
+import { z } from "zod";
+import type { DatagodClient } from "../clients/datagod";
 import { fetchTrendingStories, GN_US } from "../sources/google-news";
 import type { TrendingStory } from "../sources/google-news";
 import { createNewswire } from "../sources/newswire";
@@ -183,6 +185,155 @@ export interface NewsDeskKnobs {
  * seams whose defaults are the real implementations, so offline checks drive
  * the REAL orchestration through fakes at exactly those seams.
  */
+// ───────────────────────────────────────────────────────────────────────────
+// Primary-data plays (DataGod) — WHICH API for WHICH story, as data.
+// Descriptions come from datagod's own docs/endpoints.csv "Use for" text;
+// the selection LLM call picks 0-2 plays from THIS menu with tightly
+// constrained params — it never invents endpoints (gemma-narrowing rule).
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface DataPlay {
+  id: string;
+  /** When to use it — shown verbatim to the selection LLM. */
+  useFor: string;
+  /** Build the request from validated params. */
+  request(params: { seriesId?: string; query?: string; ticker?: string }): {
+    path: string;
+    params?: Record<string, string | number>;
+  } | null;
+}
+
+export const FRED_SERIES_WHITELIST = [
+  "GDP", "CPIAUCSL", "UNRATE", "FEDFUNDS", "DGS10", "SP500", "DCOILWTICO",
+] as const;
+
+export const DATA_PLAYS: readonly DataPlay[] = [
+  {
+    id: "fred_series",
+    useFor:
+      "US macroeconomic indicators the story turns on: GDP growth, inflation/CPI (CPIAUCSL), unemployment (UNRATE), Fed interest rates (FEDFUNDS), 10-year Treasury yield (DGS10), S&P 500 (SP500), WTI crude oil price (DCOILWTICO). seriesId MUST be one of the whitelist.",
+    request: (p) =>
+      p.seriesId !== undefined && (FRED_SERIES_WHITELIST as readonly string[]).includes(p.seriesId)
+        ? { path: `/fred/${p.seriesId}`, params: { limit: 6, sort_order: "desc" } }
+        : null,
+  },
+  {
+    id: "usaspending_search",
+    useFor:
+      "Who received US federal money: contracts, grants, award amounts, defense or agency spending. query = 1-3 plain keywords (a contractor, program, or agency named in the story).",
+    request: (p) =>
+      p.query !== undefined && p.query.trim().length >= 3 && p.query.length <= 60
+        ? { path: "/usaspending/search", params: { q: p.query.trim(), limit: 5 } }
+        : null,
+  },
+  {
+    id: "nasdaq_price",
+    useFor:
+      "Current share price and day move for a US-listed company central to the story. ticker = its exchange symbol (e.g. AAPL, GM, LMT).",
+    request: (p) =>
+      p.ticker !== undefined && /^[A-Z.\-]{1,8}$/.test(p.ticker)
+        ? { path: `/nasdaq/price/${p.ticker}`, params: {} }
+        : null,
+  },
+  {
+    id: "treasury_debt",
+    useFor:
+      "US national debt totals (debt to the penny) when the story is about federal debt, deficits, or fiscal capacity.",
+    request: () => ({ path: "/treasury/debt", params: { limit: 5 } }),
+  },
+];
+
+const DataPlayPick = z.object({
+  plays: z
+    .array(
+      z.object({
+        id: z.string(),
+        seriesId: z.string().optional(),
+        query: z.string().optional(),
+        ticker: z.string().optional(),
+      }),
+    )
+    .max(2),
+});
+
+/** Select 0-2 primary-data plays for a story (one narrow schema-constrained
+ *  call), fetch them best-effort, and compact each payload into evidence
+ *  bullets via the proven chunked extractor. Returns "" when nothing applies
+ *  or nothing survives — data plays must never block an article. */
+export async function gatherPrimaryData(args: {
+  llm: LlmClient;
+  datagod: DatagodClient;
+  plays: readonly DataPlay[];
+  storyHeadline: string;
+  evidenceHead: string;
+  model?: string;
+  log?: (line: string) => void;
+  recordArtifact?: (label: string, content: string) => void;
+}): Promise<string> {
+  const menu = args.plays
+    .map((p) => `- id "${p.id}": ${p.useFor}`)
+    .join("\n");
+  let picks: z.infer<typeof DataPlayPick>;
+  try {
+    picks = await args.llm.completeStructured({
+      messages: [
+        {
+          role: "system",
+          content:
+            "You decide whether PRIMARY DATA would materially strengthen a news article, and which of a fixed menu of data plays to run. Be selective: most stories need NONE — return an empty plays array unless an authoritative figure from the menu would clearly sharpen this specific story. Never pick a play whose subject the story does not touch.",
+        },
+        {
+          role: "user",
+          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS (excerpt):\n${args.evidenceHead}\n\nMENU:\n${menu}\n\nPick 0-2 plays. For fred_series set seriesId (whitelist only); for usaspending_search set query; for nasdaq_price set ticker.`,
+        },
+      ],
+      schema: DataPlayPick,
+      schemaName: "data_play_pick",
+      ...(args.model === undefined ? {} : { model: args.model }),
+      temperature: 0.2,
+    });
+  } catch (err: unknown) {
+    args.log?.(`datagod: play selection failed (skipping primary data): ${String(err)}`);
+    return "";
+  }
+  const blocks: string[] = [];
+  for (const pick of picks.plays) {
+    const play = args.plays.find((p) => p.id === pick.id);
+    if (play === undefined) {
+      args.log?.(`datagod: unknown play "${pick.id}" — skipped`);
+      continue;
+    }
+    const req = play.request(pick);
+    if (req === null) {
+      args.log?.(`datagod: play "${pick.id}" rejected params ${JSON.stringify(pick)} — skipped`);
+      continue;
+    }
+    try {
+      const data = await args.datagod.get(req.path, req.params);
+      const raw = JSON.stringify(data).slice(0, 20_000);
+      const parts = await extractEvidence({
+        llm: args.llm,
+        topic: args.storyHeadline,
+        page: { url: req.path, title: `PRIMARY DATA ${play.id}`, content: raw },
+        chunkChars: 20_000,
+        maxChunksPerPage: 1,
+        ...(args.log === undefined ? {} : { log: args.log }),
+      });
+      if (parts.length === 0) {
+        args.log?.(`datagod: play "${pick.id}" returned nothing relevant — dropped`);
+        continue;
+      }
+      blocks.push(
+        `PRIMARY DATA (${play.id} — authoritative source; PREFER these figures over any outlet re-tell):\n${parts.join("\n")}`,
+      );
+      args.recordArtifact?.(`datagod:${play.id}`, `${req.path} ${JSON.stringify(req.params)}\n${parts.join("\n")}`);
+    } catch (err: unknown) {
+      args.log?.(`datagod: play "${pick.id}" fetch failed (non-blocking): ${String(err)}`);
+    }
+  }
+  return blocks.join("\n\n");
+}
+
 export function createNewsDesk(opts: {
   llm: LlmClient;
   search: SearchClient;
@@ -194,6 +345,11 @@ export function createNewsDesk(opts: {
   knobs: NewsDeskKnobs;
   coveredTopics?: () => Promise<CoveredTopic[]>;
   blockedHosts?: readonly string[]; // default DEFAULT_BLOCKED_HOSTS
+  /** Optional DataGod instance — when present, 0-2 primary-data plays run per
+   *  story (see DATA_PLAYS) and their figures join the evidence as
+   *  authoritative first-party data. Absent → no behavior change. */
+  datagod?: DatagodClient;
+  dataPlays?: readonly DataPlay[]; // default DATA_PLAYS
   log?: (line: string) => void;
   recordArtifact?: (label: string, content: string) => void;
   // test seams (defaults are the real implementations):
@@ -327,7 +483,21 @@ export function createNewsDesk(opts: {
           );
           continue;
         }
-        const evidence = contributing.map((c) => c.block).join("\n\n");
+        let evidence = contributing.map((c) => c.block).join("\n\n");
+        // Primary data (DataGod): selected per story from the plays menu,
+        // best-effort, appended as authoritative first-party evidence.
+        if (opts.datagod !== undefined) {
+          const primary = await gatherPrimaryData({
+            llm,
+            datagod: opts.datagod,
+            plays: opts.dataPlays ?? DATA_PLAYS,
+            storyHeadline: story.headline,
+            evidenceHead: evidence.slice(0, 1200),
+            ...(opts.log === undefined ? {} : { log: opts.log }),
+            ...(recordArtifact === undefined ? {} : { recordArtifact }),
+          });
+          if (primary !== "") evidence = `${evidence}\n\n${primary}`;
+        }
         recordArtifact?.(
           "evidence",
           `${contributing.map((c) => c.outlet).join(", ")} — ${evidence.length} chars\n${contributing.map((c) => `${c.outlet}: ${c.url}`).join("\n")}`,

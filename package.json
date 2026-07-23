@@ -41,6 +41,7 @@
     "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
     "./clients/ollama-llm": "./clients/ollama-llm.ts",
     "./clients/ollama-embedder": "./clients/ollama-embedder.ts",
+    "./clients/datagod": "./clients/datagod.ts",
     "./clients/firecrawl-search": "./clients/firecrawl-search.ts",
     "./clients/searxng-search": "./clients/searxng-search.ts",
     "./gates": "./gates.ts",

@@ -91,6 +91,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - npm subpath exports added: `./matching`, `./parallels`,
   `./presets/news-desk`, `./clients/ollama-embedder`.
 
+- DataGod integration (`clients/datagod.ts` + `DATA_PLAYS`/`gatherPrimaryData`
+  in the news-desk preset): a generic envelope client for a self-hosted
+  [DataGod](https://github.com/mishafyi/datagod) instance; per story, one
+  narrow schema-constrained call picks 0-2 plays from a fixed menu (FRED
+  macro series, USAspending awards, Nasdaq price, Treasury debt) and the
+  fetched figures join the evidence as authoritative primary data. New
+  `datagod-drift.checks.ts` + weekly CI validate the menu against datagod's
+  published endpoint index. Opt-in (`datagod` option); defaults unchanged.
+
 ## 0.8.2
 
 - Discovery query-gen prompt: operator guidance inverted — plain natural-language

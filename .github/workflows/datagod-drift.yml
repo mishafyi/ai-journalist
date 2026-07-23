@@ -1,0 +1,24 @@
+name: datagod-drift
+# Automatic adapter/contract tripwire: validates the DATA_PLAYS menu against
+# the datagod repo's published endpoint index on every push, weekly, and on
+# demand. When datagod changes something the menu relies on, this fails and
+# names the missing endpoint. (Instant cross-repo trigger available later:
+# add a repository_dispatch Action in datagod with a PAT — this cron covers
+# the gap without any token.)
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx tsx datagod-drift.checks.ts

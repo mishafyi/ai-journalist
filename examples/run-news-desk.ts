@@ -7,6 +7,7 @@
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createNewsDesk, PERSONAS } from "../presets/news-desk";
+import { createDatagod } from "../clients/datagod";
 import { createOllamaLlm } from "../clients/ollama-llm";
 import { createOllamaEmbedder } from "../clients/ollama-embedder";
 import { createFirecrawlSearch } from "../clients/firecrawl-search";
@@ -93,6 +94,10 @@ async function main(): Promise<void> {
     persona: PERSONAS.historian,
     brand,
     sink,
+    // Primary data (DataGod): active when the instance env is present.
+    ...(process.env.DATAGOD_URL !== undefined && process.env.DATAGOD_API_KEY !== undefined
+      ? { datagod: createDatagod({ apiUrl: process.env.DATAGOD_URL, apiKey: process.env.DATAGOD_API_KEY }) }
+      : {}),
     knobs: {
       trendingLimit: 20, minSources: 3, pagesMax: 6,
       chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400,

@@ -1,4 +1,4 @@
-import { PERSONAS, buildRetellPlan, composeAnalysis, createNewsDesk } from "./news-desk";
+import { DATA_PLAYS, PERSONAS, buildRetellPlan, composeAnalysis, createNewsDesk, gatherPrimaryData } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { BOTTOM_LINE_MARKER, DISANALOGY_MARKER, NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -103,6 +103,49 @@ async function main(): Promise<void> {
     threw = String(err).includes("analysis failed the contract");
   }
   ok("exhausted attempts throw with contract context", threw, "throw path");
+
+  // ── gatherPrimaryData: the which-API-when layer (operator, 2026-07-23) ──
+  {
+    const dgCalls: string[] = [];
+    const fakeDg = { async get(path: string): Promise<unknown> { dgCalls.push(path); return { observations: [{ date: "2026-07-01", value: "3.2" }] }; } };
+    let menuSeen = false;
+    const llmSel = {
+      async complete(args: { prompt: string }): Promise<string> {
+        // extractEvidence call on the fetched payload
+        return args.prompt.includes("3.2") ? "- CPI at 3.2 (2026-07-01)" : "NONE";
+      },
+      async completeStructured(args: { messages: { content: string }[] }): Promise<unknown> {
+        menuSeen = args.messages.some((m) => m.content.includes('id "fred_series"') && m.content.includes("usaspending_search"));
+        return { plays: [{ id: "fred_series", seriesId: "CPIAUCSL" }, { id: "nasdaq_price", ticker: "bad ticker!" }] };
+      },
+    } as unknown as LlmClient;
+    const block = await gatherPrimaryData({
+      llm: llmSel, datagod: fakeDg, plays: DATA_PLAYS,
+      storyHeadline: "Inflation shock", evidenceHead: "coverage says prices rose",
+    });
+    ok("primary-data: selection prompt carries the full plays menu", menuSeen, "menu");
+    ok("primary-data: valid play fetched via whitelisted path",
+      dgCalls.length === 1 && dgCalls[0] === "/fred/CPIAUCSL", JSON.stringify(dgCalls));
+    ok("primary-data: invalid params rejected mechanically (bad ticker never fetched)",
+      !dgCalls.some((c) => c.includes("nasdaq")), JSON.stringify(dgCalls));
+    ok("primary-data: block labeled authoritative with extracted figures",
+      block.includes("PRIMARY DATA (fred_series") && block.includes("CPI at 3.2"), block.slice(0, 120));
+  }
+  {
+    // fetch failure is non-blocking → empty block
+    const fakeDgBad = { async get(): Promise<unknown> { throw new Error("HTTP 502"); } };
+    const llmSel2 = {
+      async complete(): Promise<string> { return "NONE"; },
+      async completeStructured(): Promise<unknown> { return { plays: [{ id: "treasury_debt" }] }; },
+    } as unknown as LlmClient;
+    const logged: string[] = [];
+    const block = await gatherPrimaryData({
+      llm: llmSel2, datagod: fakeDgBad, plays: DATA_PLAYS,
+      storyHeadline: "Debt ceiling fight", evidenceHead: "…", log: (l) => logged.push(l),
+    });
+    ok("primary-data: fetch failure is non-blocking and logged",
+      block === "" && logged.some((l) => l.includes("non-blocking")), logged.join("|"));
+  }
 
   if (failures > 0) {
     process.exitCode = 1;
