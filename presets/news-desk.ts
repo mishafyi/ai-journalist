@@ -1,8 +1,8 @@
 /**
- * presets/news-desk.ts — the spec'd news-desk path. Part 1: neutral personas,
- * the FIXED retell template (the model fills sections, never designs them —
- * the gemma-narrowing rule extended to structure), and the contract-gated
- * Analysis composer. Part 2 (createNewsDesk) orchestrates.
+ * presets/news-desk.ts — the news-desk path. Part 1: the author-version
+ * contract (checkAuthorVersionContract) and its retry-until-contract composer.
+ * Part 2 (createNewsDesk) orchestrates: trending → resolution → floors →
+ * verified parallel → ONE columnist's fused column → publish.
  */
 import { DISANALOGY_MARKER, BOTTOM_LINE_MARKER,
   mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
@@ -398,12 +398,9 @@ export function createNewsDesk(opts: {
   embedder?: Embedder;
   feeds: readonly OutletFeed[];
   persona: PersonaProfile;
-  /** Author-versions format (operator, 2026-07-23): when set, there is NO
-   *  neutral retell — each columnist writes one COMPLETE capped column
-   *  (retell + take fused) published as its OWN post whose title is the
-   *  source-optimized trending headline verbatim (never model-invented) and
-   *  whose slug gets the columnist's first name as suffix. Unset → the
-   *  op-ed-page format above (one post: retell + Analysis columns). */
+  /** One take per story (operator, 2026-07-24): the persona's fused column
+   *  (retell + take) IS the article, titled with the source-optimized trending
+   *  headline verbatim (never model-invented). wordCap bounds the column. */
   authorVersions?: { wordCap: number };
   brand: BrandProfile;
   sink: Sink;
