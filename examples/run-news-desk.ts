@@ -196,8 +196,9 @@ async function main(): Promise<void> {
       const path = `out/${post.slug}.md`;
       await writeFile(path, post.markdown);
       // Meta sidecar: the loop publishes every new md with the title/byline
-      // recorded here (author-versions posts each carry their own persona
-      // byline — the loop must not guess from filenames).
+      // recorded here (the byline is the randomly drawn columnist — the loop
+      // must not guess from filenames). `parallel` feeds the next runs'
+      // recentParallels window.
       await writeFile(
         `out/${post.slug}.meta.json`,
         JSON.stringify(
@@ -210,6 +211,7 @@ async function main(): Promise<void> {
             imageUrl: post.imageUrl ?? "",
             imageCredit: post.imageCredit ?? "",
             imageSource: post.imageSource ?? "",
+            parallel: typeof post.telemetry?.parallel === "string" ? post.telemetry.parallel : "",
           },
           null,
           2,
@@ -240,16 +242,37 @@ async function main(): Promise<void> {
   const TOPIC_TAIL_LIMIT = 30;
   const SUPPLY_DEDUPE = 0.55;
 
+  // Historical parallels used by the last dozen columns — the desk skips
+  // these candidates outright so the paper doesn't reach for the same rhyme
+  // week after week. Drawn from the meta sidecars the sink writes above.
+  const RECENT_PARALLEL_WINDOW = 12;
+  let recentParallels: string[] = [];
+  try {
+    const ledger: { slug: string }[] = JSON.parse(await readFile("out/covered.json", "utf8"));
+    const metas = await Promise.all(
+      ledger.slice(-RECENT_PARALLEL_WINDOW).map(async (c): Promise<{ parallel?: string }> => {
+        try {
+          return JSON.parse(await readFile(`out/${c.slug}.meta.json`, "utf8")) as { parallel?: string };
+        } catch {
+          return {}; // pre-sidecar article
+        }
+      }),
+    );
+    recentParallels = metas.map((m) => m.parallel ?? "").filter((p) => p !== "");
+  } catch {
+    // first run — no ledger yet
+  }
+
   const desk = createNewsDesk({
     llm,
     search,
     embedder,
     feeds: FEEDS,
     persona: WRITER,
-    // Author-versions format (operator, 2026-07-23): three complete fused
-    // columns per story under the source headline, capped — replaces the
-    // retell+columns page. Cap 600 keeps the trio shorter than the old page.
+    // One take per story (operator, 2026-07-24): the drawn columnist's fused
+    // column IS the article, under the source headline, capped at 600 words.
     authorVersions: { wordCap: 600 },
+    recentParallels,
     brand,
     sink,
     // Primary data (DataGod): active when the instance env is present.
@@ -281,7 +304,7 @@ async function main(): Promise<void> {
   });
 
   const post = await desk.run();
-  process.stdout.write(`Run complete: "${post.title}" (last of the author versions) — provenance: ${runDir}\n`);
+  process.stdout.write(`Run complete: "${post.title}" by ${post.byline ?? "?"} — provenance: ${runDir}\n`);
 }
 
 main().catch((err: unknown) => {
