@@ -3,7 +3,7 @@
  * searchOpenverse credit shaping over a fake fetch, and pickLeadImage's
  * source-first-then-Openverse preference. Run: npx tsx sources/lead-image.checks.ts
  */
-import { extractOgImage, fetchOgImage, pickLeadImage, searchOpenverse } from "./lead-image";
+import { extractOgImage, fetchOgImage, imageKeywords, pickLeadImage, searchOpenverse } from "./lead-image";
 
 let failures = 0;
 const ok = (name: string, cond: boolean, detail: string): void => {
@@ -48,6 +48,16 @@ async function main(): Promise<void> {
     "junk rejected",
   );
   ok("extractOgImage null when no image meta", extractOgImage("<html><head></head></html>") === null, "no meta");
+
+  // imageKeywords — a full headline collapses to ≤3 topical words (Openverse
+  // AND-matches, so a whole sentence returns nothing — live 2026-07-23).
+  ok(
+    "imageKeywords reduces a headline to 3 significant words",
+    imageKeywords("Ukraine dismisses battle-hardened general for a digital warfare strategist") ===
+      "Ukraine dismisses battle",
+    imageKeywords("Ukraine dismisses battle-hardened general for a digital warfare strategist"),
+  );
+  ok("imageKeywords keeps a short query as-is", imageKeywords("ukraine military") === "ukraine military", imageKeywords("ukraine military"));
 
   // searchOpenverse — shapes a credit string from the first usable result.
   const OV = "https://api.openverse.org/v1/images/?q=ukraine%20military&page_size=3&mature=false&extension=jpg,jpeg,png,webp";

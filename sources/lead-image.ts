@@ -55,11 +55,25 @@ interface OpenverseResult {
   license?: string;
 }
 
+const IMAGE_STOPWORDS = new Set([
+  "the", "and", "for", "with", "from", "into", "over", "after", "amid", "vows",
+  "how", "why", "who", "his", "her", "its", "are", "now", "new", "faces", "says",
+  "said", "than", "that", "this", "then", "will", "would", "could", "global", "world",
+]);
+
+/** A news headline is too specific for image search — Openverse AND-matches
+ *  every term, so a full sentence returns nothing. Reduce to the leading 3
+ *  significant words; return the raw query when it has no long words. */
+export function imageKeywords(query: string): string {
+  const words = query.split(/[^A-Za-z]+/).filter((w) => w.length >= 4 && !IMAGE_STOPWORDS.has(w.toLowerCase()));
+  return words.length === 0 ? query : words.slice(0, 3).join(" ");
+}
+
 /** Openverse CC web-image search — keyless, licensed. Best-effort → null. */
 export async function searchOpenverse(query: string, fetchImpl: typeof fetch): Promise<LeadImage | null> {
   try {
     // extension filter → raster photos only (no SVG diagrams/symbol maps as leads).
-    const api = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=3&mature=false&extension=jpg,jpeg,png,webp`;
+    const api = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(imageKeywords(query))}&page_size=3&mature=false&extension=jpg,jpeg,png,webp`;
     const res = await fetchImpl(api, { headers: { "User-Agent": BROWSER_UA } });
     if (!res.ok) return null;
     const body = (await res.json()) as { results?: OpenverseResult[] };
