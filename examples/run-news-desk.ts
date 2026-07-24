@@ -119,6 +119,7 @@ async function main(): Promise<void> {
             title: post.title,
             byline: post.byline ?? "",
             tags: post.tags ?? [],
+            description: post.description ?? "",
             imageUrl: post.imageUrl ?? "",
             imageCredit: post.imageCredit ?? "",
             imageSource: post.imageSource ?? "",
