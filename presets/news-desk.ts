@@ -93,6 +93,28 @@ export const PERSONAS: {
 const GENERIC_HEADING_RE =
   /^(the\s+)?(analysis|analyses|introduction|intro|conclusion|conclusions|background|context|overview|summary|commentary|opinion|takeaway|takeaways|discussion|body|what\s+happened|the\s+numbers|the\s+facts|reactions?|sources?|final\s+thoughts?)\b/i;
 
+/** Reader-facing dek from a column: the first PROSE paragraph — chapter
+ *  headings stripped, markdown flattened — cut at a sentence boundary. A raw
+ *  slice of the markdown put "## Chapter Title…" into cards and og tags
+ *  (seen live 2026-07-24). */
+export function dekFrom(markdown: string): string {
+  const para = markdown
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/^#+\s+.*$/gm, "").trim())
+    .find((p) => p !== "");
+  if (para === undefined) return "";
+  const prose = para
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (prose.length <= 200) return prose;
+  const cut = prose.slice(0, 200);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  return end > 80 ? cut.slice(0, end + 1) : `${cut.slice(0, 160).trimEnd()}…`;
+}
+
 /** Mechanical contract for a fused author version (operator, 2026-07-23:
  *  "whole retelling AND analysis from author perspective, shorter, capped").
  *  The piece retells the reporting (so outlet attribution is REQUIRED here,
@@ -681,7 +703,7 @@ export function createNewsDesk(opts: {
                 {
                   role: "system",
                   content:
-                    "You tag news stories for a section index. Output 5-10 short lowercase tags (1-3 words each) drawn ONLY from the story. ALWAYS include, when the story supports it: (a) the country or region it concerns (e.g. \"ukraine\", \"middle east\", \"european union\"); (b) every organization or institution named (e.g. \"nato\", \"federal reserve\", \"opec\", \"pentagon\"); (c) every notable person named, as their surname or full name (e.g. \"zelensky\", \"jerome powell\"); and (d) the subject area (e.g. \"tariffs\", \"nuclear program\"). Never invent an entity the story does not mention.",
+                    "You tag news stories for a section index. Output 5-10 short lowercase tags (1-3 words each) drawn ONLY from the story. ALWAYS include, when the story supports it: (a) the country or region it concerns (e.g. \"ukraine\", \"middle east\", \"european union\"); (b) every organization or institution named (e.g. \"nato\", \"federal reserve\", \"opec\", \"pentagon\"); (c) every notable person named, as their surname or full name (e.g. \"zelensky\", \"jerome powell\"); and (d) the subject area (e.g. \"tariffs\", \"nuclear program\"). Every tag must be a noun or noun phrase — a place, organization, person, or subject. NEVER a verb phrase or clipped sentence fragment (\"france evacuates\", \"wildfires rage\" are wrong; \"france\", \"wildfires\" are right). Never invent an entity the story does not mention.",
                 },
                 {
                   role: "user",
@@ -753,7 +775,7 @@ export function createNewsDesk(opts: {
             const slug = columnists.length === 1 ? base : `${base.slice(0, 60).replace(/-+$/, "")}-${first}`;
             const article: GeneratedArticle = {
               title: story.headline,
-              description: body.trim().slice(0, 160),
+              description: dekFrom(body),
               category: "news",
               tags: [...tags],
               keywords: [],

@@ -162,7 +162,7 @@ async function orchestrationChecks(): Promise<void> {
         ({ title: plan.title, content: `retold: ${plan.sections.length} sections`, description: "d" }) as GeneratedArticle,
       slugify: (t: string): string => t.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       finalizePost: (a: GeneratedArticle, slug: string, topic: string): GeneratedPost =>
-        ({ slug, title: a.title, markdown: a.content, telemetry: { topic } }),
+        ({ slug, title: a.title, markdown: a.content, description: a.description, telemetry: { topic } }),
     };
   }) as typeof createDefaultInternals;
 
@@ -230,6 +230,11 @@ async function orchestrationChecks(): Promise<void> {
   // sees Wikipedia. Sources must NOT carry an encyclopedia line.
   ok("Sources carries NO Wikipedia line (verification is internal)",
     !md.includes("- Wikipedia:") && !md.includes("wikipedia.org"), md.split("## Sources")[1] ?? md);
+  ok("dek is the column's first prose sentence — never a chapter heading",
+    ((published as GeneratedPost | null)?.description ?? "").startsWith("The Panic of 1907 is the closest rhyme") &&
+      !((published as GeneratedPost | null)?.description ?? "").includes("#") &&
+      ((published as GeneratedPost | null)?.description ?? "").length <= 200,
+    (published as GeneratedPost | null)?.description ?? "(none)");
   ok("post returned = post published, slug from internals.slugify",
     post === (published as GeneratedPost | null) && post.slug === "central-bank-raises-interest-rates-to-twenty-year-high", post.slug);
   ok("evidence corpus threaded to internals via gatherResearch",
