@@ -92,6 +92,20 @@ function contractChecks(): void {
   ok("contract: en-dash column satisfies ASCII-hyphen parallel (typography-insensitive)",
     enDash.ok, enDash.failures.join(" | "));
 
+  // Second live false-negative (2026-07-23): "the Dust Bowl" in prose must
+  // satisfy event "The Dust Bowl" (case + leading article), and lowercase
+  // outlet mentions must count as attribution ("the guardian reports").
+  const dustBowl = checkAuthorVersionContract(
+    GOOD_BODY.replace(/Panic of 1907/g, "the Dust Bowl"),
+    { ...args, parallelEvent: "The Dust Bowl" });
+  ok("contract: 'the Dust Bowl' in prose satisfies event 'The Dust Bowl'",
+    dustBowl.ok, dustBowl.failures.join(" | "));
+  const lcOutlets = checkAuthorVersionContract(
+    GOOD_BODY.replace("Wire reports", "wire reports").replace("per Beacon", "per beacon"),
+    args);
+  ok("contract: lowercase outlet mentions count as attribution",
+    lcOutlets.ok, lcOutlets.failures.join(" | "));
+
   const wiki = checkAuthorVersionContract(GOOD_BODY.replace("rhyme to this squeeze", "rhyme, as Wikipedia notes"), args);
   ok("contract: encyclopedia mention fails",
     !wiki.ok && wiki.failures.some((f) => f.includes("Wikipedia")), wiki.failures.join(" | "));
@@ -121,6 +135,10 @@ async function composeChecks(): Promise<void> {
   ok("compose: contract failure retries once then returns the passing column",
     out === GOOD_BODY && prompts.length === 2 && (prompts[1] ?? "").includes(BOTTOM_LINE_MARKER),
     `calls=${prompts.length}`);
+  ok("compose: the retry REVISES the previous draft (draft included, revise instruction)",
+    (prompts[1] ?? "").includes("YOUR PREVIOUS DRAFT") && (prompts[1] ?? "").includes("**In sum:**") &&
+      (prompts[1] ?? "").includes("REVISE the draft above"),
+    (prompts[1] ?? "").slice(0, 120));
 
   let threw = "";
   try {

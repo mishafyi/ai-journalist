@@ -112,7 +112,10 @@ async function main(): Promise<void> {
       // Meta sidecar: the loop publishes every new md with the title/byline
       // recorded here (author-versions posts each carry their own persona
       // byline — the loop must not guess from filenames).
-      await writeFile(`out/${post.slug}.meta.json`, JSON.stringify({ title: post.title, byline: post.byline ?? "" }, null, 2));
+      await writeFile(
+        `out/${post.slug}.meta.json`,
+        JSON.stringify({ title: post.title, byline: post.byline ?? "", tags: post.tags ?? [] }, null, 2),
+      );
       process.stdout.write(`Published "${post.title}" → ${path} [DRAFT]\n`);
       let ledger: { title: string; slug: string; date: string }[] = [];
       try {

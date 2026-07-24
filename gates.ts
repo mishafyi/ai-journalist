@@ -979,6 +979,22 @@ export const normalizeTypography = (s: string): string =>
     .replace(/[‘’]/g, "'")
     .replace(/[“”]/g, '"');
 
+/** Does the text name the event? Typography- and case-insensitive, and a
+ *  leading "The " on the event is optional in prose ("The Dust Bowl" is
+ *  named by "…echoes of the Dust Bowl era" — live failure 2026-07-23,
+ *  second of the exact-match false-negative class after the en dash). */
+export const namesEvent = (text: string, event: string): boolean => {
+  const t = normalizeTypography(text).toLowerCase();
+  const e = normalizeTypography(event).toLowerCase().trim();
+  return t.includes(e) || (e.startsWith("the ") && t.includes(e.slice(4)));
+};
+
+/** Case-insensitive outlet-name mention (typography-normalized): "the
+ *  Guardian reports" must count for "The Guardian" — same false-negative
+ *  class as namesEvent, on the attribution side. */
+export const mentionsName = (text: string, name: string): boolean =>
+  normalizeTypography(text).toLowerCase().includes(normalizeTypography(name).toLowerCase().trim());
+
 export interface AnalysisContractArgs {
   personaName: string;
   outletNames: readonly string[];
@@ -996,7 +1012,8 @@ export function checkAnalysisContract(
   // Contract v2 (op-ed, operator direction 2026-07-23): the Analysis argues a
   // decided position from historical knowledge — it must NOT lean on the news
   // outlets; the retell above carries all sourcing.
-  const cited = args.outletNames.filter((o) => analysis.includes(o));
+  // Case-insensitive (2026-07-23): a ban dodged by lowercasing is no ban.
+  const cited = args.outletNames.filter((o) => mentionsName(analysis, o));
   if (cited.length > 0) {
     failures.push(
       `must NOT cite news outlets — the retell carries sourcing; found [${cited.join(", ")}]`,
@@ -1013,7 +1030,7 @@ export function checkAnalysisContract(
       failures.push(`must state verbatim: "${NO_PARALLEL_PHRASE}"`);
     }
   } else {
-    if (!normalizeTypography(analysis).includes(normalizeTypography(args.parallelEvent))) {
+    if (!namesEvent(analysis, args.parallelEvent)) {
       failures.push(`must name the verified parallel "${args.parallelEvent}"`);
     }
     const at = analysis.indexOf(DISANALOGY_MARKER);

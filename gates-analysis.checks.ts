@@ -50,6 +50,16 @@ ${BOTTOM_LINE_MARKER} Risk premiums are now doing openly what blockades once did
   ok("contract: en-dash spelling satisfies ASCII-hyphen parallel (typography-insensitive)",
     enDash.ok, enDash.failures.join("|"));
 
+  // Second live false-negative class (2026-07-23): case + leading article.
+  const dustBowl = checkAnalysisContract(GOOD.replace(/Suez Crisis/g, "the Dust Bowl"),
+    { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "The Dust Bowl" });
+  ok("contract: 'the Dust Bowl' satisfies event 'The Dust Bowl' (case + article)",
+    dustBowl.ok, dustBowl.failures.join("|"));
+  const lcCite = checkAnalysisContract(GOOD.replace("every power that has held one", "as bbc reported, every power that has held one"),
+    { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Suez Crisis" });
+  ok("contract v2: outlet ban is case-insensitive (lowercase 'bbc' still caught)",
+    !lcCite.ok && lcCite.failures.some((f) => f.includes("must NOT cite")), lcCite.failures.join("|"));
+
   const honest = `## Analysis — The Historian\n\nHistory offers no clean twin for this moment. ${NO_PARALLEL_PHRASE} On its own terms, the evidence points one way: risk premiums are doing the work sanctions once did.\n\n${BOTTOM_LINE_MARKER} The market, not any navy, will decide how long this lasts.`;
   ok("contract: honest no-parallel path passes",
     checkAnalysisContract(honest, { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: null }).ok,

@@ -146,6 +146,9 @@ export interface GeneratedPost {
   markdown: string;
   description?: string;
   byline?: string;
+  /** Story topic tags (lowercase, 1-2 words each) when the path generates
+   *  them — the news desk's author-versions format does; absent elsewhere. */
+  tags?: readonly string[];
   /** Gate results the pipeline recorded (publish-blockers, budgets, etc.). */
   telemetry?: Record<string, unknown>;
 }

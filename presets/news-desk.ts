@@ -4,8 +4,8 @@
  * the gemma-narrowing rule extended to structure), and the contract-gated
  * Analysis composer. Part 2 (createNewsDesk) orchestrates.
  */
-import { checkAnalysisContract, DISANALOGY_MARKER,
-  BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE, normalizeTypography, runFactCheckAudit } from "../gates";
+import { checkAnalysisContract, DISANALOGY_MARKER, BOTTOM_LINE_MARKER,
+  mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
 import type { VerifiedParallel } from "../parallels";
@@ -166,7 +166,9 @@ export function checkAuthorVersionContract(
   const words = version.trim().split(/\s+/).length;
   if (words < 300) failures.push(`too short: ${words} words (floor 300)`);
   if (words > args.wordCap) failures.push(`over the cap: ${words} words (cap ${args.wordCap})`);
-  const mentioned = args.outletNames.filter((o) => version.includes(o));
+  // Case-insensitive (2026-07-23 live failure: "found BBC" while the column
+  // credited "the Guardian" — lowercase articles must count as attribution).
+  const mentioned = args.outletNames.filter((o) => mentionsName(version, o));
   if (mentioned.length < 2)
     failures.push(
       `must attribute the reporting to at least 2 outlets by name (found ${mentioned.length === 0 ? "none" : mentioned.join(", ")})`,
@@ -176,10 +178,10 @@ export function checkAuthorVersionContract(
   else if (version.slice(at + BOTTOM_LINE_MARKER.length).trim().length < 40)
     failures.push("bottom-line verdict too thin (under 40 chars)");
   if (args.parallelEvent !== null) {
-    // Typography-insensitive: the verified record spells "Smoot–Hawley" with
-    // an en dash; a column copying that spelling names the parallel (live
-    // 2026-07-23 failure — exact includes() rejected correct columns).
-    if (!normalizeTypography(version).includes(normalizeTypography(args.parallelEvent)))
+    // namesEvent: typography-, case-, and leading-article-insensitive — the
+    // exact-includes() false-negative class rejected correct columns twice
+    // live on 2026-07-23 ("Smoot–Hawley" en dash; "the Dust Bowl" case).
+    if (!namesEvent(version, args.parallelEvent))
       failures.push(`must name the verified parallel ("${args.parallelEvent}")`);
     if (!version.includes(DISANALOGY_MARKER)) failures.push(`missing the "${DISANALOGY_MARKER}" paragraph`);
   } else if (!version.includes(NO_PARALLEL_PHRASE)) {
@@ -217,12 +219,17 @@ export async function composeAuthorVersion(args: {
   const target = `${Math.round(args.wordCap * 0.7)}-${Math.round(args.wordCap * 0.85)}`;
   const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position; no both-sides hedging, no "time will tell"\n- Close with a paragraph starting exactly: ${BOTTOM_LINE_MARKER} — one committed verdict\n- Running prose paragraphs ONLY — no headline, no headings, no lists (the headline and Sources are added outside your text)\n- ${target} words, hard cap ${args.wordCap} — unmistakably in your voice.`;
 
+  // Retry = REVISE the previous draft, never regenerate: full rewrites under
+  // failure feedback oscillate (live 2026-07-23 — each attempt satisfied the
+  // previous failure and broke a different constraint; three attempts, three
+  // disjoint failures). Revision keeps what already passed.
   let lastFailures: string[] = [];
+  let lastDraft = "";
   for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {
     const prompt =
       attempt === 1
         ? base
-        : `${base}\n\nYour previous attempt failed the contract:\n${lastFailures.map((f) => `- ${f}`).join("\n")}\nFix every failure and rewrite the full column.`;
+        : `${base}\n\nYOUR PREVIOUS DRAFT:\n${lastDraft}\n\nIt failed the contract on exactly these points:\n${lastFailures.map((f) => `- ${f}`).join("\n")}\nREVISE the draft above: change only what those failures demand and keep everything else — every requirement it already met must stay met. Output the full revised column.`;
     const version = await args.llm.complete({
       system,
       prompt,
@@ -236,6 +243,7 @@ export async function composeAuthorVersion(args: {
     });
     if (verdict.ok) return version;
     lastFailures = verdict.failures;
+    lastDraft = version;
     args.log?.(`author version (${persona.name}) attempt ${attempt}/${args.maxAttempts} failed contract: ${verdict.failures.join(" | ")}`);
   }
   throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
@@ -681,6 +689,30 @@ export function createNewsDesk(opts: {
         // slug suffixed with the author, byline the persona. The audit stays
         // informational and runs per version.
         if (opts.authorVersions !== undefined) {
+          // Story tags (operator, 2026-07-23): one schema-constrained call per
+          // story, shared by all versions. Best-effort like the audit — a tag
+          // failure logs loudly and never blocks the run.
+          let tags: readonly string[] = [];
+          try {
+            const tagged = await llm.completeStructured({
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "You tag news stories for a section index. Output 3-6 short lowercase topic tags: subject areas, places, institutions, actors (1-2 words each, e.g. \"tariffs\", \"ukraine\", \"federal reserve\"). Never invent topics absent from the story.",
+                },
+                { role: "user", content: `Story: ${story.headline}\n\nEvidence excerpt:\n${evidence.slice(0, 1200)}` },
+              ],
+              schema: z.object({ tags: z.array(z.string().min(2).max(24)).min(3).max(6) }),
+              schemaName: "story_tags",
+              temperature: 0,
+            });
+            tags = [...new Set(tagged.tags.map((t) => t.toLowerCase().trim()).filter((t) => t !== ""))].slice(0, 6);
+            recordArtifact?.("tags", tags.join(", "));
+          } catch (err: unknown) {
+            log?.(`news-desk: story tagging failed (best-effort, continuing untagged): ${String(err)}`);
+          }
+
           let published: GeneratedPost | null = null;
           for (const columnist of columnists) {
             const body = await composeAuthorVersion({
@@ -721,13 +753,14 @@ export function createNewsDesk(opts: {
               title: story.headline,
               description: body.trim().slice(0, 160),
               category: "news",
-              tags: [],
+              tags: [...tags],
               keywords: [],
               content,
             };
             const post: GeneratedPost = {
               ...internals.finalizePost(article, slug, story.headline),
               byline: `${columnist.name} — AI columnist persona`,
+              tags,
             };
             await sink.publish(post);
             recordArtifact?.("published", `${post.slug}\n${post.title}\n${post.byline ?? ""}`);
