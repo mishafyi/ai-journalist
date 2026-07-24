@@ -57,12 +57,9 @@ export const SECTIONS = [
 ] as const;
 export type Section = (typeof SECTIONS)[number];
 
-/** Three neutral example personas (spec) — method over ideology. */
-export const PERSONAS: {
-  historian: PersonaProfile;
-  realist: PersonaProfile;
-  systems: PersonaProfile;
-} = {
+/** The neutral example persona (spec) — method over ideology. Realist and
+ *  Systems Thinker were cut 2026-07-24: nothing referenced them. */
+export const PERSONAS: { historian: PersonaProfile } = {
   historian: {
     name: "The Historian",
     method:
@@ -71,24 +68,7 @@ export const PERSONAS: {
       "Structural forces outlast personalities; most 'unprecedented' events have precedents; institutions adapt slower than markets.",
     voice: "Measured, concrete, professorial without jargon. Short sentences when the point lands.",
   },
-  realist: {
-    name: "The Realist",
-    method:
-      "Follow incentives and power. Ask who gains, who pays, and what each actor's cheapest next move is — grounded only in the sourced evidence.",
-    priors:
-      "Stated reasons are rarely operative reasons; capability beats intention; costs are borne by whoever can least avoid them.",
-    voice: "Direct, unsentimental, occasionally dry. Never cynical for its own sake.",
-  },
-  systems: {
-    name: "The Systems Thinker",
-    method:
-      "Trace feedback loops, bottlenecks, and second-order effects visible in the evidence. Name what dampens or amplifies the shock.",
-    priors:
-      "Tightly coupled systems fail fast; buffers are invisible until they empty; incentives create the topology.",
-    voice: "Analytical, diagram-in-prose, plain words for complex mechanisms.",
-  },
 };
-
 /** Chapter titles that say nothing: newspaper section labels, essay furniture,
  *  or the word we are explicitly retiring ("Analysis — <Name>"). */
 const GENERIC_HEADING_RE =
@@ -418,10 +398,6 @@ export function createNewsDesk(opts: {
   embedder?: Embedder;
   feeds: readonly OutletFeed[];
   persona: PersonaProfile;
-  /** Optional additional columnists: when present, EVERY persona in
-   *  [persona, ...personas] writes its own contract-gated Analysis column
-   *  under the same retell + verified parallel — an op-ed page, one story. */
-  personas?: readonly PersonaProfile[];
   /** Author-versions format (operator, 2026-07-23): when set, there is NO
    *  neutral retell — each columnist writes one COMPLETE capped column
    *  (retell + take fused) published as its OWN post whose title is the
@@ -687,7 +663,6 @@ export function createNewsDesk(opts: {
           ].join("\n"),
         );
 
-        const columnists: readonly PersonaProfile[] = [persona, ...(opts.personas ?? [])];
         const outletNames = contributing.map((c) => c.outlet);
         const sourceLines = contributing.map((c) => `- ${c.outlet}: [${c.title}](${c.url})`);
 
@@ -742,69 +717,62 @@ export function createNewsDesk(opts: {
             log?.(`news-desk: lead-image lookup failed (best-effort, continuing imageless): ${String(err)}`);
           }
 
-          let published: GeneratedPost | null = null;
-          for (const columnist of columnists) {
-            const body = await composeAuthorVersion({
+          const columnist = persona;
+          const body = await composeAuthorVersion({
+            llm,
+            persona: columnist,
+            storyHeadline: story.headline,
+            evidenceBlock: evidence,
+            outletNames,
+            parallel,
+            wordCap: opts.authorVersions?.wordCap ?? 600,
+            maxAttempts: knobs.analysisAttempts,
+            log,
+          });
+          const content = `${body}\n\n## Sources\n${sourceLines.join("\n")}`;
+          recordArtifact?.(`author version: ${columnist.name}`, content);
+          try {
+            const audit = await runFactCheckAudit(content, evidence, {
               llm,
-              persona: columnist,
-              storyHeadline: story.headline,
-              evidenceBlock: evidence,
-              outletNames,
-              parallel,
-              wordCap: opts.authorVersions?.wordCap ?? 600,
-              maxAttempts: knobs.analysisAttempts,
-              log,
+              model: "",
+              withRetry: async (_label, fn) => fn(),
+              ctx: createRunContext("news-desk-audit"),
+              gatherExemplars: () => [],
+              fetchPriorTitles: async () => [],
+              embedDedupSurvivors: async () => null,
+              titleExemplarCount: 0,
+              titleCollisionSim: 0,
+              titleEmbedSim: 0,
+              searchTermsCount: 0,
             });
-            const content = `${body}\n\n## Sources\n${sourceLines.join("\n")}`;
-            recordArtifact?.(`author version: ${columnist.name}`, content);
-            try {
-              const audit = await runFactCheckAudit(content, evidence, {
-                llm,
-                model: "",
-                withRetry: async (_label, fn) => fn(),
-                ctx: createRunContext("news-desk-audit"),
-                gatherExemplars: () => [],
-                fetchPriorTitles: async () => [],
-                embedDedupSurvivors: async () => null,
-                titleExemplarCount: 0,
-                titleCollisionSim: 0,
-                titleEmbedSim: 0,
-                searchTermsCount: 0,
-              });
-              recordArtifact?.(`fact-check-audit: ${columnist.name}`, audit);
-            } catch (err: unknown) {
-              log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
-            }
-            // One take per story → the headline alone is the slug. (When more
-            // than one columnist runs the same story, the author disambiguates.)
-            const base = internals.slugify(story.headline).slice(0, 70).replace(/-+$/, "");
-            const first = columnist.name.trim().split(/\s+/)[0]?.toLowerCase().replace(/[^a-z0-9]/g, "") ?? "columnist";
-            const slug = columnists.length === 1 ? base : `${base.slice(0, 60).replace(/-+$/, "")}-${first}`;
-            const article: GeneratedArticle = {
-              title: story.headline,
-              description: dekFrom(body),
-              category: "news",
-              tags: [...tags],
-              keywords: [],
-              content,
-            };
-            const fin = internals.finalizePost(article, slug, story.headline);
-            const post: GeneratedPost = {
-              ...fin,
-              byline: columnist.name,
-              tags,
-              ...(section === "" ? {} : { section }),
-              ...(lead === null ? {} : { imageUrl: lead.url, imageCredit: lead.credit, imageSource: lead.source }),
-              // The parallel this column ran on — a host records it per post
-              // and feeds it back as recentParallels so later runs skip it.
-              ...(parallel === null ? {} : { telemetry: { ...fin.telemetry, parallel: parallel.event } }),
-            };
-            await sink.publish(post);
-            recordArtifact?.("published", `${post.slug}\n${post.title}\n${post.byline ?? ""}`);
-            published = post;
+            recordArtifact?.(`fact-check-audit: ${columnist.name}`, audit);
+          } catch (err: unknown) {
+            log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
           }
-          if (published === null) throw new Error("news-desk: author-versions ran with zero columnists");
-          return published;
+          // One take per story → the headline alone is the slug.
+          const slug = internals.slugify(story.headline).slice(0, 70).replace(/-+$/, "");
+          const article: GeneratedArticle = {
+            title: story.headline,
+            description: dekFrom(body),
+            category: "news",
+            tags: [...tags],
+            keywords: [],
+            content,
+          };
+          const fin = internals.finalizePost(article, slug, story.headline);
+          const post: GeneratedPost = {
+            ...fin,
+            byline: columnist.name,
+            tags,
+            ...(section === "" ? {} : { section }),
+            ...(lead === null ? {} : { imageUrl: lead.url, imageCredit: lead.credit, imageSource: lead.source }),
+            // The parallel this column ran on — a host records it per post
+            // and feeds it back as recentParallels so later runs skip it.
+            ...(parallel === null ? {} : { telemetry: { ...fin.telemetry, parallel: parallel.event } }),
+          };
+          await sink.publish(post);
+          recordArtifact?.("published", `${post.slug}\n${post.title}\n${post.byline ?? ""}`);
+          return post;
         }
 
       }

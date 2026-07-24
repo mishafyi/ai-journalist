@@ -144,14 +144,15 @@ const COLUMNISTS = {
 /** The masthead, grouped by lean. One story gets ONE take: a columnist is
  *  drawn at random from the whole roster each run, the way a desk hands a
  *  story to whoever is on it. */
-const POOLS = {
-  progressive: [COLUMNISTS.maya, COLUMNISTS.alma, COLUMNISTS.imani],
-  centrist: [COLUMNISTS.dana, COLUMNISTS.ray, COLUMNISTS.nikhil, COLUMNISTS.adele],
-  conservative: [COLUMNISTS.grant, COLUMNISTS.ruth, COLUMNISTS.emilio],
-} as const;
 
 const pickOne = <T,>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.length)];
-const ROSTER = [...POOLS.progressive, ...POOLS.centrist, ...POOLS.conservative];
+// 3 progressive / 4 centrist / 3 conservative — the draw is uniform over the
+// roster, so the lean balance IS this list's composition.
+const ROSTER = [
+  COLUMNISTS.maya, COLUMNISTS.alma, COLUMNISTS.imani,
+  COLUMNISTS.dana, COLUMNISTS.ray, COLUMNISTS.nikhil, COLUMNISTS.adele,
+  COLUMNISTS.grant, COLUMNISTS.ruth, COLUMNISTS.emilio,
+];
 const WRITER = pickOne(ROSTER);
 
 const brand: BrandProfile = {

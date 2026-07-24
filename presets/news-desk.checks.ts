@@ -1,4 +1,4 @@
-import { DATA_PLAYS, PERSONAS, createNewsDesk, gatherPrimaryData } from "./news-desk";
+import { PERSONAS, createNewsDesk } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { BOTTOM_LINE_MARKER, DISANALOGY_MARKER, NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
