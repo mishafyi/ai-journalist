@@ -35,14 +35,16 @@ const ok = (name: string, cond: boolean, detail: string): void => {
 const FILLER =
   "The pattern holds because incentives, not personalities, drive the outcome, and the incentives here have not changed since the first vote was counted. ";
 const GOOD_BODY = [
+  `## The rate that broke the room's nerve`,
   `Wire reports that the central bank raised its policy rate by 50 basis points to a twenty-year high, and per Beacon, markets fell 2 percent on the announcement. "We will stay the course," the chair said.`,
+  `## A lender of last resort, ninety years early`,
   `The Panic of 1907 is the closest rhyme to this squeeze: a systemic halt ended only by a lender of last resort, and the lesson has not aged a day. ${FILLER.repeat(12)}`,
   `${DISANALOGY_MARKER} Unlike 1907, today's backstop is institutional — no private financier had to improvise the rescue. ${FILLER.repeat(8)}`,
   `${BOTTOM_LINE_MARKER} Central banks will blink first, exactly as they always have since 1907, and savers will pay for the blink.`,
 ].join("\n\n");
 
 function contractChecks(): void {
-  const args = { outletNames: ["Wire", "Beacon", "Teaser Daily"], parallelEvent: "Panic of 1907", wordCap: 600 };
+  const args = { outletNames: ["Wire", "Beacon", "Teaser Daily"], parallelEvent: "Panic of 1907", wordCap: 600, writerName: "The Historian" };
   ok("contract: the good fixture passes", checkAuthorVersionContract(GOOD_BODY, args).ok,
     checkAuthorVersionContract(GOOD_BODY, args).failures.join(" | "));
 
@@ -110,9 +112,28 @@ function contractChecks(): void {
   ok("contract: encyclopedia mention fails",
     !wiki.ok && wiki.failures.some((f) => f.includes("Wikipedia")), wiki.failures.join(" | "));
 
-  const headed = checkAuthorVersionContract(`## My column\n\n${GOOD_BODY}`, args);
-  ok("contract: headings fail (prose only)",
-    !headed.ok && headed.failures.some((f) => f.includes("no headings")), headed.failures.join(" | "));
+  // Chapters are required and their titles must be original (operator,
+  // 2026-07-24): "## Analysis — The Historian" is exactly what we retired.
+  const noHeads = checkAuthorVersionContract(GOOD_BODY.replace(/^## .*$/gm, "").trim(), args);
+  ok("contract: a column with no chapter headings fails",
+    !noHeads.ok && noHeads.failures.some((f) => f.includes("at least 2 chapter headings")),
+    noHeads.failures.join(" | "));
+
+  const generic = checkAuthorVersionContract(
+    GOOD_BODY.replace("## The rate that broke the room's nerve", "## Analysis"), args);
+  ok("contract: a generic label heading fails",
+    !generic.ok && generic.failures.some((f) => f.includes("generic label")), generic.failures.join(" | "));
+
+  const named = checkAuthorVersionContract(
+    GOOD_BODY.replace("## The rate that broke the room's nerve", "## Analysis — The Historian"), args);
+  ok("contract: 'Analysis — <writer>' fails (generic AND names the columnist)",
+    !named.ok && named.failures.some((f) => f.includes("generic label") || f.includes("names the columnist")),
+    named.failures.join(" | "));
+
+  const thinHead = checkAuthorVersionContract(
+    GOOD_BODY.replace("## The rate that broke the room's nerve", "## Rates rise"), args);
+  ok("contract: a two-word heading is too thin to be a chapter title",
+    !thinHead.ok && thinHead.failures.some((f) => f.includes("too thin")), thinHead.failures.join(" | "));
 }
 
 async function composeChecks(): Promise<void> {
@@ -259,8 +280,8 @@ async function orchestrationChecks(): Promise<void> {
     posts.map((p) => p.byline).join("|"));
   // No persona/disclosure preamble is embedded in the article body — every
   // version opens on its own first sentence (operator, 2026-07-24).
-  ok("no persona preamble: every version opens on its own prose",
-    posts.every((p) => !p.markdown.includes("AI columnist persona") && p.markdown.startsWith("Wire reports")),
+  ok("no persona preamble: every version opens on its own first chapter",
+    posts.every((p) => !p.markdown.includes("AI columnist persona") && p.markdown.startsWith("## ")),
     posts.map((p) => p.markdown.slice(0, 40)).join(" | "));
   ok("every version carries ## Sources with both surviving outlets",
     posts.every((p) => p.markdown.includes("## Sources") && p.markdown.includes("- Wire: [") && p.markdown.includes("- Beacon: [")),

@@ -172,6 +172,11 @@ export async function composeAnalysis(args: {
   throw new Error(`analysis failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
 }
 
+/** Chapter titles that say nothing: newspaper section labels, essay furniture,
+ *  or the word we are explicitly retiring ("Analysis — <Name>"). */
+const GENERIC_HEADING_RE =
+  /^(the\s+)?(analysis|analyses|introduction|intro|conclusion|conclusions|background|context|overview|summary|commentary|opinion|takeaway|takeaways|discussion|body|what\s+happened|the\s+numbers|the\s+facts|reactions?|sources?|final\s+thoughts?)\b/i;
+
 /** Mechanical contract for a fused author version (operator, 2026-07-23:
  *  "whole retelling AND analysis from author perspective, shorter, capped").
  *  The piece retells the reporting (so outlet attribution is REQUIRED here,
@@ -179,7 +184,7 @@ export async function composeAnalysis(args: {
  *  and argues the author's take (bottom line + verified-parallel rules). */
 export function checkAuthorVersionContract(
   version: string,
-  args: { outletNames: readonly string[]; parallelEvent: string | null; wordCap: number },
+  args: { outletNames: readonly string[]; parallelEvent: string | null; wordCap: number; writerName: string },
 ): { ok: boolean; failures: string[] } {
   const failures: string[] = [];
   const words = version.trim().split(/\s+/).length;
@@ -207,7 +212,23 @@ export function checkAuthorVersionContract(
     failures.push(`no verified parallel: must include "${NO_PARALLEL_PHRASE}" verbatim`);
   }
   if (/wikipedia|encyclopedia/i.test(version)) failures.push("must not mention Wikipedia/encyclopedias (verification is internal)");
-  if (/^#{1,4} /m.test(version)) failures.push("no headings — running prose only (title and Sources are added mechanically)");
+  // Chapters are required, and each title must be ORIGINAL — written from what
+  // that chapter actually argues. A generic label ("Analysis", "Context") or the
+  // columnist's own name is exactly what we're replacing.
+  const headings = [...version.matchAll(/^##+\s+(.+)$/gm)].map((m) => m[1].trim());
+  if (headings.length < 2) {
+    failures.push(`needs at least 2 chapter headings ("## ..."), found ${headings.length}`);
+  }
+  if (headings.length > 5) failures.push(`too many chapters: ${headings.length} (max 5)`);
+  for (const h of headings) {
+    if (GENERIC_HEADING_RE.test(h)) {
+      failures.push(`heading "${h}" is a generic label — title it from what the chapter argues`);
+    }
+    if (args.writerName !== "" && h.toLowerCase().includes(args.writerName.toLowerCase())) {
+      failures.push(`heading "${h}" names the columnist — title it from the chapter's content`);
+    }
+    if (h.split(/\s+/).length < 3) failures.push(`heading "${h}" is too thin to be a real chapter title`);
+  }
   return { ok: failures.length === 0, failures };
 }
 
@@ -236,7 +257,8 @@ export async function composeAuthorVersion(args: {
   const system = `You are ${persona.name}, an opinion columnist with a decided worldview, writing your COMPLETE column on today's story: you retell what happened AND argue what it means, fused in one voice — yours. The facts belong to the reporting; the framing, emphasis, and verdict belong to you.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean; live it, never recite it): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
 
   const target = `${Math.round(args.wordCap * 0.7)}-${Math.round(args.wordCap * 0.85)}`;
-  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position; no both-sides hedging, no "time will tell"\n- Close with a paragraph starting exactly: ${BOTTOM_LINE_MARKER} — one committed verdict\n- Running prose paragraphs ONLY — no headline, no headings, no lists (the headline and Sources are added outside your text)\n- ${target} words, hard cap ${args.wordCap} — unmistakably in your voice.`;
+  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position with force; no both-sides hedging, no "time will tell"\n- Close with a paragraph starting exactly: ${BOTTOM_LINE_MARKER} — one committed verdict\n- Break the piece into 2-4 chapters, each opening with a markdown heading ("## ..."). EVERY chapter title must be ORIGINAL and written from what THAT chapter actually says — a specific line a reader could only have written after reading it. NEVER use a generic label ("Analysis", "Context", "Background", "Conclusion", "What happened", "The numbers") and NEVER put your own name in a heading
+- This is an OP-ED, not a briefing: be very opinionated. Take a side in the first paragraph and press it all the way through — name who is wrong and say why, make the judgment call the reporting won't, and let your convictions show in the verbs. No neutrality, no "on the other hand", no hedging\n- ${target} words, hard cap ${args.wordCap} — unmistakably in your voice.`;
 
   // Retry = REVISE the previous draft, never regenerate: full rewrites under
   // failure feedback oscillate (live 2026-07-23 — each attempt satisfied the
@@ -259,6 +281,7 @@ export async function composeAuthorVersion(args: {
       outletNames: args.outletNames,
       parallelEvent: parallel === null ? null : parallel.event,
       wordCap: args.wordCap,
+      writerName: persona.name,
     });
     if (verdict.ok) return version;
     lastFailures = verdict.failures;
