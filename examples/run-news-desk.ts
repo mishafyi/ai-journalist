@@ -12,6 +12,8 @@ import { createOllamaLlm } from "../clients/ollama-llm";
 import { createOllamaEmbedder } from "../clients/ollama-embedder";
 import { createFirecrawlSearch } from "../clients/firecrawl-search";
 import type { OutletFeed } from "../sources/newswire";
+import { dedupeTrending, fetchTopicStories, fetchTrendingStories, GN_TOPICS, GN_US } from "../sources/google-news";
+import type { TrendingStory } from "../sources/google-news";
 import type { BrandProfile, CoveredTopic, GeneratedPost, PublishResult, Sink } from "../ports";
 
 /** PASSing set from examples/probe-feeds.ts — edit after each probe run. */
@@ -229,6 +231,15 @@ async function main(): Promise<void> {
     },
   };
 
+  // Trending supply (2026-07-24): the top-stories list alone starved cycles —
+  // after the covered ledger and source floors, runs regularly exhausted. Six
+  // GN topic feeds (WORLD…HEALTH) append as the tail: top stories keep
+  // priority, round-robin topics fill it, near-identical headlines collapse
+  // first-wins at trigram SUPPLY_DEDUPE.
+  const TRENDING_LIMIT = 20;
+  const TOPIC_TAIL_LIMIT = 30;
+  const SUPPLY_DEDUPE = 0.55;
+
   const desk = createNewsDesk({
     llm,
     search,
@@ -245,8 +256,15 @@ async function main(): Promise<void> {
     ...(process.env.DATAGOD_URL !== undefined && process.env.DATAGOD_API_KEY !== undefined
       ? { datagod: createDatagod({ apiUrl: process.env.DATAGOD_URL, apiKey: process.env.DATAGOD_API_KEY }) }
       : {}),
+    trendingImpl: async (): Promise<TrendingStory[]> => {
+      const top = await fetchTrendingStories({ edition: GN_US, limit: TRENDING_LIMIT });
+      const topics = await fetchTopicStories({
+        edition: GN_US, topics: GN_TOPICS, limit: TOPIC_TAIL_LIMIT, dedupeThreshold: SUPPLY_DEDUPE, log,
+      });
+      return dedupeTrending([...top, ...topics], SUPPLY_DEDUPE);
+    },
     knobs: {
-      trendingLimit: 20, minSources: 3, pagesMax: 6,
+      trendingLimit: TRENDING_LIMIT, minSources: 3, pagesMax: 6,
       chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400,
       matchThreshold: 0.62, coveredThreshold: 0.55, // 0.62→0.55 2026-07-21: three same-arc articles in four — clustering trigger hit,
       parallelCount: 4, parallelMinScore: 0.3, analysisAttempts: 3,
