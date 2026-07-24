@@ -201,6 +201,7 @@ async function main(): Promise<void> {
             title: post.title,
             byline: post.byline ?? "",
             tags: post.tags ?? [],
+            section: post.section ?? "",
             description: post.description ?? "",
             imageUrl: post.imageUrl ?? "",
             imageCredit: post.imageCredit ?? "",

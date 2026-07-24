@@ -40,6 +40,23 @@ import { createNewswire } from "../sources/newswire";
 import type { OutletFeed, OutletItem } from "../sources/newswire";
 import { createDefaultInternals } from "./default";
 
+
+/** The section taxonomy — modeled on the NYT / WSJ / Washington Post mastheads,
+ *  narrowed to the beats this desk actually covers. The tagging call picks
+ *  EXACTLY ONE per story, so every article files under a real section. */
+export const SECTIONS = [
+  "World",
+  "Politics",
+  "National Security",
+  "Business",
+  "Economy",
+  "Technology",
+  "Science & Health",
+  "Climate",
+  "Culture",
+] as const;
+export type Section = (typeof SECTIONS)[number];
+
 /** Three neutral example personas (spec) — method over ideology. */
 export const PERSONAS: {
   historian: PersonaProfile;
@@ -695,6 +712,7 @@ export function createNewsDesk(opts: {
           // story, shared by all versions. Best-effort like the audit — a tag
           // failure logs loudly and never blocks the run.
           let tags: readonly string[] = [];
+          let section = "";
           try {
             const tagged = await llm.completeStructured({
               messages: [
@@ -703,14 +721,18 @@ export function createNewsDesk(opts: {
                   content:
                     "You tag news stories for a section index. Output 5-10 short lowercase tags (1-3 words each) drawn ONLY from the story. ALWAYS include, when the story supports it: (a) the country or region it concerns (e.g. \"ukraine\", \"middle east\", \"european union\"); (b) every organization or institution named (e.g. \"nato\", \"federal reserve\", \"opec\", \"pentagon\"); (c) every notable person named, as their surname or full name (e.g. \"zelensky\", \"jerome powell\"); and (d) the subject area (e.g. \"tariffs\", \"nuclear program\"). Never invent an entity the story does not mention.",
                 },
-                { role: "user", content: `Story: ${story.headline}\n\nEvidence excerpt:\n${evidence.slice(0, 1200)}` },
+                {
+                  role: "user",
+                  content: `Story: ${story.headline}\n\nEvidence excerpt:\n${evidence.slice(0, 1200)}\n\nAlso choose the ONE section this story files under, from exactly this list: ${SECTIONS.join(", ")}.`,
+                },
               ],
-              schema: z.object({ tags: z.array(z.string().min(2).max(28)).min(3).max(10) }),
+              schema: z.object({ tags: z.array(z.string().min(2).max(28)).min(3).max(10), section: z.enum(SECTIONS) }),
               schemaName: "story_tags",
               temperature: 0,
             });
             tags = [...new Set(tagged.tags.map((t) => t.toLowerCase().trim()).filter((t) => t !== ""))].slice(0, 10);
-            recordArtifact?.("tags", tags.join(", "));
+            section = tagged.section;
+            recordArtifact?.("tags", `${section} — ${tags.join(", ")}`);
           } catch (err: unknown) {
             log?.(`news-desk: story tagging failed (best-effort, continuing untagged): ${String(err)}`);
           }
@@ -776,6 +798,7 @@ export function createNewsDesk(opts: {
               ...internals.finalizePost(article, slug, story.headline),
               byline: columnist.name,
               tags,
+              ...(section === "" ? {} : { section }),
               ...(lead === null ? {} : { imageUrl: lead.url, imageCredit: lead.credit, imageSource: lead.source }),
             };
             await sink.publish(post);

@@ -149,6 +149,8 @@ export interface GeneratedPost {
   /** Story topic tags (lowercase, 1-2 words each) when the path generates
    *  them — the news desk's author-versions format does; absent elsewhere. */
   tags?: readonly string[];
+  /** The masthead section this story files under (World, Politics, Business…). */
+  section?: string;
   /** Story lead image (author-versions format): the outlet's og:image or an
    *  Openverse CC search result. imageSource is "source" | "openverse". */
   imageUrl?: string;
