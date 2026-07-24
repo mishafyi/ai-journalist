@@ -8,6 +8,7 @@ import { DISANALOGY_MARKER, BOTTOM_LINE_MARKER,
   mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
+import type { ImageSearchConfig } from "../sources/lead-image";
 import type { LeadImage } from "../sources/lead-image";
 import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
 import type { ParallelCandidate, VerifiedParallel } from "../parallels";
@@ -430,6 +431,9 @@ export function createNewsDesk(opts: {
   authorVersions?: { wordCap: number };
   brand: BrandProfile;
   sink: Sink;
+  /** Keyed SearXNG proxy for the google-images lead-photo fallback. Absent →
+   *  source og:image only; a story with no usable source photo runs imageless. */
+  imageSearch?: ImageSearchConfig;
   knobs: NewsDeskKnobs;
   coveredTopics?: () => Promise<CoveredTopic[]>;
   /** Historical parallels recent columns already ran (a host draws them from
@@ -722,13 +726,16 @@ export function createNewsDesk(opts: {
           }
 
           // Lead image (operator, 2026-07-23): ONE per story, shared by all
-          // versions — the outlet's own og:image, else an Openverse CC search.
+          // versions — the outlet's own og:image, else Google Images through
+          // the keyed SearXNG proxy (operator, 2026-07-24: "just use searxng
+          // google images - not Openverse").
           // Best-effort like tags: a failure logs and leaves the story imageless.
           let lead: LeadImage | null = null;
           try {
             lead = await pickLeadImage({
               sourceUrls: contributing.map((c) => c.url),
               query: `${story.headline} ${tags.slice(0, 3).join(" ")}`.trim(),
+              ...(opts.imageSearch === undefined ? {} : { imageSearch: opts.imageSearch }),
             });
             recordArtifact?.("lead-image", lead === null ? "(none found)" : `${lead.source}: ${lead.url}\n${lead.credit}`);
           } catch (err: unknown) {

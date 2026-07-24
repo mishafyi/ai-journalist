@@ -279,6 +279,10 @@ async function main(): Promise<void> {
     ...(process.env.DATAGOD_URL !== undefined && process.env.DATAGOD_API_KEY !== undefined
       ? { datagod: createDatagod({ apiUrl: process.env.DATAGOD_URL, apiKey: process.env.DATAGOD_API_KEY }) }
       : {}),
+    // Lead-photo fallback: google images via the keyed SearXNG proxy.
+    ...(process.env.IMAGE_SEARCH_URL !== undefined && process.env.IMAGE_SEARCH_KEY !== undefined
+      ? { imageSearch: { url: process.env.IMAGE_SEARCH_URL, apiKey: process.env.IMAGE_SEARCH_KEY } }
+      : {}),
     trendingImpl: async (): Promise<TrendingStory[]> => {
       const top = await fetchTrendingStories({ edition: GN_US, limit: TRENDING_LIMIT });
       const topics = await fetchTopicStories({

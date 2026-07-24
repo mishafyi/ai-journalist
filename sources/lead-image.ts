@@ -2,10 +2,11 @@
  * sources/lead-image.ts — one lead photo per story. Preference order:
  *   1. the outlet's own og:image from a source page we already cited
  *      (the actual news photo — legally the outlet's promo image),
- *   2. an Openverse Creative-Commons web-image search on the topic
- *      (keyless, licensed for reuse, always returns something).
+ *   2. a Google Images search through a keyed SearXNG proxy (operator,
+ *      2026-07-24: "just use searxng google images - not Openverse").
  * Pure + injected `fetch` — no process.env (purity guard), never throws:
- * every path is best-effort and resolves to null on any failure.
+ * every path is best-effort and resolves to null on any failure. The proxy
+ * URL/key are deployment secrets, so they arrive as an injected config.
  */
 
 const BROWSER_UA =
@@ -14,6 +15,21 @@ const BROWSER_UA =
 /** Reject URLs that are clearly not a story photo (logos, icons, sprites,
  *  generic social-card defaults). */
 const JUNK_IMAGE_RE = /logo|\/default|placeholder|sprite|\/icon|social-|-social|\/favicon|\/apple-touch/i;
+
+/** Image hosts whose promo images carry the outlet's own branding baked into
+ *  the pixels — a Guardian og:image ships with the Guardian live-blog overlay
+ *  (operator rule 2026-07-24: "don't take guardian images"). Skipping the
+ *  host falls through to the next outlet's photo or the image search. */
+const BRANDED_IMAGE_HOSTS = ["guim.co.uk", "guardianapis.com"];
+
+export function isBrandedImageHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return BRANDED_IMAGE_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+  } catch {
+    return false;
+  }
+}
 
 /** Pull og:image (twitter:image as fallback) out of a page's HTML. Returns a
  *  usable photo URL or null when absent/junk. Order-independent attribute
@@ -24,7 +40,13 @@ export function extractOgImage(html: string): string | null {
     for (const tag of metas) {
       if (!new RegExp(`(property|name)\\s*=\\s*["']${prop}["']`, "i").test(tag)) continue;
       const content = tag.match(/content\s*=\s*["']([^"']+)["']/i)?.[1];
-      if (content !== undefined && content.startsWith("http") && !JUNK_IMAGE_RE.test(content)) return content;
+      if (
+        content !== undefined &&
+        content.startsWith("http") &&
+        !JUNK_IMAGE_RE.test(content) &&
+        !isBrandedImageHost(content)
+      )
+        return content;
     }
     return null;
   };
@@ -34,7 +56,13 @@ export function extractOgImage(html: string): string | null {
 export interface LeadImage {
   url: string;
   credit: string;
-  source: "source" | "openverse";
+  source: "source" | "search";
+}
+
+/** The keyed SearXNG proxy that fronts the google-images engine. */
+export interface ImageSearchConfig {
+  url: string;
+  apiKey: string;
 }
 
 /** GET a page and read its og:image. Best-effort → null on any failure. */
@@ -48,43 +76,36 @@ export async function fetchOgImage(url: string, fetchImpl: typeof fetch): Promis
   }
 }
 
-interface OpenverseResult {
+interface ProxyImageResult {
   url?: string;
   title?: string;
-  creator?: string;
-  license?: string;
+  imgSrc?: string;
 }
 
-const IMAGE_STOPWORDS = new Set([
-  "the", "and", "for", "with", "from", "into", "over", "after", "amid", "vows",
-  "how", "why", "who", "his", "her", "its", "are", "now", "new", "faces", "says",
-  "said", "than", "that", "this", "then", "will", "would", "could", "global", "world",
-]);
-
-/** A news headline is too specific for image search — Openverse AND-matches
- *  every term, so a full sentence returns nothing. Reduce to the leading 3
- *  significant words; return the raw query when it has no long words. */
-export function imageKeywords(query: string): string {
-  const words = query.split(/[^A-Za-z]+/).filter((w) => w.length >= 4 && !IMAGE_STOPWORDS.has(w.toLowerCase()));
-  return words.length === 0 ? query : words.slice(0, 3).join(" ");
-}
-
-/** Openverse CC web-image search — keyless, licensed. Best-effort → null. */
-export async function searchOpenverse(query: string, fetchImpl: typeof fetch): Promise<LeadImage | null> {
+/** Google Images via the keyed SearXNG proxy. Returns the first hit whose
+ *  image URL is a real photo on an unbranded host; credit is the page's host
+ *  (where the photo ran). Best-effort → null. */
+export async function searchGoogleImages(
+  query: string,
+  cfg: ImageSearchConfig,
+  fetchImpl: typeof fetch,
+): Promise<LeadImage | null> {
   try {
-    // extension filter → raster photos only (no SVG diagrams/symbol maps as leads).
-    const api = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(imageKeywords(query))}&page_size=3&mature=false&extension=jpg,jpeg,png,webp`;
-    const res = await fetchImpl(api, { headers: { "User-Agent": BROWSER_UA } });
+    const api = `${cfg.url.replace(/\/+$/, "")}?q=${encodeURIComponent(query)}&type=images&engines=${encodeURIComponent("google images")}&num=10`;
+    const res = await fetchImpl(api, {
+      headers: { "User-Agent": BROWSER_UA, "x-api-key": cfg.apiKey },
+    });
     if (!res.ok) return null;
-    const body = (await res.json()) as { results?: OpenverseResult[] };
-    const hit = body.results?.find((r) => typeof r.url === "string" && r.url.startsWith("http"));
-    if (hit === undefined || hit.url === undefined) return null;
-    const who = hit.creator !== undefined && hit.creator !== "" ? ` — ${hit.creator}` : "";
-    return {
-      url: hit.url,
-      credit: `${hit.title ?? "image"}${who} (${hit.license ?? "CC"}) via Openverse`,
-      source: "openverse",
-    };
+    const body = (await res.json()) as { results?: ProxyImageResult[] };
+    const hit = body.results?.find(
+      (r) =>
+        typeof r.imgSrc === "string" &&
+        r.imgSrc.startsWith("http") &&
+        !JUNK_IMAGE_RE.test(r.imgSrc) &&
+        !isBrandedImageHost(r.imgSrc),
+    );
+    if (hit === undefined || hit.imgSrc === undefined) return null;
+    return { url: hit.imgSrc, credit: hostOf(hit.url ?? hit.imgSrc), source: "search" };
   } catch {
     return null;
   }
@@ -98,10 +119,12 @@ function hostOf(url: string): string {
   }
 }
 
-/** The story's lead image: first good source og:image, else Openverse. */
+/** The story's lead image: first good source og:image, else Google Images
+ *  through the proxy (when configured). */
 export async function pickLeadImage(args: {
   sourceUrls: readonly string[];
   query: string;
+  imageSearch?: ImageSearchConfig;
   fetchImpl?: typeof fetch;
 }): Promise<LeadImage | null> {
   const fetchImpl = args.fetchImpl ?? globalThis.fetch;
@@ -109,5 +132,6 @@ export async function pickLeadImage(args: {
     const og = await fetchOgImage(url, fetchImpl);
     if (og !== null) return { url: og, credit: hostOf(url), source: "source" };
   }
-  return searchOpenverse(args.query, fetchImpl);
+  if (args.imageSearch === undefined) return null;
+  return searchGoogleImages(args.query, args.imageSearch, fetchImpl);
 }
