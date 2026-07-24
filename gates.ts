@@ -968,6 +968,17 @@ export const NO_PARALLEL_PHRASE =
 export const DISANALOGY_MARKER = "**Where the parallel breaks down:**";
 export const BOTTOM_LINE_MARKER = "**The bottom line:**";
 
+/** Typography-insensitive matching for contract string checks. Wikipedia
+ *  titles use en dashes ("Smoot–Hawley Tariff Act") while proposals use
+ *  ASCII hyphens — a column that copies the record's canonical spelling
+ *  must still satisfy an ASCII-spelled contract (live failure 2026-07-23:
+ *  three compose attempts rejected for "missing" a parallel they named). */
+export const normalizeTypography = (s: string): string =>
+  s
+    .replace(/[‐-―]/g, "-")
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"');
+
 export interface AnalysisContractArgs {
   personaName: string;
   outletNames: readonly string[];
@@ -1002,7 +1013,7 @@ export function checkAnalysisContract(
       failures.push(`must state verbatim: "${NO_PARALLEL_PHRASE}"`);
     }
   } else {
-    if (!analysis.includes(args.parallelEvent)) {
+    if (!normalizeTypography(analysis).includes(normalizeTypography(args.parallelEvent))) {
       failures.push(`must name the verified parallel "${args.parallelEvent}"`);
     }
     const at = analysis.indexOf(DISANALOGY_MARKER);

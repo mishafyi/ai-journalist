@@ -84,6 +84,14 @@ function contractChecks(): void {
   ok("contract: under the 300-word floor fails",
     !short.ok && short.failures.some((f) => f.includes("floor 300")), short.failures.join(" | "));
 
+  // Live failure 2026-07-23: Wikipedia spells "Smoot–Hawley" with an en dash;
+  // a column copying the record's spelling must pass an ASCII-spelled contract.
+  const enDash = checkAuthorVersionContract(
+    GOOD_BODY.replace(/Panic of 1907/g, "Smoot–Hawley Tariff Act"),
+    { ...args, parallelEvent: "Smoot-Hawley Tariff Act" });
+  ok("contract: en-dash column satisfies ASCII-hyphen parallel (typography-insensitive)",
+    enDash.ok, enDash.failures.join(" | "));
+
   const wiki = checkAuthorVersionContract(GOOD_BODY.replace("rhyme to this squeeze", "rhyme, as Wikipedia notes"), args);
   ok("contract: encyclopedia mention fails",
     !wiki.ok && wiki.failures.some((f) => f.includes("Wikipedia")), wiki.failures.join(" | "));

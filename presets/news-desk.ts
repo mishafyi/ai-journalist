@@ -5,7 +5,7 @@
  * Analysis composer. Part 2 (createNewsDesk) orchestrates.
  */
 import { checkAnalysisContract, DISANALOGY_MARKER,
-  BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
+  BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE, normalizeTypography, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
 import type { VerifiedParallel } from "../parallels";
@@ -176,7 +176,11 @@ export function checkAuthorVersionContract(
   else if (version.slice(at + BOTTOM_LINE_MARKER.length).trim().length < 40)
     failures.push("bottom-line verdict too thin (under 40 chars)");
   if (args.parallelEvent !== null) {
-    if (!version.includes(args.parallelEvent)) failures.push(`must name the verified parallel ("${args.parallelEvent}")`);
+    // Typography-insensitive: the verified record spells "Smoot–Hawley" with
+    // an en dash; a column copying that spelling names the parallel (live
+    // 2026-07-23 failure — exact includes() rejected correct columns).
+    if (!normalizeTypography(version).includes(normalizeTypography(args.parallelEvent)))
+      failures.push(`must name the verified parallel ("${args.parallelEvent}")`);
     if (!version.includes(DISANALOGY_MARKER)) failures.push(`missing the "${DISANALOGY_MARKER}" paragraph`);
   } else if (!version.includes(NO_PARALLEL_PHRASE)) {
     failures.push(`no verified parallel: must include "${NO_PARALLEL_PHRASE}" verbatim`);
@@ -206,7 +210,7 @@ export async function composeAuthorVersion(args: {
   const parallelBlock =
     parallel === null
       ? `NO parallel survived verification. You MUST include this sentence verbatim: "${NO_PARALLEL_PHRASE}" — then argue on the evidence alone.`
-      : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument, and include a paragraph starting exactly with "${DISANALOGY_MARKER}" stating where the parallel does NOT hold.`;
+      : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument (by its name as given above), and include a paragraph starting exactly with "${DISANALOGY_MARKER}" stating where the parallel does NOT hold.`;
 
   const system = `You are ${persona.name}, an opinion columnist with a decided worldview, writing your COMPLETE column on today's story: you retell what happened AND argue what it means, fused in one voice — yours. The facts belong to the reporting; the framing, emphasis, and verdict belong to you.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean; live it, never recite it): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
 

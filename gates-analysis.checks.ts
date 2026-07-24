@@ -41,6 +41,15 @@ ${BOTTOM_LINE_MARKER} Risk premiums are now doing openly what blockades once did
     { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Suez Crisis" });
   ok("contract: missing disanalogy marker fails", !noDisanalogy.ok, noDisanalogy.failures.join("|"));
 
+  // Live failure 2026-07-23 (author-versions run, same latent bug here):
+  // Wikipedia's canonical "Smoot–Hawley Tariff Act" carries an en dash; a
+  // column copying the record's spelling must satisfy the ASCII-hyphen
+  // contract string. Typography-insensitive matching, not model retries.
+  const enDash = checkAnalysisContract(GOOD.replace(/Suez Crisis/g, "Smoot–Hawley Tariff Act"),
+    { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: "Smoot-Hawley Tariff Act" });
+  ok("contract: en-dash spelling satisfies ASCII-hyphen parallel (typography-insensitive)",
+    enDash.ok, enDash.failures.join("|"));
+
   const honest = `## Analysis — The Historian\n\nHistory offers no clean twin for this moment. ${NO_PARALLEL_PHRASE} On its own terms, the evidence points one way: risk premiums are doing the work sanctions once did.\n\n${BOTTOM_LINE_MARKER} The market, not any navy, will decide how long this lasts.`;
   ok("contract: honest no-parallel path passes",
     checkAnalysisContract(honest, { personaName: "The Historian", outletNames: OUTLETS, parallelEvent: null }).ok,
