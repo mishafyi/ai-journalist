@@ -10,7 +10,7 @@ import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
 import type { LeadImage } from "../sources/lead-image";
 import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
-import type { VerifiedParallel } from "../parallels";
+import type { ParallelCandidate, VerifiedParallel } from "../parallels";
 import type { GeneratedArticle } from "../pipeline";
 import type {
   BrandProfile,
@@ -410,6 +410,13 @@ export function createNewsDesk(opts: {
   sink: Sink;
   knobs: NewsDeskKnobs;
   coveredTopics?: () => Promise<CoveredTopic[]>;
+  /** Historical parallels recent columns already ran (a host draws them from
+   *  its last N published articles). A proposed candidate whose event names
+   *  ANY entry (namesEvent — typography-, case-, and leading-article-
+   *  insensitive; never raw includes) is skipped BEFORE encyclopedia
+   *  verification, so a just-used parallel is never repeated and never costs
+   *  a fetch. Absent/empty → today's behavior, prompts byte-identical. */
+  recentParallels?: readonly string[];
   blockedHosts?: readonly string[]; // default DEFAULT_BLOCKED_HOSTS
   /** Optional DataGod instance — when present, 0-2 primary-data plays run per
    *  story (see DATA_PLAYS) and their figures join the evidence as
@@ -510,7 +517,9 @@ export function createNewsDesk(opts: {
             recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\nDROPPED — content-quality floor (${content.length} chars)`);
             continue;
           }
-          recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\n${content.length} chars`);
+          // Artifact carries the scraped text itself (capped), not just a
+          // length marker — provenance a reader can actually inspect.
+          recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\n${content.length} chars\n${content.slice(0, 20_000)}`);
           pages.push({ outlet: item.outlet, title: item.title, url: item.url, content });
         }
         if (pages.length < knobs.minSources) {
@@ -585,14 +594,28 @@ export function createNewsDesk(opts: {
           knobs: { sectionSnippets: 0, sectionConcurrency: 1 },
         });
 
-        // Parallels: propose (schema-constrained) → Wikipedia-verify → select.
+        // Parallels: propose (schema-constrained) → recent-use filter →
+        // Wikipedia-verify → select. A candidate naming a just-used parallel
+        // (opts.recentParallels) drops BEFORE verification — the fetch is
+        // never wasted, and the desk that ran "Panic of 1907" last week
+        // doesn't run it again this week. Rejection falls through to the next
+        // candidate; none surviving takes the legal no-parallel path.
         const candidates = await proposeParallels({
           llm,
           storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
           count: knobs.parallelCount,
         });
+        const recent = opts.recentParallels ?? [];
+        const dropRecent = (cs: ParallelCandidate[]): ParallelCandidate[] =>
+          cs.filter((c) => {
+            const used = recent.find((r) => namesEvent(c.event, r));
+            if (used === undefined) return true;
+            log?.(`parallels: skipped "${c.event}" — just used ("${used}")`);
+            return false;
+          });
+        const fresh = dropRecent(candidates);
         let parallel = await selectParallel({
-          candidates,
+          candidates: fresh,
           minScore: knobs.parallelMinScore,
           ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }),
           log,
@@ -602,9 +625,9 @@ export function createNewsDesk(opts: {
         // context instead of settling straight for honest absence. Use the
         // first candidate whose page exists — its extract IS the record that
         // contradicted the model's memory.
-        if (parallel === null && candidates.length > 0) {
+        if (parallel === null && fresh.length > 0) {
           let record = "";
-          for (const c of candidates) {
+          for (const c of fresh) {
             try {
               const v = await verifyParallel({ candidate: c, ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }) });
               if (v !== null && v.extract.trim() !== "") { record = `${v.wikipediaTitle}: ${v.extract}`; break; }
@@ -621,7 +644,7 @@ export function createNewsDesk(opts: {
               correctiveContext: record.slice(0, 1200),
             });
             parallel = await selectParallel({
-              candidates: retryCandidates,
+              candidates: dropRecent(retryCandidates),
               minScore: knobs.parallelMinScore,
               ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }),
               log,
@@ -736,12 +759,16 @@ export function createNewsDesk(opts: {
               keywords: [],
               content,
             };
+            const fin = internals.finalizePost(article, slug, story.headline);
             const post: GeneratedPost = {
-              ...internals.finalizePost(article, slug, story.headline),
+              ...fin,
               byline: columnist.name,
               tags,
               ...(section === "" ? {} : { section }),
               ...(lead === null ? {} : { imageUrl: lead.url, imageCredit: lead.credit, imageSource: lead.source }),
+              // The parallel this column ran on — a host records it per post
+              // and feeds it back as recentParallels so later runs skip it.
+              ...(parallel === null ? {} : { telemetry: { ...fin.telemetry, parallel: parallel.event } }),
             };
             await sink.publish(post);
             recordArtifact?.("published", `${post.slug}\n${post.title}\n${post.byline ?? ""}`);

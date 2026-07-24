@@ -88,11 +88,37 @@ async function orchestrationChecks(): Promise<void> {
     "",
     `${BOTTOM_LINE_MARKER} Central banks will blink first, exactly as they always have since 1907.`,
   ].join("\n");
+  // The no-parallel variant for the recentParallels scenario: same story, no
+  // historical parallel — carries the NO_PARALLEL_PHRASE verbatim, never
+  // names the skipped event, and still satisfies the author-version contract.
+  const NO_PARALLEL_COLUMN = [
+    "## A squeeze with no honest precedent",
+    "",
+    `${NO_PARALLEL_PHRASE} That absence is the first honest fact about this decision, and it should discipline every confident analogy being sold tonight. History offers rhymes for almost everything a central bank does; when the record refuses to cough one up, the honest move is to argue the case on the evidence in front of us, which is exactly what the coverage supplies in unusual detail.`,
+    "",
+    "Wire reports the policy rate went up fifty basis points to a twenty-year high, and the chair promised to stay the course. Beacon reports markets fell two percent on the announcement. Read together, those two sentences describe a bank and a market that no longer believe each other, and nothing in the archive tells us cleanly how that standoff resolves.",
+    "",
+    "## The cost of tightening into a falling market",
+    "",
+    "The mechanism is not mysterious. Every additional basis point raises the price of rolling over debt that was priced for a cheaper world, and the firms holding that debt do not get to vote on the schedule. The sell-off Beacon describes is the market repricing that arithmetic in real time, faster than the bank can narrate it.",
+    "",
+    "A chair who says the course will be stayed is making a promise about the future with tools that only touch the present. That is the wager, stated plainly, and it deserves to be judged as a wager rather than laundered into inevitability.",
+    "",
+    "## Where the chair's resolve meets the tape",
+    "",
+    "Resolve is cheap until the tape disagrees. Wire's account makes clear the bank is still fighting the last war, tightening into prices that have already turned, and the two-percent drop is the first invoice for that stubbornness. The polite word for this is discipline; the accurate word is inertia, and inertia is not a policy even when it is delivered in a steady voice. There will be more invoices, and they will arrive faster than the next meeting.",
+    "",
+    `${BOTTOM_LINE_MARKER} The bank has chosen credibility over flexibility, and it will end up paying for the first with the second before the year is out.`,
+  ].join("\n");
   const prompts: string[] = [];
   const llm = {
     async complete(args: { system?: string; prompt: string }): Promise<string> {
       prompts.push(args.prompt);
       if (args.prompt.startsWith("TOPIC:")) return `- fact ("quote", per wire)`;
+      // Route on prompt content (the TOPIC: trick): a compose prompt built on
+      // the no-parallel path instructs the phrase verbatim — answer with the
+      // no-parallel column so the contract's NO_PARALLEL_PHRASE branch holds.
+      if (args.prompt.includes(NO_PARALLEL_PHRASE)) return NO_PARALLEL_COLUMN;
       return COLUMN;
     },
     async completeStructured<T>(): Promise<T> {
@@ -107,8 +133,12 @@ async function orchestrationChecks(): Promise<void> {
     },
   } as unknown as LlmClient;
 
-  // Wikipedia REST fakes for the parallelFetchImpl seam.
+  // Wikipedia REST fakes for the parallelFetchImpl seam. Every call is
+  // logged so the recentParallels scenario can assert a skipped candidate
+  // cost ZERO encyclopedia fetches.
+  const parallelFetches: string[] = [];
   const parallelFetchImpl = (async (url: unknown): Promise<Response> => {
+    parallelFetches.push(String(url));
     const u = String(url);
     if (u.includes("action=opensearch")) {
       return new Response(JSON.stringify(["q", ["Panic of 1907"], [""], ["https://en.wikipedia.org/wiki/Panic_of_1907"]]), { status: 200 });
@@ -216,6 +246,15 @@ async function orchestrationChecks(): Promise<void> {
       artifacts.some((a) => a.label === `author version: ${PERSONAS.historian.name}`) &&
       artifacts.some((a) => a.label === `fact-check-audit: ${PERSONAS.historian.name}`),
     artifacts.map((a) => a.label).join(","));
+  ok("scrape artifacts carry the scraped text itself, not just a length marker",
+    artifacts.some((a) => a.label === "scrape: Wire" && a.content.includes("full article body")),
+    artifacts.filter((a) => a.label.startsWith("scrape: ")).map((a) => a.content.slice(0, 60)).join(" | "));
+  ok("default path verified the parallel through the encyclopedia seam",
+    parallelFetches.some((u) => u.includes("action=opensearch")) && parallelFetches.some((u) => u.includes("/page/summary/")),
+    parallelFetches.join(","));
+  ok("published telemetry carries the parallel (hosts feed it back as recentParallels)",
+    String(post.telemetry?.parallel) === "Panic of 1907" && String(post.telemetry?.topic) === STORY2,
+    JSON.stringify(post.telemetry));
 
   // Scenario 2 — minSources: 3. Resolution passes (3 unblocked outlets) but the
   // teaser floor leaves 2 survivors < 3 → next story → none left → loud throw.
@@ -240,6 +279,48 @@ async function orchestrationChecks(): Promise<void> {
   }
   ok("≥3-source floor: no surviving story → loud throw with N interpolated",
     threw.includes("news-desk: no trending story resolved ≥3 scrapable sources"), threw);
+
+  // Scenario 3 — the recentParallels guard (operator, 2026-07-24: the desk
+  // kept reaching for the Panic of 1907 week after week). With the just-used
+  // list naming the fixture's only candidate, the candidate is skipped before
+  // verification (ZERO encyclopedia fetches), no candidate survives, and the
+  // published column takes the legal no-parallel path.
+  const logs3: string[] = [];
+  let published3: GeneratedPost | null = null;
+  const fetchesBefore = parallelFetches.length;
+  const post3 = await createNewsDesk({
+    llm,
+    search,
+    feeds: [],
+    persona: PERSONAS.historian,
+    brand,
+    sink: {
+      async publish(post) {
+        published3 = post;
+        return { url: `memory://${post.slug}`, status: "DRAFT" as const };
+      },
+    },
+    knobs,
+    coveredTopics: async () => [{ title: STORY1 }],
+    recentParallels: ["Panic of 1907"],
+    log: (line) => logs3.push(line),
+    trendingImpl: async () => trending,
+    indexImpl: async () => index,
+    internalsFactory,
+    parallelFetchImpl,
+  }).run();
+  const md3 = (published3 as GeneratedPost | null)?.markdown ?? "";
+  ok("recentParallels: the just-used candidate is skipped with one log line naming it",
+    logs3.some((l) => l.includes(`parallels: skipped "Panic of 1907"`)), logs3.join(" | "));
+  ok("recentParallels: the skipped candidate costs NO encyclopedia fetch",
+    parallelFetches.length === fetchesBefore, `unexpected fetches: ${parallelFetches.slice(fetchesBefore).join(",")}`);
+  ok("recentParallels: the published column takes the legal no-parallel path",
+    md3.includes(NO_PARALLEL_PHRASE) && !md3.includes("Panic of 1907") &&
+      post3.slug === "central-bank-raises-interest-rates-to-twenty-year-high",
+    md3.slice(0, 200));
+  ok("recentParallels: no-parallel run publishes no telemetry.parallel field",
+    post3.telemetry !== undefined && !("parallel" in post3.telemetry) && String(post3.telemetry.topic) === STORY2,
+    JSON.stringify(post3.telemetry));
 
   if (failures > 0) {
     process.exitCode = 1;
