@@ -1,4 +1,4 @@
-import { DATA_PLAYS, PERSONAS, buildRetellPlan, composeAnalysis, createNewsDesk, gatherPrimaryData } from "./news-desk";
+import { DATA_PLAYS, PERSONAS, createNewsDesk, gatherPrimaryData } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { BOTTOM_LINE_MARKER, DISANALOGY_MARKER, NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -7,177 +7,6 @@ import type { TrendingStory } from "../sources/google-news";
 import type { OutletItem } from "../sources/newswire";
 import type { Plan } from "../planning";
 import type { GeneratedArticle } from "../pipeline";
-
-async function main(): Promise<void> {
-  let failures = 0;
-  const ok = (name: string, cond: boolean, detail: string): void => {
-    if (cond) process.stdout.write(`PASS ${name}\n`);
-    else {
-      failures += 1;
-      process.stdout.write(`FAIL ${name} — ${detail}\n`);
-    }
-  };
-
-  ok("three neutral personas ship",
-    PERSONAS.historian.name.length > 0 && PERSONAS.realist.method.length > 0 && PERSONAS.systems.voice.length > 0,
-    JSON.stringify(Object.keys(PERSONAS)));
-
-  const plan = buildRetellPlan("Tariff bill passes Senate");
-  ok("fixed template: exactly the three spec'd sections, no LLM",
-    plan.sections.length === 3 &&
-      plan.sections[0].heading === "What happened" &&
-      plan.sections[1].heading === "The numbers and reactions" &&
-      plan.sections[2].heading === "Context" &&
-      plan.title === "Tariff bill passes Senate",
-    JSON.stringify(plan.sections.map((s) => s.heading)));
-  ok("sections carry empty queries (research is the shared evidence corpus)",
-    plan.sections.every((s) => s.queries.length === 0), "queries");
-
-  // composeAnalysis: first draft violates the contract, second complies —
-  // the retry must feed the failures back into the prompt.
-  const GOOD = `## Analysis — ${PERSONAS.historian.name}\n\nChokepoints are leverage, always were. Suez Crisis dynamics apply, and the verdict of that history is unambiguous.\n\n${DISANALOGY_MARKER} Unlike 1956 there is no canal seizure — the modern lever is insurance pricing, which reverses faster than occupations do.\n\n${BOTTOM_LINE_MARKER} Premiums will outlast the shooting, and reroutes will become the map.`;
-  let call = 0;
-  const seenPrompts: string[] = [];
-  const llm = {
-    async complete(args: { system?: string; prompt: string }): Promise<string> {
-      call += 1;
-      seenPrompts.push(args.prompt);
-      return call === 1 ? "## My hot take\n\nNo citations here." : GOOD;
-    },
-    async completeStructured(): Promise<never> { throw new Error("unused"); },
-  } as unknown as LlmClient;
-
-  const analysis = await composeAnalysis({
-    llm, persona: PERSONAS.historian, evidenceBlock: "SOURCE BBC …\nSOURCE CNN …",
-    outletNames: ["BBC", "CNN"],
-    parallel: { era: "1956", event: "Suez Crisis", actors: ["Egypt"], claimedSimilarity: "chokepoint",
-      wikipediaTitle: "Suez Crisis", wikipediaUrl: "https://en.wikipedia.org/wiki/Suez_Crisis",
-      extract: "The 1956 crisis…", score: 0.8 },
-    maxAttempts: 3,
-  });
-  ok("composeAnalysis: retries until the contract passes", call === 2 && analysis === GOOD, `calls=${call}`);
-  ok("retry prompt carries the contract failures back to the model",
-    seenPrompts[1].includes("previous attempt failed") && seenPrompts[1].includes("bottom line"), seenPrompts[1].slice(0, 200));
-
-  // Honest no-parallel path: the prompt must DEMAND the verbatim phrase.
-  let sawPhrase = false;
-  const llm2 = {
-    async complete(args: { prompt: string }): Promise<string> {
-      sawPhrase = args.prompt.includes(NO_PARALLEL_PHRASE);
-      return `## Analysis — ${PERSONAS.historian.name}\n\nThe repricing is the story. ${NO_PARALLEL_PHRASE} History without a twin still teaches: premiums are the new blockade.\n\n${BOTTOM_LINE_MARKER} Insurance desks, not admirals, now set the tempo of this conflict.`;
-    },
-    async completeStructured(): Promise<never> { throw new Error("unused"); },
-  } as unknown as LlmClient;
-  await composeAnalysis({ llm: llm2, persona: PERSONAS.historian, evidenceBlock: "…",
-    outletNames: ["BBC", "CNN"], parallel: null, maxAttempts: 1 });
-  ok("no-parallel prompt demands the honest phrase verbatim", sawPhrase, "phrase in prompt");
-
-  // Directed guard: an empty-string parallel event must take the null (honest
-  // absence) path — includes("") is vacuously true, so "" would neuter the
-  // contract's name check while its prompt demanded a marker for a nameless event.
-  let sawPhraseEmpty = false;
-  const llm3 = {
-    async complete(args: { prompt: string }): Promise<string> {
-      sawPhraseEmpty = args.prompt.includes(NO_PARALLEL_PHRASE);
-      return `## Analysis — ${PERSONAS.historian.name}\n\nThe repricing is the story. ${NO_PARALLEL_PHRASE} History without a twin still teaches: premiums are the new blockade.\n\n${BOTTOM_LINE_MARKER} Insurance desks, not admirals, now set the tempo of this conflict.`;
-    },
-    async completeStructured(): Promise<never> { throw new Error("unused"); },
-  } as unknown as LlmClient;
-  await composeAnalysis({ llm: llm3, persona: PERSONAS.historian, evidenceBlock: "…",
-    outletNames: ["BBC", "CNN"],
-    parallel: { era: "1956", event: "  ", actors: ["Egypt"], claimedSimilarity: "chokepoint",
-      wikipediaTitle: "", wikipediaUrl: "", extract: "", score: 0 },
-    maxAttempts: 1 });
-  ok("empty parallelEvent treated as honest absence (null path)", sawPhraseEmpty, "empty-event guard");
-
-  // Exhausted attempts throw with the failures.
-  const llmBad = {
-    async complete(): Promise<string> { return "nope"; },
-    async completeStructured(): Promise<never> { throw new Error("unused"); },
-  } as unknown as LlmClient;
-  let threw = false;
-  try {
-    await composeAnalysis({ llm: llmBad, persona: PERSONAS.historian, evidenceBlock: "…",
-      outletNames: ["BBC", "CNN"], parallel: null, maxAttempts: 2 });
-  } catch (err: unknown) {
-    threw = String(err).includes("analysis failed the contract");
-  }
-  ok("exhausted attempts throw with contract context", threw, "throw path");
-
-  // ── gatherPrimaryData: the which-API-when layer (operator, 2026-07-23) ──
-  {
-    const dgCalls: string[] = [];
-    const fakeDg = { async get(path: string): Promise<unknown> { dgCalls.push(path); return { observations: [{ date: "2026-07-01", value: "3.2" }] }; } };
-    let menuSeen = false;
-    const llmSel = {
-      async complete(args: { prompt: string }): Promise<string> {
-        // extractEvidence call on the fetched payload
-        return args.prompt.includes("3.2") ? "- CPI at 3.2 (2026-07-01)" : "NONE";
-      },
-      async completeStructured(args: { messages: { content: string }[] }): Promise<unknown> {
-        menuSeen = args.messages.some((m) => m.content.includes('id "fred_series"') && m.content.includes("usaspending_search"));
-        return { plays: [{ id: "fred_series", seriesId: "CPIAUCSL" }, { id: "nasdaq_price", ticker: "bad ticker!" }] };
-      },
-    } as unknown as LlmClient;
-    const block = await gatherPrimaryData({
-      llm: llmSel, datagod: fakeDg, plays: DATA_PLAYS,
-      storyHeadline: "Inflation shock", evidenceHead: "coverage says prices rose",
-    });
-    ok("primary-data: selection prompt carries the full plays menu", menuSeen, "menu");
-    ok("primary-data: valid play fetched via whitelisted path",
-      dgCalls.length === 1 && dgCalls[0] === "/fred/CPIAUCSL", JSON.stringify(dgCalls));
-    ok("primary-data: invalid params rejected mechanically (bad ticker never fetched)",
-      !dgCalls.some((c) => c.includes("nasdaq")), JSON.stringify(dgCalls));
-    ok("primary-data: block labeled authoritative with extracted figures",
-      block.includes("PRIMARY DATA (fred_series") && block.includes("CPI at 3.2"), block.slice(0, 120));
-  }
-  {
-    // fetch failure is non-blocking → empty block
-    const fakeDgBad = { async get(): Promise<unknown> { throw new Error("HTTP 502"); } };
-    const llmSel2 = {
-      async complete(): Promise<string> { return "NONE"; },
-      async completeStructured(): Promise<unknown> { return { plays: [{ id: "treasury_debt" }] }; },
-    } as unknown as LlmClient;
-    const logged: string[] = [];
-    const block = await gatherPrimaryData({
-      llm: llmSel2, datagod: fakeDgBad, plays: DATA_PLAYS,
-      storyHeadline: "Debt ceiling fight", evidenceHead: "…", log: (l) => logged.push(l),
-    });
-    ok("primary-data: fetch failure is non-blocking and logged",
-      block === "" && logged.some((l) => l.includes("non-blocking")), logged.join("|"));
-  }
-
-  // ── multi-column op-ed page (operator, 2026-07-23): every persona writes
-  // its own contract-gated column; bios render with the AI-persona marker ──
-  {
-    const second = { name: "Test Realist", method: "m", priors: "p", voice: "v", bio: "former test analyst" };
-    const mk = (name: string): string => `## Analysis — ${name}\n\nDecided take from ${name}. ${NO_PARALLEL_PHRASE} History still teaches.\n\n${BOTTOM_LINE_MARKER} ${name} calls it: this holds until it breaks, and it breaks late.`;
-    const llmMulti = {
-      async complete(args: { system?: string; prompt: string }): Promise<string> {
-        const who = args.prompt.includes("Test Realist") || (args.system ?? "").includes("Test Realist") ? "Test Realist" : PERSONAS.historian.name;
-        return mk(who);
-      },
-      async completeStructured(): Promise<never> { throw new Error("unused"); },
-    } as unknown as LlmClient;
-    const one = await composeAnalysis({ llm: llmMulti, persona: PERSONAS.historian, evidenceBlock: "…", outletNames: ["BBC"], parallel: null, maxAttempts: 1 });
-    const two = await composeAnalysis({ llm: llmMulti, persona: second, evidenceBlock: "…", outletNames: ["BBC"], parallel: null, maxAttempts: 1 });
-    ok("multi-column: each persona passes its own contract under its own name",
-      one.includes(`## Analysis — ${PERSONAS.historian.name}`) && two.includes("## Analysis — Test Realist"),
-      `${one.slice(0, 40)} | ${two.slice(0, 40)}`);
-  }
-
-  if (failures > 0) {
-    process.exitCode = 1;
-    return;
-  }
-  process.stdout.write("news-desk (part 1) checks: all green\n");
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// Part 2: createNewsDesk orchestration — offline, EVERY seam injected
-// (trendingImpl / indexImpl / internalsFactory / parallelFetchImpl + fake raw
-// search + routing fake llm). The REAL orchestration runs end to end.
-// ───────────────────────────────────────────────────────────────────────────
 
 const STORY1 = "Senate passes sweeping tariff bill after marathon vote";
 const STORY2 = "Central bank raises interest rates to twenty-year high";
@@ -236,16 +65,35 @@ async function orchestrationChecks(): Promise<void> {
   };
 
   // Routing fake llm: extractEvidence prompts start "TOPIC:"; everything else
-  // (composeAnalysis + the assembled-markdown fact-check audit) gets a
-  // contract-v2-compliant Analysis: names the parallel, cites NO outlets
-  // (op-ed direction 2026-07-23), and carries the bottom-line verdict.
-  const ANALYSIS = `## Analysis — ${PERSONAS.historian.name}\n\nThe Panic of 1907 is the closest rhyme to this squeeze: a systemic liquidity halt ended only by a lender of last resort, and the lesson has not aged a day.\n\n${DISANALOGY_MARKER} Unlike 1907, today's backstop is institutional — no private financier had to improvise the rescue, so the modern squeeze reverses faster.\n\n${BOTTOM_LINE_MARKER} Central banks will blink first, exactly as they always have since 1907.`;
+  // (the author version + the assembled-markdown fact-check audit) gets a
+  // column that satisfies the author-version contract: names the verified
+  // parallel, attributes to two outlets, carries both markers, and titles
+  // every chapter from its own argument.
+  const COLUMN = [
+    "## A liquidity halt wearing a modern suit",
+    "",
+    "The Panic of 1907 is the closest rhyme to this squeeze, and anyone pretending otherwise is selling something. A systemic liquidity halt ended only by a lender of last resort is not a historical curiosity; it is the script this decision is reading from, badly. Wire reports the policy rate went up fifty basis points to a twenty-year high, and the chair said the bank would stay the course. Beacon reports markets fell two percent on the announcement, which is the sound of a room discovering that the course is a cliff.",
+    "",
+    "That gap between the sentence and the reaction is the whole story. In 1907 the money simply stopped moving, and it took one financier improvising in a library to start it again. The modern version is politer and slower, but the mechanism has not changed: credit freezes when the people holding it stop believing the people who need it.",
+    "",
+    "## Why the backstop changes the arithmetic",
+    "",
+    `${DISANALOGY_MARKER} Unlike 1907, today's backstop is institutional. No private financier has to be talked into rescuing anyone at two in the morning, which means the modern squeeze reverses faster and with far less drama. That is a real difference and it deserves to be said plainly, because it is the one thing standing between a hard quarter and a genuine crisis.`,
+    "",
+    "But institutional does not mean automatic. A backstop that exists on paper and a backstop that is used are different objects, and the distance between them is measured in exactly the kind of hesitation the chair displayed.",
+    "",
+    "## The rate that will break first",
+    "",
+    "Fifty basis points is not a policy, it is a flinch. The Wire account makes clear the bank is still fighting the last war, tightening into a market that has already priced the damage.",
+    "",
+    `${BOTTOM_LINE_MARKER} Central banks will blink first, exactly as they always have since 1907.`,
+  ].join("\n");
   const prompts: string[] = [];
   const llm = {
     async complete(args: { system?: string; prompt: string }): Promise<string> {
       prompts.push(args.prompt);
       if (args.prompt.startsWith("TOPIC:")) return `- fact ("quote", per wire)`;
-      return ANALYSIS;
+      return COLUMN;
     },
     async completeStructured<T>(): Promise<T> {
       return {
@@ -339,10 +187,12 @@ async function orchestrationChecks(): Promise<void> {
     logs.some((l) => l.includes("Teaser Daily") && l.includes("content-quality floor")), logs.join(" | "));
 
   const md = (published as GeneratedPost | null)?.markdown ?? "";
-  ok("sink received the retell (fixed 3-section plan reached generate)",
-    md.startsWith("retold: 3 sections"), md.slice(0, 80));
-  ok("published markdown carries the labeled Analysis section",
-    md.includes(`## Analysis — ${PERSONAS.historian.name}`) && md.includes(DISANALOGY_MARKER), md.slice(0, 200));
+  // One take per story (operator, 2026-07-24): there is no neutral retell any
+  // more — the columnist's own text IS the article body.
+  ok("sink received the column directly (no neutral retell wrapper)",
+    md.startsWith("## A liquidity halt wearing a modern suit") && !md.includes("retold:"), md.slice(0, 80));
+  ok("published markdown carries original chapter titles, never a generic label",
+    md.includes("## A liquidity halt wearing a modern suit") && md.includes(DISANALOGY_MARKER), md.slice(0, 200));
   ok("## Sources lists exactly the 2 surviving outlets",
     md.includes("## Sources") && md.includes("- Wire: [") && md.includes("- Beacon: [") &&
       !md.includes("Teaser Daily") && !md.includes("Blocked Times"), md);
@@ -357,12 +207,14 @@ async function orchestrationChecks(): Promise<void> {
       ((await internalsOpts[0].gatherResearch?.("any"))?.block ?? "").includes(`SOURCE Wire — ${STORY2} (https://wire.example/rates):`),
     JSON.stringify(internalsOpts.length));
   ok("fact-check audit read the assembled markdown INCLUDING the Analysis",
-    prompts.some((p) => p.includes("fact-checker reviewing") && p.includes(`## Analysis — ${PERSONAS.historian.name}`)),
+    prompts.some((p) => p.includes("fact-checker reviewing") && p.includes("## A liquidity halt wearing a modern suit")),
     "no audit prompt carried the Analysis");
   ok("stage artifacts recorded under the stable labels",
-    ["trending", "evidence", "parallels", "analysis", "fact-check-audit", "published"].every((l) => artifacts.some((a) => a.label === l)) &&
+    ["trending", "evidence", "parallels", "lead-image", "published"].every((l) => artifacts.some((a) => a.label === l)) &&
       artifacts.some((a) => a.label === `resolution: ${STORY2}`) &&
-      artifacts.some((a) => a.label.startsWith("scrape: ")),
+      artifacts.some((a) => a.label.startsWith("scrape: ")) &&
+      artifacts.some((a) => a.label === `author version: ${PERSONAS.historian.name}`) &&
+      artifacts.some((a) => a.label === `fact-check-audit: ${PERSONAS.historian.name}`),
     artifacts.map((a) => a.label).join(","));
 
   // Scenario 2 — minSources: 3. Resolution passes (3 unblocked outlets) but the
@@ -396,8 +248,7 @@ async function orchestrationChecks(): Promise<void> {
   process.stdout.write("news-desk (part 2) checks: all green\n");
 }
 
-main()
-  .then(() => orchestrationChecks())
+orchestrationChecks()
   .catch((err: unknown) => {
     process.stderr.write(`news-desk.checks failed: ${String(err)}\n`);
     process.exit(1);

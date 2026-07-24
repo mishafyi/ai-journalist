@@ -139,8 +139,9 @@ const COLUMNISTS = {
   },
 } as const;
 
-/** One columnist per lean, drawn fresh each run, so bylines vary story to
- *  story while every story still gets all three worldviews. */
+/** The masthead, grouped by lean. One story gets ONE take: a columnist is
+ *  drawn at random from the whole roster each run, the way a desk hands a
+ *  story to whoever is on it. */
 const POOLS = {
   progressive: [COLUMNISTS.maya, COLUMNISTS.alma, COLUMNISTS.imani],
   centrist: [COLUMNISTS.dana, COLUMNISTS.ray, COLUMNISTS.nikhil, COLUMNISTS.adele],
@@ -148,13 +149,14 @@ const POOLS = {
 } as const;
 
 const pickOne = <T,>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.length)];
-const TRIO = [pickOne(POOLS.progressive), pickOne(POOLS.centrist), pickOne(POOLS.conservative)];
+const ROSTER = [...POOLS.progressive, ...POOLS.centrist, ...POOLS.conservative];
+const WRITER = pickOne(ROSTER);
 
 const brand: BrandProfile = {
   name: "The Wire Desk",
   publication: "The Wire Desk (example.com)",
   beat: "world news and geopolitics",
-  bylines: TRIO.map((c) => c.name),
+  bylines: [WRITER.name],
 };
 
 async function main(): Promise<void> {
@@ -232,8 +234,7 @@ async function main(): Promise<void> {
     search,
     embedder,
     feeds: FEEDS,
-    persona: TRIO[0],
-    personas: [TRIO[1], TRIO[2]],
+    persona: WRITER,
     // Author-versions format (operator, 2026-07-23): three complete fused
     // columns per story under the source headline, capped — replaces the
     // retell+columns page. Cap 600 keeps the trio shorter than the old page.

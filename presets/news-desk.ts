@@ -4,7 +4,7 @@
  * the gemma-narrowing rule extended to structure), and the contract-gated
  * Analysis composer. Part 2 (createNewsDesk) orchestrates.
  */
-import { checkAnalysisContract, DISANALOGY_MARKER, BOTTOM_LINE_MARKER,
+import { DISANALOGY_MARKER, BOTTOM_LINE_MARKER,
   mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
@@ -12,7 +12,6 @@ import type { LeadImage } from "../sources/lead-image";
 import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
 import type { VerifiedParallel } from "../parallels";
 import type { GeneratedArticle } from "../pipeline";
-import type { Plan } from "../planning";
 import type {
   BrandProfile,
   CoveredTopic,
@@ -88,89 +87,6 @@ export const PERSONAS: {
     voice: "Analytical, diagram-in-prose, plain words for complex mechanisms.",
   },
 };
-
-/** The FIXED three-section retell (spec: What happened / The numbers &
- *  reactions / Context). queries stay empty — every section grounds in the
- *  ONE shared evidence corpus the orchestrator supplies via gatherResearch. */
-export function buildRetellPlan(storyHeadline: string): Plan {
-  return {
-    title: storyHeadline,
-    angle: "what happened, what the numbers say, and the context a reader needs",
-    themeStatement: `${storyHeadline} — the essence of today's coverage, retold with per-outlet attribution`,
-    sections: [
-      {
-        heading: "What happened",
-        intent:
-          "The event itself: who did what, when, where — attributed per outlet ('X reports…, per Y…'), leading with the newest confirmed developments.",
-        queries: [],
-      },
-      {
-        heading: "The numbers and reactions",
-        intent:
-          "Every concrete figure, quote, and official reaction in the evidence, verbatim where quoted, each attributed to its outlet.",
-        queries: [],
-      },
-      {
-        heading: "Context",
-        intent:
-          "Only the background the evidence itself supplies: what preceded this, what it connects to, what remains unresolved.",
-        queries: [],
-      },
-    ],
-  };
-}
-
-/** Compose the persona Analysis; accept only what checkAnalysisContract
- *  passes. Failures feed back into the retry prompt; exhausted attempts throw. */
-export async function composeAnalysis(args: {
-  llm: LlmClient;
-  persona: PersonaProfile;
-  evidenceBlock: string;
-  outletNames: readonly string[];
-  parallel: VerifiedParallel | null;
-  maxAttempts: number;
-  model?: string;
-  log?: (line: string) => void;
-}): Promise<string> {
-  const { persona } = args;
-  // Guard: an empty-string event is honest absence, not a parallel — the
-  // contract's includes("") is vacuously true, so "" must take the null path.
-  const parallel = args.parallel !== null && args.parallel.event.trim() !== "" ? args.parallel : null;
-  const parallelBlock =
-    parallel === null
-      ? `NO parallel survived verification. You MUST include this sentence verbatim: "${NO_PARALLEL_PHRASE}" — then analyze on the evidence alone.`
-      : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument, and include a paragraph starting exactly with "${DISANALOGY_MARKER}" stating where the parallel does NOT hold.`;
-
-  // Op-ed direction (operator, 2026-07-23): a decided position argued from the
-  // persona's historical knowledge. The retell above the column carries ALL
-  // news sourcing — the column cites no outlets and hedges nothing.
-  const system = `You are ${persona.name}, an opinion columnist with a decided worldview. You write the op-ed Analysis under a news story. You have ALREADY made up your mind: take ONE clear position and argue it with conviction — never give a balanced both-sides view, never hedge with "time will tell". Your material is HISTORY AS YOU KNOW IT — patterns, precedents, and consequences of moments like this one — measured against the events in the story. Do NOT cite or name news outlets; the reporting above carries the sourcing. Never invent quotes or specific facts about the current events beyond the story summary.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
-
-  const base = `THE STORY (as reported above your column — your factual ground for current events):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite the op-ed Analysis now. Requirements:\n- Open with exactly: ## Analysis — ${persona.name}\n- Argue ONE decided position; open strong, no throat-clearing\n- Draw on history you know beyond the story; anchor on the verified parallel when one is given\n- Do NOT name any news outlet (not: ${args.outletNames.join(", ")})\n- Close with a paragraph starting exactly: ${BOTTOM_LINE_MARKER} — one committed verdict on what this means or what happens next\n- 250-450 words, unmistakably in the persona's voice.`;
-
-  let lastFailures: string[] = [];
-  for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {
-    const prompt =
-      attempt === 1
-        ? base
-        : `${base}\n\nYour previous attempt failed the contract:\n${lastFailures.map((f) => `- ${f}`).join("\n")}\nFix every failure and rewrite the full section.`;
-    const analysis = await args.llm.complete({
-      system,
-      prompt,
-      temperature: 0.4,
-      ...(args.model === undefined ? {} : { model: args.model }),
-    });
-    const verdict = checkAnalysisContract(analysis, {
-      personaName: persona.name,
-      outletNames: args.outletNames,
-      parallelEvent: parallel === null ? null : parallel.event,
-    });
-    if (verdict.ok) return analysis;
-    lastFailures = verdict.failures;
-    args.log?.(`analysis attempt ${attempt}/${args.maxAttempts} failed contract: ${verdict.failures.join(" | ")}`);
-  }
-  throw new Error(`analysis failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
-}
 
 /** Chapter titles that say nothing: newspaper section labels, essay furniture,
  *  or the word we are explicitly retiring ("Analysis — <Name>"). */
@@ -730,7 +646,7 @@ export function createNewsDesk(opts: {
         // each its own post — same title (the trending headline verbatim),
         // slug suffixed with the author, byline the persona. The audit stays
         // informational and runs per version.
-        if (opts.authorVersions !== undefined) {
+        {
           // Story tags (operator, 2026-07-23): one schema-constrained call per
           // story, shared by all versions. Best-effort like the audit — a tag
           // failure logs loudly and never blocks the run.
@@ -783,7 +699,7 @@ export function createNewsDesk(opts: {
               evidenceBlock: evidence,
               outletNames,
               parallel,
-              wordCap: opts.authorVersions.wordCap,
+              wordCap: opts.authorVersions?.wordCap ?? 600,
               maxAttempts: knobs.analysisAttempts,
               log,
             });
@@ -807,8 +723,11 @@ export function createNewsDesk(opts: {
             } catch (err: unknown) {
               log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
             }
+            // One take per story → the headline alone is the slug. (When more
+            // than one columnist runs the same story, the author disambiguates.)
+            const base = internals.slugify(story.headline).slice(0, 70).replace(/-+$/, "");
             const first = columnist.name.trim().split(/\s+/)[0]?.toLowerCase().replace(/[^a-z0-9]/g, "") ?? "columnist";
-            const slug = `${internals.slugify(story.headline).slice(0, 60).replace(/-+$/, "")}-${first}`;
+            const slug = columnists.length === 1 ? base : `${base.slice(0, 60).replace(/-+$/, "")}-${first}`;
             const article: GeneratedArticle = {
               title: story.headline,
               description: body.trim().slice(0, 160),
@@ -832,70 +751,6 @@ export function createNewsDesk(opts: {
           return published;
         }
 
-        // Op-ed-page format: the neutral retell (fixed 3-section plan) + one
-        // contract-gated Analysis column per persona under it. Bios render
-        // under each header with an explicit AI-persona marker — invented
-        // bios must never read as real humans.
-        const article = await internals.generate(buildRetellPlan(story.headline));
-        const columns: string[] = [];
-        for (const columnist of columnists) {
-          const column = await composeAnalysis({
-            llm,
-            persona: columnist,
-            evidenceBlock: evidence,
-            outletNames,
-            parallel,
-            maxAttempts: knobs.analysisAttempts,
-            log,
-          });
-          const header = `## Analysis — ${columnist.name}`;
-          columns.push(column);
-        }
-        const analysis = columns.join("\n\n");
-        recordArtifact?.("analysis", analysis);
-
-        // Assembly: retell + Analysis + ## Sources (+ the parallel's Wikipedia
-        // line when present).
-        // Verification is internal plumbing (operator, 2026-07-23): the reader
-        // never sees Wikipedia — no encyclopedia line in Sources.
-        const finalArticle = {
-          ...article,
-          content: `${article.content}\n\n${analysis}\n\n## Sources\n${sourceLines.join("\n")}`,
-        };
-
-        // Fact-guard applies to the Analysis too (spec rule, ratified): the
-        // informational fact-check audit reads the FINAL assembled markdown —
-        // Analysis included — against the evidence corpus. Best-effort like
-        // the pipeline's own audit: informational, never a publish gate;
-        // failures log loudly and never block the run.
-        try {
-          const audit = await runFactCheckAudit(finalArticle.content, evidence, {
-            llm,
-            // model: "" is safe — createOllamaLlm's resolveModel treats blank as
-            // the configured default (check-locked in clients/ollama-llm.checks.ts
-            // — "blank model resolves to the configured default"); no model knob
-            // needed on this call.
-            model: "",
-            withRetry: async (_label, fn) => fn(),
-            ctx: createRunContext("news-desk-audit"),
-            gatherExemplars: () => [],
-            fetchPriorTitles: async () => [],
-            embedDedupSurvivors: async () => null,
-            titleExemplarCount: 0,
-            titleCollisionSim: 0,
-            titleEmbedSim: 0,
-            searchTermsCount: 0,
-          });
-          recordArtifact?.("fact-check-audit", audit);
-        } catch (err: unknown) {
-          log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
-        }
-
-        const slug = internals.slugify(finalArticle.title);
-        const post = internals.finalizePost(finalArticle, slug, story.headline);
-        await sink.publish(post);
-        recordArtifact?.("published", `${post.slug}\n${post.title}`);
-        return post;
       }
       throw new Error(`news-desk: no trending story resolved ≥${knobs.minSources} scrapable sources`);
     },
