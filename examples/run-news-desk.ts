@@ -109,6 +109,11 @@ async function main(): Promise<void> {
     async publish(post: GeneratedPost): Promise<PublishResult> {
       const path = `out/${post.slug}.md`;
       await writeFile(path, post.markdown);
+      // Meta sidecar: the loop publishes every new md with the title/byline
+      // recorded here (author-versions posts each carry their own persona
+      // byline — the loop must not guess from filenames).
+      await writeFile(`out/${post.slug}.meta.json`, JSON.stringify({ title: post.title, byline: post.byline ?? "" }, null, 2));
+      process.stdout.write(`Published "${post.title}" → ${path} [DRAFT]\n`);
       let ledger: { title: string; slug: string; date: string }[] = [];
       try {
         ledger = JSON.parse(await readFile("out/covered.json", "utf8"));
@@ -131,6 +136,10 @@ async function main(): Promise<void> {
     feeds: FEEDS,
     persona: COLUMNISTS.left,
     personas: [COLUMNISTS.right, COLUMNISTS.center],
+    // Author-versions format (operator, 2026-07-23): three complete fused
+    // columns per story under the source headline, capped — replaces the
+    // retell+columns page. Cap 600 keeps the trio shorter than the old page.
+    authorVersions: { wordCap: 600 },
     brand,
     sink,
     // Primary data (DataGod): active when the instance env is present.
@@ -155,7 +164,7 @@ async function main(): Promise<void> {
   });
 
   const post = await desk.run();
-  process.stdout.write(`Published "${post.title}" → out/${post.slug}.md [DRAFT] (provenance: ${runDir})\n`);
+  process.stdout.write(`Run complete: "${post.title}" (last of the author versions) — provenance: ${runDir}\n`);
 }
 
 main().catch((err: unknown) => {

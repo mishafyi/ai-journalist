@@ -9,6 +9,7 @@ import { checkAnalysisContract, DISANALOGY_MARKER,
 import { createHeadlineMatcher } from "../matching";
 import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
 import type { VerifiedParallel } from "../parallels";
+import type { GeneratedArticle } from "../pipeline";
 import type { Plan } from "../planning";
 import type {
   BrandProfile,
@@ -150,6 +151,90 @@ export async function composeAnalysis(args: {
     args.log?.(`analysis attempt ${attempt}/${args.maxAttempts} failed contract: ${verdict.failures.join(" | ")}`);
   }
   throw new Error(`analysis failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
+}
+
+/** Mechanical contract for a fused author version (operator, 2026-07-23:
+ *  "whole retelling AND analysis from author perspective, shorter, capped").
+ *  The piece retells the reporting (so outlet attribution is REQUIRED here,
+ *  unlike the columns contract where the neutral retell carried sourcing)
+ *  and argues the author's take (bottom line + verified-parallel rules). */
+export function checkAuthorVersionContract(
+  version: string,
+  args: { outletNames: readonly string[]; parallelEvent: string | null; wordCap: number },
+): { ok: boolean; failures: string[] } {
+  const failures: string[] = [];
+  const words = version.trim().split(/\s+/).length;
+  if (words < 300) failures.push(`too short: ${words} words (floor 300)`);
+  if (words > args.wordCap) failures.push(`over the cap: ${words} words (cap ${args.wordCap})`);
+  const mentioned = args.outletNames.filter((o) => version.includes(o));
+  if (mentioned.length < 2)
+    failures.push(
+      `must attribute the reporting to at least 2 outlets by name (found ${mentioned.length === 0 ? "none" : mentioned.join(", ")})`,
+    );
+  const at = version.indexOf(BOTTOM_LINE_MARKER);
+  if (at === -1) failures.push(`missing the "${BOTTOM_LINE_MARKER}" verdict paragraph`);
+  else if (version.slice(at + BOTTOM_LINE_MARKER.length).trim().length < 40)
+    failures.push("bottom-line verdict too thin (under 40 chars)");
+  if (args.parallelEvent !== null) {
+    if (!version.includes(args.parallelEvent)) failures.push(`must name the verified parallel ("${args.parallelEvent}")`);
+    if (!version.includes(DISANALOGY_MARKER)) failures.push(`missing the "${DISANALOGY_MARKER}" paragraph`);
+  } else if (!version.includes(NO_PARALLEL_PHRASE)) {
+    failures.push(`no verified parallel: must include "${NO_PARALLEL_PHRASE}" verbatim`);
+  }
+  if (/wikipedia|encyclopedia/i.test(version)) failures.push("must not mention Wikipedia/encyclopedias (verification is internal)");
+  if (/^#{1,4} /m.test(version)) failures.push("no headings — running prose only (title and Sources are added mechanically)");
+  return { ok: failures.length === 0, failures };
+}
+
+/** Compose one COMPLETE author version: the story retold through the
+ *  persona's lens (facts + attribution from the evidence) fused with their
+ *  decided take. Same retry-until-contract shape as composeAnalysis. */
+export async function composeAuthorVersion(args: {
+  llm: LlmClient;
+  persona: PersonaProfile;
+  storyHeadline: string;
+  evidenceBlock: string;
+  outletNames: readonly string[];
+  parallel: VerifiedParallel | null;
+  wordCap: number;
+  maxAttempts: number;
+  model?: string;
+  log?: (line: string) => void;
+}): Promise<string> {
+  const { persona } = args;
+  const parallel = args.parallel !== null && args.parallel.event.trim() !== "" ? args.parallel : null;
+  const parallelBlock =
+    parallel === null
+      ? `NO parallel survived verification. You MUST include this sentence verbatim: "${NO_PARALLEL_PHRASE}" — then argue on the evidence alone.`
+      : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument, and include a paragraph starting exactly with "${DISANALOGY_MARKER}" stating where the parallel does NOT hold.`;
+
+  const system = `You are ${persona.name}, an opinion columnist with a decided worldview, writing your COMPLETE column on today's story: you retell what happened AND argue what it means, fused in one voice — yours. The facts belong to the reporting; the framing, emphasis, and verdict belong to you.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean; live it, never recite it): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
+
+  const target = `${Math.round(args.wordCap * 0.7)}-${Math.round(args.wordCap * 0.85)}`;
+  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position; no both-sides hedging, no "time will tell"\n- Close with a paragraph starting exactly: ${BOTTOM_LINE_MARKER} — one committed verdict\n- Running prose paragraphs ONLY — no headline, no headings, no lists (the headline and Sources are added outside your text)\n- ${target} words, hard cap ${args.wordCap} — unmistakably in your voice.`;
+
+  let lastFailures: string[] = [];
+  for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {
+    const prompt =
+      attempt === 1
+        ? base
+        : `${base}\n\nYour previous attempt failed the contract:\n${lastFailures.map((f) => `- ${f}`).join("\n")}\nFix every failure and rewrite the full column.`;
+    const version = await args.llm.complete({
+      system,
+      prompt,
+      temperature: 0.4,
+      ...(args.model === undefined ? {} : { model: args.model }),
+    });
+    const verdict = checkAuthorVersionContract(version, {
+      outletNames: args.outletNames,
+      parallelEvent: parallel === null ? null : parallel.event,
+      wordCap: args.wordCap,
+    });
+    if (verdict.ok) return version;
+    lastFailures = verdict.failures;
+    args.log?.(`author version (${persona.name}) attempt ${attempt}/${args.maxAttempts} failed contract: ${verdict.failures.join(" | ")}`);
+  }
+  throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -344,6 +429,13 @@ export function createNewsDesk(opts: {
    *  [persona, ...personas] writes its own contract-gated Analysis column
    *  under the same retell + verified parallel — an op-ed page, one story. */
   personas?: readonly PersonaProfile[];
+  /** Author-versions format (operator, 2026-07-23): when set, there is NO
+   *  neutral retell — each columnist writes one COMPLETE capped column
+   *  (retell + take fused) published as its OWN post whose title is the
+   *  source-optimized trending headline verbatim (never model-invented) and
+   *  whose slug gets the columnist's first name as suffix. Unset → the
+   *  op-ed-page format above (one post: retell + Analysis columns). */
+  authorVersions?: { wordCap: number };
   brand: BrandProfile;
   sink: Sink;
   knobs: NewsDeskKnobs;
@@ -522,7 +614,6 @@ export function createNewsDesk(opts: {
           gatherResearch: async () => ({ block: evidence }),
           knobs: { sectionSnippets: 0, sectionConcurrency: 1 },
         });
-        const article = await internals.generate(buildRetellPlan(story.headline));
 
         // Parallels: propose (schema-constrained) → Wikipedia-verify → select.
         const candidates = await proposeParallels({
@@ -577,19 +668,83 @@ export function createNewsDesk(opts: {
           ].join("\n"),
         );
 
-        // Contract-gated persona Analysis over the same corpus.
-        // One column per persona (op-ed page): same retell, same verified
-        // parallel, each columnist's own contract-gated take. Bios render
+        const columnists: readonly PersonaProfile[] = [persona, ...(opts.personas ?? [])];
+        const outletNames = contributing.map((c) => c.outlet);
+        const sourceLines = contributing.map((c) => `- ${c.outlet}: [${c.title}](${c.url})`);
+
+        // Author-versions format: one complete fused column per columnist,
+        // each its own post — same title (the trending headline verbatim),
+        // slug suffixed with the author, byline the persona. The audit stays
+        // informational and runs per version.
+        if (opts.authorVersions !== undefined) {
+          let published: GeneratedPost | null = null;
+          for (const columnist of columnists) {
+            const body = await composeAuthorVersion({
+              llm,
+              persona: columnist,
+              storyHeadline: story.headline,
+              evidenceBlock: evidence,
+              outletNames,
+              parallel,
+              wordCap: opts.authorVersions.wordCap,
+              maxAttempts: knobs.analysisAttempts,
+              log,
+            });
+            const marker = columnist.bio === undefined ? "" : `*AI columnist persona — ${columnist.bio}*\n\n`;
+            const content = `${marker}${body}\n\n## Sources\n${sourceLines.join("\n")}`;
+            recordArtifact?.(`author version: ${columnist.name}`, content);
+            try {
+              const audit = await runFactCheckAudit(content, evidence, {
+                llm,
+                model: "",
+                withRetry: async (_label, fn) => fn(),
+                ctx: createRunContext("news-desk-audit"),
+                gatherExemplars: () => [],
+                fetchPriorTitles: async () => [],
+                embedDedupSurvivors: async () => null,
+                titleExemplarCount: 0,
+                titleCollisionSim: 0,
+                titleEmbedSim: 0,
+                searchTermsCount: 0,
+              });
+              recordArtifact?.(`fact-check-audit: ${columnist.name}`, audit);
+            } catch (err: unknown) {
+              log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
+            }
+            const first = columnist.name.trim().split(/\s+/)[0]?.toLowerCase().replace(/[^a-z0-9]/g, "") ?? "columnist";
+            const slug = `${internals.slugify(story.headline).slice(0, 60).replace(/-+$/, "")}-${first}`;
+            const article: GeneratedArticle = {
+              title: story.headline,
+              description: body.trim().slice(0, 160),
+              category: "news",
+              tags: [],
+              keywords: [],
+              content,
+            };
+            const post: GeneratedPost = {
+              ...internals.finalizePost(article, slug, story.headline),
+              byline: `${columnist.name} — AI columnist persona`,
+            };
+            await sink.publish(post);
+            recordArtifact?.("published", `${post.slug}\n${post.title}\n${post.byline ?? ""}`);
+            published = post;
+          }
+          if (published === null) throw new Error("news-desk: author-versions ran with zero columnists");
+          return published;
+        }
+
+        // Op-ed-page format: the neutral retell (fixed 3-section plan) + one
+        // contract-gated Analysis column per persona under it. Bios render
         // under each header with an explicit AI-persona marker — invented
         // bios must never read as real humans.
-        const columnists: readonly PersonaProfile[] = [persona, ...(opts.personas ?? [])];
+        const article = await internals.generate(buildRetellPlan(story.headline));
         const columns: string[] = [];
         for (const columnist of columnists) {
           const column = await composeAnalysis({
             llm,
             persona: columnist,
             evidenceBlock: evidence,
-            outletNames: contributing.map((c) => c.outlet),
+            outletNames,
             parallel,
             maxAttempts: knobs.analysisAttempts,
             log,
@@ -608,7 +763,6 @@ export function createNewsDesk(opts: {
         // line when present).
         // Verification is internal plumbing (operator, 2026-07-23): the reader
         // never sees Wikipedia — no encyclopedia line in Sources.
-        const sourceLines = contributing.map((c) => `- ${c.outlet}: [${c.title}](${c.url})`);
         const finalArticle = {
           ...article,
           content: `${article.content}\n\n${analysis}\n\n## Sources\n${sourceLines.join("\n")}`,
