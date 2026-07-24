@@ -252,13 +252,15 @@ async function orchestrationChecks(): Promise<void> {
     posts.map((p) => p.slug).join(",") ===
       "central-bank-raises-interest-rates-to-twenty-year-high-maya,central-bank-raises-interest-rates-to-twenty-year-high-grant,central-bank-raises-interest-rates-to-twenty-year-high-dana",
     posts.map((p) => p.slug).join(","));
-  ok("bylines are the persona with the AI marker (brand random byline overridden)",
-    posts.map((p) => p.byline).join("|") ===
-      "Maya Ellison — AI columnist persona|Grant Colby — AI columnist persona|Dana Whitfield — AI columnist persona",
+  // Bylines are the columnist's plain name — the paper reads as a newspaper,
+  // and the brand's random byline is overridden (operator, 2026-07-24).
+  ok("bylines are the columnist's plain name (brand random byline overridden)",
+    posts.map((p) => p.byline).join("|") === "Maya Ellison|Grant Colby|Dana Whitfield",
     posts.map((p) => p.byline).join("|"));
-  ok("bio personas open with the AI-persona marker line; bio-less do not",
-    (posts[0]?.markdown.startsWith("*AI columnist persona — b. 1996, Flint") ?? false) &&
-      (posts[2]?.markdown.startsWith(DISANALOGY_MARKER) || (posts[2]?.markdown.startsWith("Wire reports") ?? false)),
+  // No persona/disclosure preamble is embedded in the article body — every
+  // version opens on its own first sentence (operator, 2026-07-24).
+  ok("no persona preamble: every version opens on its own prose",
+    posts.every((p) => !p.markdown.includes("AI columnist persona") && p.markdown.startsWith("Wire reports")),
     posts.map((p) => p.markdown.slice(0, 40)).join(" | "));
   ok("every version carries ## Sources with both surviving outlets",
     posts.every((p) => p.markdown.includes("## Sources") && p.markdown.includes("- Wire: [") && p.markdown.includes("- Beacon: [")),

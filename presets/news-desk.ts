@@ -701,15 +701,15 @@ export function createNewsDesk(opts: {
                 {
                   role: "system",
                   content:
-                    "You tag news stories for a section index. Output 3-6 short lowercase topic tags: subject areas, places, institutions, actors (1-2 words each, e.g. \"tariffs\", \"ukraine\", \"federal reserve\"). Never invent topics absent from the story.",
+                    "You tag news stories for a section index. Output 5-10 short lowercase tags (1-3 words each) drawn ONLY from the story. ALWAYS include, when the story supports it: (a) the country or region it concerns (e.g. \"ukraine\", \"middle east\", \"european union\"); (b) every organization or institution named (e.g. \"nato\", \"federal reserve\", \"opec\", \"pentagon\"); (c) every notable person named, as their surname or full name (e.g. \"zelensky\", \"jerome powell\"); and (d) the subject area (e.g. \"tariffs\", \"nuclear program\"). Never invent an entity the story does not mention.",
                 },
                 { role: "user", content: `Story: ${story.headline}\n\nEvidence excerpt:\n${evidence.slice(0, 1200)}` },
               ],
-              schema: z.object({ tags: z.array(z.string().min(2).max(24)).min(3).max(6) }),
+              schema: z.object({ tags: z.array(z.string().min(2).max(28)).min(3).max(10) }),
               schemaName: "story_tags",
               temperature: 0,
             });
-            tags = [...new Set(tagged.tags.map((t) => t.toLowerCase().trim()).filter((t) => t !== ""))].slice(0, 6);
+            tags = [...new Set(tagged.tags.map((t) => t.toLowerCase().trim()).filter((t) => t !== ""))].slice(0, 10);
             recordArtifact?.("tags", tags.join(", "));
           } catch (err: unknown) {
             log?.(`news-desk: story tagging failed (best-effort, continuing untagged): ${String(err)}`);
@@ -742,8 +742,7 @@ export function createNewsDesk(opts: {
               maxAttempts: knobs.analysisAttempts,
               log,
             });
-            const marker = columnist.bio === undefined ? "" : `*AI columnist persona — ${columnist.bio}*\n\n`;
-            const content = `${marker}${body}\n\n## Sources\n${sourceLines.join("\n")}`;
+            const content = `${body}\n\n## Sources\n${sourceLines.join("\n")}`;
             recordArtifact?.(`author version: ${columnist.name}`, content);
             try {
               const audit = await runFactCheckAudit(content, evidence, {
@@ -775,7 +774,7 @@ export function createNewsDesk(opts: {
             };
             const post: GeneratedPost = {
               ...internals.finalizePost(article, slug, story.headline),
-              byline: `${columnist.name} — AI columnist persona`,
+              byline: columnist.name,
               tags,
               ...(lead === null ? {} : { imageUrl: lead.url, imageCredit: lead.credit, imageSource: lead.source }),
             };
@@ -804,11 +803,7 @@ export function createNewsDesk(opts: {
             log,
           });
           const header = `## Analysis — ${columnist.name}`;
-          columns.push(
-            columnist.bio === undefined
-              ? column
-              : column.replace(header, `${header}\n*AI columnist persona — ${columnist.bio}*`),
-          );
+          columns.push(column);
         }
         const analysis = columns.join("\n\n");
         recordArtifact?.("analysis", analysis);
