@@ -114,7 +114,18 @@ async function main(): Promise<void> {
       // byline — the loop must not guess from filenames).
       await writeFile(
         `out/${post.slug}.meta.json`,
-        JSON.stringify({ title: post.title, byline: post.byline ?? "", tags: post.tags ?? [] }, null, 2),
+        JSON.stringify(
+          {
+            title: post.title,
+            byline: post.byline ?? "",
+            tags: post.tags ?? [],
+            imageUrl: post.imageUrl ?? "",
+            imageCredit: post.imageCredit ?? "",
+            imageSource: post.imageSource ?? "",
+          },
+          null,
+          2,
+        ),
       );
       process.stdout.write(`Published "${post.title}" → ${path} [DRAFT]\n`);
       let ledger: { title: string; slug: string; date: string }[] = [];

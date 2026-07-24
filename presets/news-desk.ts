@@ -7,6 +7,8 @@
 import { checkAnalysisContract, DISANALOGY_MARKER, BOTTOM_LINE_MARKER,
   mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
+import { pickLeadImage } from "../sources/lead-image";
+import type { LeadImage } from "../sources/lead-image";
 import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
 import type { VerifiedParallel } from "../parallels";
 import type { GeneratedArticle } from "../pipeline";
@@ -713,6 +715,20 @@ export function createNewsDesk(opts: {
             log?.(`news-desk: story tagging failed (best-effort, continuing untagged): ${String(err)}`);
           }
 
+          // Lead image (operator, 2026-07-23): ONE per story, shared by all
+          // versions — the outlet's own og:image, else an Openverse CC search.
+          // Best-effort like tags: a failure logs and leaves the story imageless.
+          let lead: LeadImage | null = null;
+          try {
+            lead = await pickLeadImage({
+              sourceUrls: contributing.map((c) => c.url),
+              query: `${story.headline} ${tags.slice(0, 3).join(" ")}`.trim(),
+            });
+            recordArtifact?.("lead-image", lead === null ? "(none found)" : `${lead.source}: ${lead.url}\n${lead.credit}`);
+          } catch (err: unknown) {
+            log?.(`news-desk: lead-image lookup failed (best-effort, continuing imageless): ${String(err)}`);
+          }
+
           let published: GeneratedPost | null = null;
           for (const columnist of columnists) {
             const body = await composeAuthorVersion({
@@ -761,6 +777,7 @@ export function createNewsDesk(opts: {
               ...internals.finalizePost(article, slug, story.headline),
               byline: `${columnist.name} — AI columnist persona`,
               tags,
+              ...(lead === null ? {} : { imageUrl: lead.url, imageCredit: lead.credit, imageSource: lead.source }),
             };
             await sink.publish(post);
             recordArtifact?.("published", `${post.slug}\n${post.title}\n${post.byline ?? ""}`);
