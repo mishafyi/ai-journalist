@@ -295,7 +295,9 @@ async function main(): Promise<void> {
       trendingLimit: TRENDING_LIMIT, minSources: 3, pagesMax: 6,
       chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400,
       matchThreshold: 0.62, coveredThreshold: 0.55, // 0.62→0.55 2026-07-21: three same-arc articles in four — clustering trigger hit,
-      parallelCount: 4, parallelMinScore: 0.3, analysisAttempts: 3,
+      // minScore 0.5 (operator, 2026-07-26): a parallel must genuinely fit or the
+      // column takes the honest no-parallel path — no more Tiananmen-for-a-car-attack.
+      parallelCount: 4, parallelMinScore: 0.5, analysisAttempts: 3,
     },
     coveredTopics: async (): Promise<CoveredTopic[]> => {
       try {

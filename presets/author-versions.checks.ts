@@ -5,7 +5,7 @@
  *
  * Run: npx tsx presets/author-versions.checks.ts
  */
-import { BOTTOM_LINE_MARKER, DISANALOGY_MARKER, NO_PARALLEL_PHRASE } from "../gates";
+import { BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE } from "../gates";
 import type { LlmClient } from "../ports";
 import { checkAuthorVersionContract, composeAuthorVersion, PERSONAS } from "./news-desk";
 
@@ -27,7 +27,7 @@ const GOOD_BODY = [
   `Wire reports that the central bank raised its policy rate by 50 basis points to a twenty-year high, and per Beacon, markets fell 2 percent on the announcement. "We will stay the course," the chair said.`,
   `## A lender of last resort, ninety years early`,
   `The Panic of 1907 is the closest rhyme to this squeeze: a systemic halt ended only by a lender of last resort, and the lesson has not aged a day. ${FILLER.repeat(12)}`,
-  `${DISANALOGY_MARKER} Unlike 1907, today's backstop is institutional — no private financier had to improvise the rescue. ${FILLER.repeat(8)}`,
+  `The 1907 mechanism is this decision's manual, and it supports the verdict completely. ${FILLER.repeat(8)}`,
   `${BOTTOM_LINE_MARKER} Central banks will blink first, exactly as they always have since 1907, and savers will pay for the blink.`,
 ].join("\n\n");
 
@@ -54,10 +54,6 @@ function contractChecks(): void {
     !noParallel.ok && noParallel.failures.some((f) => f.includes("must name the verified parallel")),
     noParallel.failures.join(" | "));
 
-  const noDis = checkAuthorVersionContract(GOOD_BODY.replace(DISANALOGY_MARKER, "But note:"), args);
-  ok("contract: missing disanalogy paragraph fails",
-    !noDis.ok && noDis.failures.some((f) => f.includes(DISANALOGY_MARKER)), noDis.failures.join(" | "));
-
   const absent = checkAuthorVersionContract(GOOD_BODY, { ...args, parallelEvent: null });
   ok("contract: null parallel demands the absence phrase verbatim",
     !absent.ok && absent.failures.some((f) => f.includes(NO_PARALLEL_PHRASE)), absent.failures.join(" | "));
@@ -70,7 +66,7 @@ function contractChecks(): void {
     !over.ok && over.failures.some((f) => f.includes("cap 600")), over.failures.join(" | "));
 
   const short = checkAuthorVersionContract(
-    `Wire and Beacon report a hike. Panic of 1907. ${DISANALOGY_MARKER} n/a. ${BOTTOM_LINE_MARKER} A verdict long enough to clear the forty character floor easily.`, args);
+    `Wire and Beacon report a hike. Panic of 1907. ${BOTTOM_LINE_MARKER} A verdict long enough to clear the forty character floor easily.`, args);
   ok("contract: under the 300-word floor fails",
     !short.ok && short.failures.some((f) => f.includes("floor 300")), short.failures.join(" | "));
 

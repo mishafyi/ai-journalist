@@ -1,6 +1,6 @@
 import { DATA_PLAYS, FRED_TITLES, PERSONAS, createNewsDesk, fredChartUrl } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
-import { BOTTOM_LINE_MARKER, DISANALOGY_MARKER, NO_PARALLEL_PHRASE } from "../gates";
+import { BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
 import type { createDefaultInternals } from "./default";
 import type { TrendingStory } from "../sources/google-news";
@@ -80,7 +80,7 @@ async function orchestrationChecks(): Promise<void> {
     "",
     "## Why the backstop changes the arithmetic",
     "",
-    `${DISANALOGY_MARKER} Unlike 1907, today's backstop is institutional. No private financier has to be talked into rescuing anyone at two in the morning, which means the modern squeeze reverses faster and with far less drama. That is a real difference and it deserves to be said plainly, because it is the one thing standing between a hard quarter and a genuine crisis.`,
+    "Unlike every panic since, this one arrives with the 1907 lesson already institutionalized, which is exactly why the bank's hesitation is inexcusable: the precedent does not merely rhyme with tonight's decision, it wrote the manual the chair is refusing to open. The mechanism is identical — belief drains faster than liquidity — and 1907 shows both halves: how the freeze starts, and that it ends only when the backstop acts like it means it.",
     "",
     "But institutional does not mean automatic. A backstop that exists on paper and a backstop that is used are different objects, and the distance between them is measured in exactly the kind of hesitation the chair displayed.",
     "",
@@ -229,7 +229,9 @@ async function orchestrationChecks(): Promise<void> {
   ok("sink received the column directly (no neutral retell wrapper)",
     md.startsWith("## A liquidity halt wearing a modern suit") && !md.includes("retold:"), md.slice(0, 80));
   ok("published markdown carries original chapter titles, never a generic label",
-    md.includes("## A liquidity halt wearing a modern suit") && md.includes(DISANALOGY_MARKER), md.slice(0, 200));
+    md.includes("## A liquidity halt wearing a modern suit"), md.slice(0, 200));
+  ok("the column commits to the parallel — no hedge paragraph (operator, 2026-07-26)",
+    !md.includes("Where the parallel breaks down"), md.slice(0, 200));
   ok("## Sources lists exactly the 2 surviving outlets",
     md.includes("## Sources") && md.includes("- Wire: [") && md.includes("- Beacon: [") &&
       !md.includes("Teaser Daily") && !md.includes("Blocked Times"), md);

@@ -4,7 +4,7 @@
  * Part 2 (createNewsDesk) orchestrates: trending → resolution → floors →
  * verified parallel → ONE columnist's fused column → publish.
  */
-import { DISANALOGY_MARKER, BOTTOM_LINE_MARKER,
+import { BOTTOM_LINE_MARKER,
   mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
@@ -126,7 +126,6 @@ export function checkAuthorVersionContract(
     // live on 2026-07-23 ("Smoot–Hawley" en dash; "the Dust Bowl" case).
     if (!namesEvent(version, args.parallelEvent))
       failures.push(`must name the verified parallel ("${args.parallelEvent}")`);
-    if (!version.includes(DISANALOGY_MARKER)) failures.push(`missing the "${DISANALOGY_MARKER}" paragraph`);
   } else if (!version.includes(NO_PARALLEL_PHRASE)) {
     failures.push(`no verified parallel: must include "${NO_PARALLEL_PHRASE}" verbatim`);
   }
@@ -171,7 +170,7 @@ export async function composeAuthorVersion(args: {
   const parallelBlock =
     parallel === null
       ? `NO parallel survived verification. You MUST include this sentence verbatim: "${NO_PARALLEL_PHRASE}" — then argue on the evidence alone.`
-      : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument (by its name as given above), and include a paragraph starting exactly with "${DISANALOGY_MARKER}" stating where the parallel does NOT hold.`;
+      : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument (by its name as given above) and COMMIT to it: argue why this precedent supports your judgment completely — the shared mechanism, not surface resemblance. Never hedge the parallel or list where it fails; if you find yourself needing disclaimers, you are arguing it wrong (operator, 2026-07-26: one side, supported by the precedent, argued all the way).`;
 
   const system = `You are ${persona.name}, an opinion columnist with a decided worldview, writing your COMPLETE column on today's story: you retell what happened AND argue what it means, fused in one voice — yours. The facts belong to the reporting; the framing, emphasis, and verdict belong to you.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean; live it, never recite it): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
 
@@ -879,7 +878,7 @@ export function createNewsDesk(opts: {
           }
 
           const columnist = persona;
-          const body = await composeAuthorVersion({
+          const rawBody = await composeAuthorVersion({
             llm,
             persona: columnist,
             storyHeadline: story.headline,
@@ -890,6 +889,9 @@ export function createNewsDesk(opts: {
             maxAttempts: knobs.analysisAttempts,
             log,
           });
+          // The model sometimes opens the verdict "**The bottom line:** — like
+          // this" (seen live 2026-07-25) — normalize the stray dash.
+          const body = rawBody.replace(/(\*\*The bottom line:\*\*)\s*[—–-]\s*/g, "$1 ");
           const content = `${body}${chartMarkdown}\n\n## Sources\n${sourceLines.join("\n")}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           try {

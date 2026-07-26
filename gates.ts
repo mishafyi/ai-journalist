@@ -965,7 +965,6 @@ export function structureBlockers(
 
 export const NO_PARALLEL_PHRASE =
   "No verified historical parallel survived fact-checking for this story.";
-export const DISANALOGY_MARKER = "**Where the parallel breaks down:**";
 export const BOTTOM_LINE_MARKER = "**The bottom line:**";
 
 /** Typography-insensitive matching for contract string checks. Wikipedia
