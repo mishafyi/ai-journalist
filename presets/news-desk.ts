@@ -462,7 +462,7 @@ export async function gatherPrimaryData(args: {
         },
         {
           role: "user",
-          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS (excerpt):\n${args.evidenceHead}\n\nMENU:\n${menu}\n\nPick 0-2 plays. For fred_series set seriesId (whitelist only); for worldbank_indicator and imf_weo set seriesId AND country; for usaspending_search and wikipedia_summary set query; for eonet_events set query to the category; for nasdaq_price and edgar_filings set ticker.`,
+          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS (excerpt):\n${args.evidenceHead}\n\nMENU:\n${menu}\n\nPick 0-2 plays. Field rules: seriesId is ONLY the bare code, exactly as written in the menu (e.g. "NY.GDP.MKTP.KD.ZG" or "NGDP_RPCH") — never a description, never inside query. For fred_series set seriesId; for worldbank_indicator and imf_weo set seriesId AND country (ISO code); for usaspending_search and wikipedia_summary set query; for eonet_events set query to the category word; for nasdaq_price and edgar_filings set ticker.`,
         },
       ],
       schema: DataPlayPick,
