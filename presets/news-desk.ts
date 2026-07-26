@@ -272,7 +272,7 @@ export const DATA_PLAYS: readonly DataPlay[] = [
       "US macroeconomic indicators the story turns on: GDP growth, inflation/CPI (CPIAUCSL), unemployment (UNRATE), Fed interest rates (FEDFUNDS), 10-year Treasury yield (DGS10), S&P 500 (SP500), WTI crude oil price (DCOILWTICO). seriesId MUST be one of the whitelist.",
     request: (p) =>
       p.seriesId !== undefined && (FRED_SERIES_WHITELIST as readonly string[]).includes(p.seriesId)
-        ? { path: `/fred/${p.seriesId}`, params: { limit: 6, sort_order: "desc" } }
+        ? { path: `/fred/${p.seriesId}`, params: { limit: 36, sort_order: "desc" } }
         : null,
   },
   {
@@ -299,7 +299,63 @@ export const DATA_PLAYS: readonly DataPlay[] = [
       "US national debt totals (debt to the penny) when the story is about federal debt, deficits, or fiscal capacity.",
     request: () => ({ path: "/treasury/debt", params: { limit: 5 } }),
   },
+  {
+    id: "edgar_filings",
+    useFor:
+      "The story centers on a specific US-listed company's finances, results, guidance, risks, or an SEC matter: pull the company's own profile and filing history from the regulator (SEC EDGAR) so figures come from official filings, not a re-tell. ticker = its exchange symbol (e.g. TSLA, AAPL).",
+    request: (p) =>
+      p.ticker !== undefined && /^[A-Z.\-]{1,8}$/.test(p.ticker)
+        ? { path: `/edgar/company/${p.ticker}`, params: {} }
+        : null,
+  },
 ];
+
+/** Reader-facing titles for the whitelisted FRED series (chart captions). */
+export const FRED_TITLES: Record<string, string> = {
+  GDP: "US gross domestic product",
+  CPIAUCSL: "US consumer price index",
+  UNRATE: "US unemployment rate",
+  FEDFUNDS: "Federal funds rate",
+  DGS10: "10-year Treasury yield",
+  SP500: "S&P 500",
+  DCOILWTICO: "WTI crude oil price",
+};
+
+/** Chart.js line-chart URL for a FRED series, rendered by QuickChart —
+ *  a maintained chart service, not hand-rolled SVG (operator, 2026-07-25).
+ *  Pure: takes the observations the play already fetched, newest-first as
+ *  FRED returns them, and charts them oldest→newest. Null when the series
+ *  is too thin to plot honestly. */
+export function fredChartUrl(seriesId: string, observations: readonly { date: string; value: string }[]): string | null {
+  const points = observations
+    .filter((o) => o.value !== "." && Number.isFinite(Number(o.value)))
+    .slice(0, 36)
+    .reverse();
+  if (points.length < 6) return null;
+  const config = {
+    type: "line",
+    data: {
+      labels: points.map((o) => o.date),
+      datasets: [
+        {
+          label: FRED_TITLES[seriesId] ?? seriesId,
+          data: points.map((o) => Number(o.value)),
+          borderColor: "#e4572e",
+          backgroundColor: "rgba(228,87,46,0.08)",
+          fill: true,
+          pointRadius: 0,
+          borderWidth: 2,
+          tension: 0.2,
+        },
+      ],
+    },
+    options: {
+      plugins: { legend: { display: false }, title: { display: true, text: FRED_TITLES[seriesId] ?? seriesId } },
+      scales: { x: { ticks: { maxTicksLimit: 6 } } },
+    },
+  };
+  return `https://quickchart.io/chart?w=760&h=380&bkg=%23f7f6f2&c=${encodeURIComponent(JSON.stringify(config))}`;
+}
 
 const DataPlayPick = z.object({
   plays: z
@@ -316,8 +372,9 @@ const DataPlayPick = z.object({
 
 /** Select 0-2 primary-data plays for a story (one narrow schema-constrained
  *  call), fetch them best-effort, and compact each payload into evidence
- *  bullets via the proven chunked extractor. Returns "" when nothing applies
- *  or nothing survives — data plays must never block an article. */
+ *  bullets via the proven chunked extractor. Also renders the FIRST fetched
+ *  FRED series as a chart (QuickChart) for the article body. Empty results
+ *  when nothing applies — data plays must never block an article. */
 export async function gatherPrimaryData(args: {
   llm: LlmClient;
   datagod: DatagodClient;
@@ -327,7 +384,7 @@ export async function gatherPrimaryData(args: {
   model?: string;
   log?: (line: string) => void;
   recordArtifact?: (label: string, content: string) => void;
-}): Promise<string> {
+}): Promise<{ block: string; chartMarkdown: string }> {
   const menu = args.plays
     .map((p) => `- id "${p.id}": ${p.useFor}`)
     .join("\n");
@@ -352,9 +409,10 @@ export async function gatherPrimaryData(args: {
     });
   } catch (err: unknown) {
     args.log?.(`datagod: play selection failed (skipping primary data): ${String(err)}`);
-    return "";
+    return { block: "", chartMarkdown: "" };
   }
   const blocks: string[] = [];
+  let chartMarkdown = "";
   for (const pick of picks.plays) {
     const play = args.plays.find((p) => p.id === pick.id);
     if (play === undefined) {
@@ -368,6 +426,17 @@ export async function gatherPrimaryData(args: {
     }
     try {
       const data = await args.datagod.get(req.path, req.params);
+      // One chart per article: the first FRED series a story runs on becomes
+      // a reader-facing figure, from the same fetch the evidence uses.
+      if (chartMarkdown === "" && pick.id === "fred_series" && pick.seriesId !== undefined) {
+        const obs = (data as { observations?: { date: string; value: string }[] }).observations;
+        const url = Array.isArray(obs) ? fredChartUrl(pick.seriesId, obs) : null;
+        if (url !== null) {
+          const title = FRED_TITLES[pick.seriesId] ?? pick.seriesId;
+          chartMarkdown = `\n\n![${title}](${url})\n\n*${title}. Source: Federal Reserve Economic Data (FRED).*`;
+          args.recordArtifact?.("datagod:chart", `${pick.seriesId}\n${url}`);
+        }
+      }
       const raw = JSON.stringify(data).slice(0, 20_000);
       const parts = await extractEvidence({
         llm: args.llm,
@@ -389,7 +458,7 @@ export async function gatherPrimaryData(args: {
       args.log?.(`datagod: play "${pick.id}" fetch failed (non-blocking): ${String(err)}`);
     }
   }
-  return blocks.join("\n\n");
+  return { block: blocks.join("\n\n"), chartMarkdown };
 }
 
 export function createNewsDesk(opts: {
@@ -586,6 +655,7 @@ export function createNewsDesk(opts: {
           continue;
         }
         let evidence = contributing.map((c) => c.block).join("\n\n");
+        let chartMarkdown = "";
         // Primary data (DataGod): selected per story from the plays menu,
         // best-effort, appended as authoritative first-party evidence.
         if (opts.datagod !== undefined) {
@@ -598,7 +668,8 @@ export function createNewsDesk(opts: {
             ...(opts.log === undefined ? {} : { log: opts.log }),
             ...(recordArtifact === undefined ? {} : { recordArtifact }),
           });
-          if (primary !== "") evidence = `${evidence}\n\n${primary}`;
+          if (primary.block !== "") evidence = `${evidence}\n\n${primary.block}`;
+          chartMarkdown = primary.chartMarkdown;
         }
         recordArtifact?.(
           "evidence",
@@ -754,7 +825,7 @@ export function createNewsDesk(opts: {
             maxAttempts: knobs.analysisAttempts,
             log,
           });
-          const content = `${body}\n\n## Sources\n${sourceLines.join("\n")}`;
+          const content = `${body}${chartMarkdown}\n\n## Sources\n${sourceLines.join("\n")}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           try {
             const audit = await runFactCheckAudit(content, evidence, {

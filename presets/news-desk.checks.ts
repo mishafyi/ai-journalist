@@ -1,4 +1,4 @@
-import { PERSONAS, createNewsDesk } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, createNewsDesk, fredChartUrl } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { BOTTOM_LINE_MARKER, DISANALOGY_MARKER, NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -388,6 +388,23 @@ async function orchestrationChecks(): Promise<void> {
     post4 === (published4 as GeneratedPost | null) &&
       post4.slug === "central-bank-raises-interest-rates-to-twenty-year-high",
     post4.slug);
+
+  // Chart helper (operator, 2026-07-25: graphs from DataGod series, rendered
+  // by a maintained service — never hand-rolled SVG).
+  const obs = Array.from({ length: 12 }, (_, i) => ({ date: `2026-0${(i % 9) + 1}-01`, value: String(100 + i) }));
+  const chart = fredChartUrl("UNRATE", obs);
+  ok("fredChartUrl renders a QuickChart line config for a real series",
+    chart !== null && chart.startsWith("https://quickchart.io/chart?") &&
+      decodeURIComponent(chart).includes(FRED_TITLES.UNRATE) && decodeURIComponent(chart).includes("#e4572e"),
+    String(chart).slice(0, 120));
+  ok("fredChartUrl refuses a too-thin series (nothing to plot honestly)",
+    fredChartUrl("UNRATE", obs.slice(0, 3)) === null && fredChartUrl("UNRATE", [{ date: "2026-01-01", value: "." }]) === null,
+    "thin series must yield null");
+  const edgar = DATA_PLAYS.find((pl) => pl.id === "edgar_filings");
+  ok("edgar_filings play maps a ticker to the regulator profile path",
+    edgar !== undefined && edgar.request({ ticker: "TSLA" })?.path === "/edgar/company/TSLA" &&
+      edgar.request({ ticker: "not a ticker" }) === null && edgar.request({}) === null,
+    JSON.stringify(edgar?.request({ ticker: "TSLA" })));
 
   if (failures > 0) {
     process.exitCode = 1;
