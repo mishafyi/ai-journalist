@@ -52,6 +52,8 @@ async function orchestrationChecks(): Promise<void> {
     "https://beacon.example/rates": REAL("Beacon"),
     "https://teaser.example/rates": "Subscribe to continue reading. Create a free account to unlock this article and get unlimited access.",
     "https://www.bloomberg.com/rates": REAL("Blocked Times"),
+    "https://hunt-a.example/story": REAL("hunt-a.example"),
+    "https://hunt-b.example/story": REAL("hunt-b.example"),
   };
   const scraped: string[] = [];
   const search: SearchClient = {
@@ -91,6 +93,10 @@ async function orchestrationChecks(): Promise<void> {
   // The no-parallel variant for the recentParallels scenario: same story, no
   // historical parallel — carries the NO_PARALLEL_PHRASE verbatim, never
   // names the skipped event, and still satisfies the author-version contract.
+  // Scenario-4 fixture: same column, but the second attribution names a HUNTED
+  // host — the contract's two-outlet floor must hold when sources come from
+  // the search hunt rather than the RSS index.
+  const HUNT_COLUMN = COLUMN.replace("Beacon reports", "hunt-a.example reports");
   const NO_PARALLEL_COLUMN = [
     "## A squeeze with no honest precedent",
     "",
@@ -118,6 +124,7 @@ async function orchestrationChecks(): Promise<void> {
       // Route on prompt content (the TOPIC: trick): a compose prompt built on
       // the no-parallel path instructs the phrase verbatim — answer with the
       // no-parallel column so the contract's NO_PARALLEL_PHRASE branch holds.
+      if (args.prompt.includes("hunt-a.example")) return HUNT_COLUMN;
       if (args.prompt.includes(NO_PARALLEL_PHRASE)) return NO_PARALLEL_COLUMN;
       return COLUMN;
     },
@@ -326,6 +333,61 @@ async function orchestrationChecks(): Promise<void> {
   ok("recentParallels: no-parallel run publishes no telemetry.parallel field",
     post3.telemetry !== undefined && !("parallel" in post3.telemetry) && String(post3.telemetry.topic) === STORY2,
     JSON.stringify(post3.telemetry));
+
+  // Scenario 4 — the source hunt (operator, 2026-07-25: "write news for every
+  // trending news"). The index holds ONE outlet for the story; the search
+  // backend knows two more (plus a google.com redirect that must be filtered).
+  // Resolution tops up via the hunt and the story publishes with 3 sources.
+  const logs4: string[] = [];
+  let published4: GeneratedPost | null = null;
+  const searched4: string[] = [];
+  const post4 = await createNewsDesk({
+    llm,
+    search: {
+      async search(q: string) {
+        searched4.push(q);
+        return [
+          { title: "Rates story", url: "https://news.google.com/rss/articles/xyz", snippet: "" },
+          { title: "Central bank hikes to 20-year high", url: "https://hunt-a.example/story", snippet: "" },
+          { title: "Rate rise rocks markets", url: "https://hunt-b.example/story", snippet: "" },
+        ];
+      },
+      async scrape(url: string): Promise<string> {
+        const body = PAGES[url];
+        if (body === undefined) throw new Error(`no fixture page for ${url}`);
+        return body;
+      },
+    },
+    feeds: [],
+    persona: PERSONAS.historian,
+    brand,
+    sink: {
+      async publish(post) {
+        published4 = post;
+        return { url: `memory://${post.slug}`, status: "DRAFT" as const };
+      },
+    },
+    knobs: { ...knobs, minSources: 3 },
+    coveredTopics: async () => [{ title: STORY1 }],
+    log: (line) => logs4.push(line),
+    trendingImpl: async () => trending,
+    indexImpl: async () => [index[0]],
+    internalsFactory,
+    parallelFetchImpl,
+  }).run();
+  const md4 = (published4 as GeneratedPost | null)?.markdown ?? "";
+  ok("hunt: searched the story headline once the index came up short",
+    searched4.length === 1 && searched4[0] === STORY2, JSON.stringify(searched4));
+  ok("hunt: log names the shortfall and the pages added",
+    logs4.some((l) => l.includes(`index gave 1/3 — search hunt added 2 candidate page(s)`)), logs4.join(" | "));
+  ok("hunt: published with index + hunted sources, google.com redirect filtered",
+    md4.includes("- Wire: [") && md4.includes("- hunt-a.example: [") && md4.includes("- hunt-b.example: [") &&
+      !md4.includes("news.google.com"),
+    md4.split("## Sources")[1] ?? md4.slice(0, 200));
+  ok("hunt: the run returns the published post",
+    post4 === (published4 as GeneratedPost | null) &&
+      post4.slug === "central-bank-raises-interest-rates-to-twenty-year-high",
+    post4.slug);
 
   if (failures > 0) {
     process.exitCode = 1;

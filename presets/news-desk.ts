@@ -483,7 +483,35 @@ export function createNewsDesk(opts: {
           if (blocked) log?.(`news-desk: dropped ${item.outlet} (${item.url}) — blocked host`);
           return !blocked;
         });
-        const resolved = unblocked.sort((a, b) => b.score - a.score).slice(0, knobs.pagesMax);
+        // Source hunt (operator, 2026-07-25: "make sure we write news for every
+        // trending news"): the outlet index is ten shallow RSS windows, so real
+        // stories often match 0-2 of them — 61% of all rejections. When the
+        // index comes up short, ask the search backend for the story's other
+        // coverage and admit pages from hosts we don't already hold. Hunted
+        // pages face the same blocklist here and the same content floors
+        // downstream; index sources keep priority in the page cap.
+        const hunted: { item: OutletItem; score: number }[] = [];
+        if (unblocked.length < knobs.minSources) {
+          try {
+            const found = await search.search(story.headline, { limit: 8 });
+            const held = new Set(unblocked.map(({ item }) => hostOf(item.url)));
+            for (const r of found) {
+              if (unblocked.length + hunted.length >= knobs.pagesMax) break;
+              if (!r.url.startsWith("http")) continue;
+              const host = hostOf(r.url);
+              if (held.has(host) || isBlockedHost(host, blockedHosts)) continue;
+              if (host.endsWith("google.com") || host.endsWith("youtube.com")) continue;
+              held.add(host);
+              hunted.push({ item: { outlet: host, region: "", title: r.title, url: r.url }, score: 0 });
+            }
+            log?.(
+              `news-desk: "${story.headline}" index gave ${unblocked.length}/${knobs.minSources} — search hunt added ${hunted.length} candidate page(s)`,
+            );
+          } catch (err: unknown) {
+            log?.(`news-desk: source hunt failed (best-effort, continuing with the index alone): ${String(err)}`);
+          }
+        }
+        const resolved = [...unblocked.sort((a, b) => b.score - a.score), ...hunted].slice(0, knobs.pagesMax);
         recordArtifact?.(
           `resolution: ${story.headline}`,
           resolved.length === 0
