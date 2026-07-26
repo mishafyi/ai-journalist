@@ -254,8 +254,13 @@ export interface DataPlay {
   id: string;
   /** When to use it — shown verbatim to the selection LLM. */
   useFor: string;
+  /** Evidence-block framing override. Default presents the payload as
+   *  authoritative primary data; reference-class plays (encyclopedic
+   *  background) override it so the column never cites an encyclopedia —
+   *  the contract rejects that. */
+  evidenceLabel?: string;
   /** Build the request from validated params. */
-  request(params: { seriesId?: string; query?: string; ticker?: string }): {
+  request(params: { seriesId?: string; query?: string; ticker?: string; country?: string }): {
     path: string;
     params?: Record<string, string | number>;
   } | null;
@@ -264,6 +269,15 @@ export interface DataPlay {
 export const FRED_SERIES_WHITELIST = [
   "GDP", "CPIAUCSL", "UNRATE", "FEDFUNDS", "DGS10", "SP500", "DCOILWTICO",
 ] as const;
+
+export const WORLDBANK_INDICATOR_WHITELIST = [
+  "NY.GDP.MKTP.CD", "NY.GDP.MKTP.KD.ZG", "FP.CPI.TOTL.ZG", "SL.UEM.TOTL.ZS", "SP.POP.TOTL",
+] as const;
+
+export const IMF_WEO_SERIES_WHITELIST = ["NGDP_RPCH", "PCPIPCH", "LUR", "GGXWDG_NGDP", "BCA_NGDPD"] as const;
+
+const ISO_COUNTRY_RE = /^[A-Za-z]{2,3}(;[A-Za-z]{2,3}){0,3}$/;
+const EONET_CATEGORIES = ["wildfires", "severeStorms", "volcanoes", "floods"] as const;
 
 export const DATA_PLAYS: readonly DataPlay[] = [
   {
@@ -298,6 +312,54 @@ export const DATA_PLAYS: readonly DataPlay[] = [
     useFor:
       "US national debt totals (debt to the penny) when the story is about federal debt, deficits, or fiscal capacity.",
     request: () => ({ path: "/treasury/debt", params: { limit: 5 } }),
+  },
+  {
+    id: "worldbank_indicator",
+    useFor:
+      "A named country's headline macro figure in an INTERNATIONAL story: GDP (NY.GDP.MKTP.CD), GDP growth % (NY.GDP.MKTP.KD.ZG), inflation % (FP.CPI.TOTL.ZG), unemployment % (SL.UEM.TOTL.ZS), population (SP.POP.TOTL). seriesId MUST be one of those World Bank codes; country = ISO country code(s), semicolon-separated (e.g. \"fr\" or \"us;cn\").",
+    request: (p) =>
+      p.seriesId !== undefined &&
+      (WORLDBANK_INDICATOR_WHITELIST as readonly string[]).includes(p.seriesId) &&
+      p.country !== undefined && ISO_COUNTRY_RE.test(p.country)
+        ? { path: `/worldbank/${p.seriesId}`, params: { countries: p.country.toLowerCase(), per_page: 60, date_range: "2015:2026" } }
+        : null,
+  },
+  {
+    id: "imf_weo",
+    useFor:
+      "IMF World Economic Outlook figures for a country, INCLUDING IMF FORECAST years: real GDP growth (NGDP_RPCH), inflation (PCPIPCH), unemployment (LUR), government debt %GDP (GGXWDG_NGDP), current account %GDP (BCA_NGDPD). seriesId MUST be one of those WEO codes; country = ONE ISO3 code (e.g. FRA).",
+    request: (p) =>
+      p.seriesId !== undefined &&
+      (IMF_WEO_SERIES_WHITELIST as readonly string[]).includes(p.seriesId) &&
+      p.country !== undefined && /^[A-Za-z]{3}$/.test(p.country)
+        ? { path: `/imf/WEO/${p.country.toUpperCase()}.${p.seriesId}`, params: { limit: 60 } }
+        : null,
+  },
+  {
+    id: "usgs_quakes",
+    useFor:
+      "An earthquake story: authoritative magnitudes, locations and times straight from USGS.",
+    request: () => ({ path: "/usgs/earthquakes", params: { minmagnitude: 5, limit: 10, orderby: "time" } }),
+  },
+  {
+    id: "eonet_events",
+    useFor:
+      "A wildfire, severe-storm, volcano or flood story: NASA's tracker of active named natural events. query MUST be one of: wildfires, severeStorms, volcanoes, floods.",
+    request: (p) =>
+      p.query !== undefined && (EONET_CATEGORIES as readonly string[]).includes(p.query)
+        ? { path: "/eonet/events", params: { category: p.query, status: "open", limit: 10 } }
+        : null,
+  },
+  {
+    id: "wikipedia_summary",
+    useFor:
+      "Stable background on ONE central entity the coverage assumes the reader knows (a person, organization, place or treaty): grounds names, dates and roles. query = the entity's name.",
+    evidenceLabel:
+      "REFERENCE BACKGROUND (for your own grounding of names, dates and roles — NEVER cite or mention an encyclopedia in the column)",
+    request: (p) =>
+      p.query !== undefined && p.query.trim().length >= 2 && p.query.length <= 80
+        ? { path: `/wikipedia/summary/${encodeURIComponent(p.query.trim())}`, params: {} }
+        : null,
   },
   {
     id: "edgar_filings",
@@ -365,6 +427,7 @@ const DataPlayPick = z.object({
         seriesId: z.string().optional(),
         query: z.string().optional(),
         ticker: z.string().optional(),
+        country: z.string().optional(),
       }),
     )
     .max(2),
@@ -399,7 +462,7 @@ export async function gatherPrimaryData(args: {
         },
         {
           role: "user",
-          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS (excerpt):\n${args.evidenceHead}\n\nMENU:\n${menu}\n\nPick 0-2 plays. For fred_series set seriesId (whitelist only); for usaspending_search set query; for nasdaq_price set ticker.`,
+          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS (excerpt):\n${args.evidenceHead}\n\nMENU:\n${menu}\n\nPick 0-2 plays. For fred_series set seriesId (whitelist only); for worldbank_indicator and imf_weo set seriesId AND country; for usaspending_search and wikipedia_summary set query; for eonet_events set query to the category; for nasdaq_price and edgar_filings set ticker.`,
         },
       ],
       schema: DataPlayPick,
@@ -451,7 +514,9 @@ export async function gatherPrimaryData(args: {
         continue;
       }
       blocks.push(
-        `PRIMARY DATA (${play.id} — authoritative source; PREFER these figures over any outlet re-tell):\n${parts.join("\n")}`,
+        play.evidenceLabel !== undefined
+          ? `${play.evidenceLabel} [${play.id}]:\n${parts.join("\n")}`
+          : `PRIMARY DATA (${play.id} — authoritative source; PREFER these figures over any outlet re-tell):\n${parts.join("\n")}`,
       );
       args.recordArtifact?.(`datagod:${play.id}`, `${req.path} ${JSON.stringify(req.params)}\n${parts.join("\n")}`);
     } catch (err: unknown) {

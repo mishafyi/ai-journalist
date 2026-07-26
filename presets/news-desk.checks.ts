@@ -400,6 +400,26 @@ async function orchestrationChecks(): Promise<void> {
   ok("fredChartUrl refuses a too-thin series (nothing to plot honestly)",
     fredChartUrl("UNRATE", obs.slice(0, 3)) === null && fredChartUrl("UNRATE", [{ date: "2026-01-01", value: "." }]) === null,
     "thin series must yield null");
+  // Tier-1 global plays (operator, 2026-07-25): request mapping is the gate —
+  // whitelisted codes pass, junk yields null and the play is skipped.
+  const play = (id: string) => DATA_PLAYS.find((pl) => pl.id === id);
+  ok("worldbank play: whitelisted indicator + ISO country → path; junk → null",
+    play("worldbank_indicator")?.request({ seriesId: "FP.CPI.TOTL.ZG", country: "fr" })?.path === "/worldbank/FP.CPI.TOTL.ZG" &&
+      play("worldbank_indicator")?.request({ seriesId: "MADE.UP", country: "fr" }) === null &&
+      play("worldbank_indicator")?.request({ seriesId: "SP.POP.TOTL", country: "not a code" }) === null,
+    JSON.stringify(play("worldbank_indicator")?.request({ seriesId: "FP.CPI.TOTL.ZG", country: "fr" })));
+  ok("imf_weo play: ISO3 + WEO code → /imf/WEO/FRA.NGDP_RPCH; junk → null",
+    play("imf_weo")?.request({ seriesId: "NGDP_RPCH", country: "fra" })?.path === "/imf/WEO/FRA.NGDP_RPCH" &&
+      play("imf_weo")?.request({ seriesId: "NGDP_RPCH", country: "france" }) === null,
+    JSON.stringify(play("imf_weo")?.request({ seriesId: "NGDP_RPCH", country: "fra" })));
+  ok("eonet play: category whitelist enforced",
+    play("eonet_events")?.request({ query: "wildfires" })?.path === "/eonet/events" &&
+      play("eonet_events")?.request({ query: "sharknado" }) === null,
+    "category gate");
+  ok("wikipedia play: entity → encoded summary path, and carries the no-encyclopedia evidence label",
+    play("wikipedia_summary")?.request({ query: "Cap Ferret" })?.path === "/wikipedia/summary/Cap%20Ferret" &&
+      (play("wikipedia_summary")?.evidenceLabel ?? "").includes("NEVER cite"),
+    JSON.stringify(play("wikipedia_summary")?.request({ query: "Cap Ferret" })));
   const edgar = DATA_PLAYS.find((pl) => pl.id === "edgar_filings");
   ok("edgar_filings play maps a ticker to the regulator profile path",
     edgar !== undefined && edgar.request({ ticker: "TSLA" })?.path === "/edgar/company/TSLA" &&

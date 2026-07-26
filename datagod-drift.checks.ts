@@ -42,6 +42,11 @@ async function main(): Promise<void> {
     { play: "nasdaq_price", csvPath: "/nasdaq/price/{ticker}" },
     { play: "treasury_debt", csvPath: "/treasury/debt" },
     { play: "edgar_filings", csvPath: "/edgar/company/{cik}" },
+    { play: "worldbank_indicator", csvPath: "/worldbank/{indicator}" },
+    { play: "imf_weo", csvPath: "/imf/{dataset}/{key}" },
+    { play: "usgs_quakes", csvPath: "/usgs/earthquakes" },
+    { play: "eonet_events", csvPath: "/eonet/events" },
+    { play: "wikipedia_summary", csvPath: "/wikipedia/summary/{title}" },
   ];
   for (const e of expectations) {
     ok(
