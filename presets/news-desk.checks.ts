@@ -405,6 +405,14 @@ async function orchestrationChecks(): Promise<void> {
   // by a maintained service — never hand-rolled SVG).
   const obs = Array.from({ length: 12 }, (_, i) => ({ date: `2026-0${(i % 9) + 1}-01`, value: String(100 + i) }));
   const chart = fredChartUrl("UNRATE", obs);
+  // Boundary bugs seen live 2026-07-26: mid-word dek chop, mid-word slug cap.
+  const { dekFrom } = await import("./news-desk");
+  const twoSentences = "They want you looking at the scandal. " + "x".repeat(200);
+  ok("dekFrom: a short complete sentence beats a chopped long one",
+    dekFrom(twoSentences) === "They want you looking at the scandal.", dekFrom(twoSentences));
+  const noBreaks = "word ".repeat(60).trim();
+  ok("dekFrom: a breakless paragraph cuts at a word boundary, never mid-word",
+    dekFrom(noBreaks).endsWith("word…"), dekFrom(noBreaks));
   ok("fredChartUrl renders a QuickChart line config for a real series",
     chart !== null && chart.startsWith("https://quickchart.io/chart?") &&
       decodeURIComponent(chart).includes(FRED_TITLES.UNRATE) && decodeURIComponent(chart).includes("#e4572e"),

@@ -92,8 +92,14 @@ export function dekFrom(markdown: string): string {
     .trim();
   if (prose.length <= 200) return prose;
   const cut = prose.slice(0, 200);
+  // A complete short sentence beats a chopped long one (live 2026-07-26: the
+  // second sentence ran past the cap and the dek ended mid-name). Take the
+  // last sentence end inside the cap however early it falls; only a
+  // paragraph with NO sentence break gets cut, and then at a word boundary.
   const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
-  return end > 80 ? cut.slice(0, end + 1) : `${cut.slice(0, 160).trimEnd()}…`;
+  if (end > 0) return cut.slice(0, end + 1);
+  const word = cut.slice(0, 180).replace(/\s+\S*$/, "");
+  return `${word.trimEnd()}…`;
 }
 
 /** Mechanical contract for a fused author version (operator, 2026-07-23:
@@ -974,8 +980,11 @@ export function createNewsDesk(opts: {
           } catch (err: unknown) {
             log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
           }
-          // One take per story → the headline alone is the slug.
-          const slug = internals.slugify(story.headline).slice(0, 70).replace(/-+$/, "");
+          // One take per story → the headline alone is the slug, capped at a
+          // WORD boundary (a raw 70-char slice shipped ".../criminal-co").
+          const rawSlug = internals.slugify(story.headline);
+          const slug =
+            rawSlug.length <= 70 ? rawSlug : rawSlug.slice(0, 70).replace(/-[^-]*$/, "").replace(/-+$/, "");
           const article: GeneratedArticle = {
             title: story.headline,
             description: dekFrom(body),
