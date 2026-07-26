@@ -44,6 +44,21 @@ async function main(): Promise<void> {
   });
   ok("verify: overlap-scored hit carries extract + url",
     good !== null && good.score > 0.5 && good.wikipediaUrl.includes("Suez_Crisis"), JSON.stringify(good));
+  // Fulltext fallback (2026-07-26): opensearch is a prefix matcher and dropped
+  // wordy-but-real candidates in production ("Rwandan Genocide and Aftermath").
+  const fallbackFetch = (async (url: unknown) => {
+    const u = String(url);
+    if (u.includes("action=opensearch")) return new Response(JSON.stringify(["q", [], [], []]), { status: 200 });
+    if (u.includes("list=search"))
+      return new Response(JSON.stringify({ query: { search: [{ title: "Suez Crisis" }] } }), { status: 200 });
+    return new Response(JSON.stringify({ title: "Suez Crisis", extract: "The Suez Crisis of 1956 saw Egypt, Britain and France clash over the canal.",
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Suez_Crisis" } } }), { status: 200 });
+  }) as typeof fetch;
+  const viaFulltext = await verifyParallel({ candidate: cands[0], fetchImpl: fallbackFetch });
+  ok("verify: opensearch miss + fulltext hit → resolves to the canonical page",
+    viaFulltext !== null && viaFulltext.wikipediaTitle === "Suez Crisis" && viaFulltext.score > 0.5,
+    JSON.stringify(viaFulltext));
+
   ok("verify: opensearch miss → null",
     (await verifyParallel({ candidate: cands[0], fetchImpl: fetchFor("", false) })) === null, "expected null");
   const off = await verifyParallel({

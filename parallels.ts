@@ -38,7 +38,7 @@ export async function proposeParallels(args: {
       {
         role: "system",
         content:
-          "You are a careful historian. Propose historical parallels for a current news story: real, well-documented events from any era whose DYNAMICS resemble the story. Use only widely known events with standard Wikipedia articles. Never invent events.",
+          "You are a careful historian. Propose historical parallels for a current news story: real, well-documented events from any era whose DYNAMICS resemble the story. Use only widely known events with standard Wikipedia articles, and name each by its common encyclopedic title (\"Rwandan genocide\", \"Suez Crisis\") — never a description (\"Industrial Labor Disputes (General)\" is not an event). Never invent events.",
       },
       {
         role: "user",
@@ -54,6 +54,7 @@ export async function proposeParallels(args: {
 }
 
 const WIKI_OPENSEARCH = "https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit=1&search=";
+const WIKI_FULLTEXT = "https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch=";
 const WIKI_SUMMARY = "https://en.wikipedia.org/api/rest_v1/page/summary/";
 
 /** Significant-token overlap between the candidate's identity (event + actors
@@ -83,7 +84,21 @@ export async function verifyParallel(args: {
     throw new Error(`parallels: opensearch HTTP ${searchRes.status} for "${args.candidate.event}"`);
   }
   const [, titles] = (await searchRes.json()) as [string, string[], string[], string[]];
-  const title = titles[0];
+  let title = titles[0];
+  if (title === undefined || title === "") {
+    // opensearch is a PREFIX matcher: "Rwandan Genocide and Aftermath" finds
+    // nothing while fulltext search resolves it to "Rwandan genocide"
+    // (dropped every wordy-but-real candidate in production, 2026-07-26).
+    const ftRes = await fetchImpl(`${WIKI_FULLTEXT}${encodeURIComponent(args.candidate.event)}`, {
+      signal: AbortSignal.timeout(15_000),
+      headers: { "User-Agent": "ai-journalist/news-desk (parallel verification)" },
+    });
+    if (!ftRes.ok) {
+      throw new Error(`parallels: fulltext search HTTP ${ftRes.status} for "${args.candidate.event}"`);
+    }
+    const ft = (await ftRes.json()) as { query?: { search?: { title?: string }[] } };
+    title = ft.query?.search?.[0]?.title ?? "";
+  }
   if (title === undefined || title === "") return null;
 
   const summaryRes = await fetchImpl(`${WIKI_SUMMARY}${encodeURIComponent(title)}`, {
