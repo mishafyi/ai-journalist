@@ -128,7 +128,15 @@ async function orchestrationChecks(): Promise<void> {
       if (args.prompt.includes(NO_PARALLEL_PHRASE)) return NO_PARALLEL_COLUMN;
       return COLUMN;
     },
-    async completeStructured<T>(): Promise<T> {
+    async completeStructured<T>(args: { schemaName?: string }): Promise<T> {
+      if (args.schemaName === "parallel_judge")
+        return {
+          scores: [{
+            event: "Panic of 1907",
+            score: 84,
+            mechanism: "belief drains faster than liquidity, and the freeze ends only when the lender of last resort acts like it means it",
+          }],
+        } as unknown as T;
       return {
         candidates: [{
           era: "1907",
@@ -379,7 +387,9 @@ async function orchestrationChecks(): Promise<void> {
   }).run();
   const md4 = (published4 as GeneratedPost | null)?.markdown ?? "";
   ok("hunt: searched the story headline once the index came up short",
-    searched4.length === 1 && searched4[0] === STORY2, JSON.stringify(searched4));
+    searched4.filter((q) => q === STORY2).length === 1, JSON.stringify(searched4));
+  ok("parallel research: the tournament web-researched the verified candidate",
+    searched4.some((q) => q.includes("Panic of 1907")), JSON.stringify(searched4));
   ok("hunt: log names the shortfall and the pages added",
     logs4.some((l) => l.includes(`index gave 1/3 — search hunt added 2 candidate page(s)`)), logs4.join(" | "));
   ok("hunt: published with index + hunted sources, google.com redirect filtered",

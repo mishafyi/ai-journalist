@@ -10,7 +10,7 @@ import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
 import type { ImageSearchConfig } from "../sources/lead-image";
 import type { LeadImage } from "../sources/lead-image";
-import { proposeParallels, selectParallel, verifyParallel } from "../parallels";
+import { proposeParallels, verifyParallel } from "../parallels";
 import type { ParallelCandidate, VerifiedParallel } from "../parallels";
 import type { GeneratedArticle } from "../pipeline";
 import type {
@@ -756,17 +756,16 @@ export function createNewsDesk(opts: {
           knobs: { sectionSnippets: 0, sectionConcurrency: 1 },
         });
 
-        // Parallels: propose (schema-constrained) → recent-use filter →
-        // Wikipedia-verify → select. A candidate naming a just-used parallel
-        // (opts.recentParallels) drops BEFORE verification — the fetch is
-        // never wasted, and the desk that ran "Panic of 1907" last week
-        // doesn't run it again this week. Rejection falls through to the next
-        // candidate; none surviving takes the legal no-parallel path.
-        const candidates = await proposeParallels({
-          llm,
-          storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
-          count: knobs.parallelCount,
-        });
+        // Parallels (operator, 2026-07-26: "there are always parallels — every
+        // news has a point of view"): a research TOURNAMENT, not a floor.
+        // Propose → recent-use filter → research EVERY candidate (the
+        // encyclopedia record + live web coverage) → one judge call scores
+        // mechanism-level fit on the researched evidence → the best verified
+        // candidate runs, and its judged mechanism feeds the column.
+        // parallelMinScore no longer gates publication; a weak first field
+        // triggers ONE broader re-propose, then the best available wins. The
+        // no-parallel phrase survives only as a loudly-logged emergency when
+        // not one candidate across both rounds verifies against the record.
         const recent = opts.recentParallels ?? [];
         const dropRecent = (cs: ParallelCandidate[]): ParallelCandidate[] =>
           cs.filter((c) => {
@@ -775,51 +774,114 @@ export function createNewsDesk(opts: {
             log?.(`parallels: skipped "${c.event}" — just used ("${used}")`);
             return false;
           });
-        const fresh = dropRecent(candidates);
-        let parallel = await selectParallel({
-          candidates: fresh,
-          minScore: knobs.parallelMinScore,
-          ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }),
-          log,
-        });
-        // Memory-vs-record conflict (operator, 2026-07-23): when no candidate
-        // survives, regenerate ONCE with the verified record as corrective
-        // context instead of settling straight for honest absence. Use the
-        // first candidate whose page exists — its extract IS the record that
-        // contradicted the model's memory.
-        if (parallel === null && fresh.length > 0) {
-          let record = "";
-          for (const c of fresh) {
+        const researchField = async (
+          cs: ParallelCandidate[],
+        ): Promise<{ v: VerifiedParallel; webNotes: string }[]> => {
+          const out: { v: VerifiedParallel; webNotes: string }[] = [];
+          for (const c of cs.slice(0, knobs.parallelCount)) {
             try {
-              const v = await verifyParallel({ candidate: c, ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }) });
-              if (v !== null && v.extract.trim() !== "") { record = `${v.wikipediaTitle}: ${v.extract}`; break; }
-            } catch {
-              // record hunt is best-effort; absence path remains below
+              const v = await verifyParallel({
+                candidate: c,
+                ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }),
+              });
+              if (v === null || v.extract.trim() === "") {
+                log?.(`parallels: "${c.event}" has no verifiable record — dropped`);
+                continue;
+              }
+              let webNotes = "";
+              try {
+                const hits = await search.search(`${v.event} history mechanism significance`, { limit: 3 });
+                webNotes = hits.map((h) => `${h.title}: ${h.snippet}`).join("\n").slice(0, 900);
+              } catch (err: unknown) {
+                log?.(`parallels: web research failed for "${v.event}" (record alone will serve): ${String(err)}`);
+              }
+              out.push({ v, webNotes });
+            } catch (err: unknown) {
+              log?.(`parallels: research failed for "${c.event}" — dropped: ${String(err)}`);
             }
           }
-          if (record !== "") {
-            log?.("parallels: no candidate survived — one corrective re-propose with the verified record");
-            const retryCandidates = await proposeParallels({
-              llm,
-              storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
-              count: knobs.parallelCount,
-              correctiveContext: record.slice(0, 1200),
+          return out;
+        };
+        const JudgeSchema = z.object({
+          scores: z.array(
+            z.object({ event: z.string(), score: z.number().min(0).max(100), mechanism: z.string().min(12) }),
+          ),
+        });
+        const judgeField = async (
+          field: { v: VerifiedParallel; webNotes: string }[],
+        ): Promise<{ v: VerifiedParallel; score: number } | null> => {
+          if (field.length === 0) return null;
+          if (field.length === 1) return { v: field[0].v, score: 100 * field[0].v.score };
+          try {
+            const judged = await llm.completeStructured({
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "You judge which historical precedent best explains a news story at the MECHANISM level — the causal machinery they share, never surface resemblance. Score each candidate 0-100 for how completely its researched record supports reading the story through it, and state that shared mechanism in one sentence a columnist could argue.",
+                },
+                {
+                  role: "user",
+                  content: `STORY:\n${story.headline}\n${evidence.slice(0, 1000)}\n\nCANDIDATES:\n${field
+                    .map(
+                      (f, i) =>
+                        `${i + 1}. ${f.v.event} (${f.v.era})\nRECORD: ${f.v.extract.slice(0, 500)}\nWEB: ${f.webNotes || "(none)"}`,
+                    )
+                    .join("\n\n")}`,
+                },
+              ],
+              schema: JudgeSchema,
+              schemaName: "parallel_judge",
+              temperature: 0.2,
             });
-            parallel = await selectParallel({
-              candidates: dropRecent(retryCandidates),
-              minScore: knobs.parallelMinScore,
-              ...(opts.parallelFetchImpl === undefined ? {} : { fetchImpl: opts.parallelFetchImpl }),
-              log,
-            });
+            let best: { v: VerifiedParallel; score: number; mechanism: string } | null = null;
+            for (const sc of judged.scores) {
+              const hit = field.find((f) => namesEvent(sc.event, f.v.event) || namesEvent(f.v.event, sc.event));
+              if (hit === undefined) continue;
+              if (best === null || sc.score > best.score) best = { v: hit.v, score: sc.score, mechanism: sc.mechanism };
+            }
+            if (best === null) return { v: field[0].v, score: 100 * field[0].v.score };
+            // The judged mechanism IS the refined similarity the column argues.
+            return { v: { ...best.v, claimedSimilarity: best.mechanism }, score: best.score };
+          } catch (err: unknown) {
+            log?.(`parallels: judge failed (falling back to record score): ${String(err)}`);
+            const byScore = [...field].sort((a, b) => b.v.score - a.v.score);
+            return { v: byScore[0].v, score: 100 * byScore[0].v.score };
           }
+        };
+        const candidates = await proposeParallels({
+          llm,
+          storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
+          count: knobs.parallelCount,
+        });
+        let field = await researchField(dropRecent(candidates));
+        let judgedBest = await judgeField(field);
+        if (judgedBest === null || judgedBest.score < knobs.parallelMinScore * 100) {
+          log?.(
+            `parallels: first field ${judgedBest === null ? "empty" : `peaked at ${judgedBest.score.toFixed(0)}`} — one broader re-propose`,
+          );
+          const avoid = candidates.map((c) => c.event).join("; ");
+          const retryCandidates = await proposeParallels({
+            llm,
+            storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
+            count: knobs.parallelCount,
+            correctiveContext: `Prior candidates scored poorly or failed verification: ${avoid}. Propose DIFFERENT precedents whose causal mechanism matches the story — other eras, other domains.`.slice(0, 1200),
+          });
+          const field2 = await researchField(dropRecent(retryCandidates));
+          field = [...field, ...field2];
+          const rejudged = await judgeField(field);
+          if (rejudged !== null && (judgedBest === null || rejudged.score >= judgedBest.score)) judgedBest = rejudged;
         }
+        const parallel: VerifiedParallel | null = judgedBest === null ? null : judgedBest.v;
+        if (parallel === null)
+          log?.("parallels: EMERGENCY no-parallel — not one candidate verified across two research rounds");
         recordArtifact?.(
           "parallels",
           [
             ...candidates.map((c) => `candidate: ${c.event} (${c.era}) — ${c.claimedSimilarity}`),
             parallel === null
-              ? "selected: none survived verification"
-              : `selected: ${parallel.event} → ${parallel.wikipediaUrl} (score ${parallel.score.toFixed(2)})`,
+              ? "selected: EMERGENCY — nothing verified across two rounds"
+              : `selected: ${parallel.event} → ${parallel.wikipediaUrl} (judged ${judgedBest === null ? "n/a" : judgedBest.score.toFixed(0)}/100) — ${parallel.claimedSimilarity}`,
           ].join("\n"),
         );
 
