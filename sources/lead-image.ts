@@ -14,7 +14,20 @@ const BROWSER_UA =
 
 /** Reject URLs that are clearly not a story photo (logos, icons, sprites,
  *  generic social-card defaults). */
-const JUNK_IMAGE_RE = /logo|\/default|placeholder|sprite|\/icon|social-|-social|\/favicon|\/apple-touch/i;
+const JUNK_IMAGE_RE =
+  /logo|\/default|placeholder|sprite|\/icon|social-|-social|\/favicon|\/apple-touch|\/brand|watermark|\.image\.png/i;
+
+/** Station/outlet branding cards that pose as photos: a generic "breaking
+ *  news" or "<Outlet> Daily" graphic, not the story's image. These slip past
+ *  the URL check (the URL looks like a normal asset), so they're caught by the
+ *  hosts that serve them and by the townnews/bloximages CMS pattern that ships
+ *  station logo cards as the og:image (live 2026-07-27: a Central Oregon Daily
+ *  logo card landed on a Bitcoin story). */
+const BRANDED_CARD_RE = /bloximages|townnews|\/tncms\/|brightspot.*\/logo|station.?logo/i;
+
+function isBrandedCard(url: string): boolean {
+  return BRANDED_CARD_RE.test(url);
+}
 
 /** Image hosts whose promo images carry the outlet's own branding baked into
  *  the pixels — a Guardian og:image ships with the Guardian live-blog overlay
@@ -44,7 +57,8 @@ export function extractOgImage(html: string): string | null {
         content !== undefined &&
         content.startsWith("http") &&
         !JUNK_IMAGE_RE.test(content) &&
-        !isBrandedImageHost(content)
+        !isBrandedImageHost(content) &&
+        !isBrandedCard(content)
       )
         return content;
     }
@@ -102,7 +116,8 @@ export async function searchGoogleImages(
         typeof r.imgSrc === "string" &&
         r.imgSrc.startsWith("http") &&
         !JUNK_IMAGE_RE.test(r.imgSrc) &&
-        !isBrandedImageHost(r.imgSrc),
+        !isBrandedImageHost(r.imgSrc) &&
+        !isBrandedCard(r.imgSrc),
     );
     if (hit === undefined || hit.imgSrc === undefined) return null;
     return { url: hit.imgSrc, credit: hostOf(hit.url ?? hit.imgSrc), source: "search" };

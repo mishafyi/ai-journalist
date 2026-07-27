@@ -67,6 +67,11 @@ async function main(): Promise<void> {
     String(extractOgImage(guardianHtml)),
   );
   ok(
+    "extractOgImage REJECTS a townnews/bloximages station logo card",
+    extractOgImage('<meta property="og:image" content="https://bloximages.chicago2.vip.townnews.com/x/assets/v3/media/6a318.image.png">') === null,
+    "branded card rejected",
+  );
+  ok(
     "page with ONLY a Guardian image yields null (falls to next source/search)",
     extractOgImage(`<meta property="og:image" content="https://media.guim.co.uk/x/photo.jpg">`) === null,
     "expected null",
