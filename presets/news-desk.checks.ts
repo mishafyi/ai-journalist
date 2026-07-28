@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, createNewsDesk, fredChartUrl } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, createNewsDesk, evidenceWordCap, fredChartUrl } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -405,6 +405,17 @@ async function orchestrationChecks(): Promise<void> {
   // by a maintained service — never hand-rolled SVG).
   const obs = Array.from({ length: 12 }, (_, i) => ({ date: `2026-0${(i % 9) + 1}-01`, value: String(100 + i) }));
   const chart = fredChartUrl("UNRATE", obs);
+  // Dynamic word cap (operator, 2026-07-28): length tracks evidence richness,
+  // floored at 500, clamped to the max ceiling.
+  ok("evidenceWordCap: a thin 3-source story stays near the 500 floor",
+    evidenceWordCap(3, 5000, 1100) === 500, String(evidenceWordCap(3, 5000, 1100)));
+  ok("evidenceWordCap: more sources raise the cap",
+    evidenceWordCap(5, 5000, 1100) === 700, String(evidenceWordCap(5, 5000, 1100)));
+  ok("evidenceWordCap: a large evidence corpus adds a bonus",
+    evidenceWordCap(4, 20000, 1100) === 600 + Math.round((20000 - 7000) / 45), String(evidenceWordCap(4, 20000, 1100)));
+  ok("evidenceWordCap: never exceeds the max ceiling",
+    evidenceWordCap(9, 60000, 1100) === 1100, String(evidenceWordCap(9, 60000, 1100)));
+
   // Boundary bugs seen live 2026-07-26: mid-word dek chop, mid-word slug cap.
   const { dekFrom } = await import("./news-desk");
   const twoSentences = "They want you looking at the scandal. " + "x".repeat(200);

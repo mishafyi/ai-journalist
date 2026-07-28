@@ -531,6 +531,18 @@ export async function gatherPrimaryData(args: {
   return { block: blocks.join("\n\n"), chartMarkdown };
 }
 
+/** Article length should track how much was actually reported, not a flat cap
+ *  (operator, 2026-07-28). Base target 500 words for a floored story (the
+ *  3-source minimum); +100 per surviving source beyond that; a bonus for a
+ *  genuinely large evidence corpus. Clamped to `maxCap` so a padding model
+ *  can't run away. This is the ONE governor on length — the 300-word floor in
+ *  the contract stays. */
+export function evidenceWordCap(sourceCount: number, evidenceChars: number, maxCap: number): number {
+  const bySources = 500 + 100 * Math.max(0, sourceCount - 3);
+  const byEvidence = Math.min(350, Math.max(0, Math.round((evidenceChars - 7000) / 45)));
+  return Math.max(500, Math.min(maxCap, bySources + byEvidence));
+}
+
 export function createNewsDesk(opts: {
   llm: LlmClient;
   search: SearchClient;
@@ -539,7 +551,8 @@ export function createNewsDesk(opts: {
   persona: PersonaProfile;
   /** One take per story (operator, 2026-07-24): the persona's fused column
    *  (retell + take) IS the article, titled with the source-optimized trending
-   *  headline verbatim (never model-invented). wordCap bounds the column. */
+   *  headline verbatim (never model-invented). wordCap is the MAX ceiling; the
+   *  actual per-story cap scales with evidence richness (evidenceWordCap). */
   authorVersions?: { wordCap: number };
   brand: BrandProfile;
   sink: Sink;
@@ -958,7 +971,7 @@ export function createNewsDesk(opts: {
             evidenceBlock: evidence,
             outletNames,
             parallel,
-            wordCap: opts.authorVersions?.wordCap ?? 600,
+            wordCap: evidenceWordCap(contributing.length, evidence.length, opts.authorVersions?.wordCap ?? 1100),
             maxAttempts: knobs.analysisAttempts,
             log,
           });

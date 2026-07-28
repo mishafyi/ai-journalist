@@ -349,7 +349,7 @@ async function main(): Promise<void> {
     persona: WRITER,
     // One take per story (operator, 2026-07-24): the drawn columnist's fused
     // column IS the article, under the source headline, capped at 600 words.
-    authorVersions: { wordCap: 600 },
+    authorVersions: { wordCap: 1100 }, // the MAX ceiling; per-story cap scales with evidence (evidenceWordCap)
     recentParallels,
     brand,
     sink,
