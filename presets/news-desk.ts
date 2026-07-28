@@ -555,6 +555,9 @@ export function createNewsDesk(opts: {
    *  verification, so a just-used parallel is never repeated and never costs
    *  a fetch. Absent/empty → today's behavior, prompts byte-identical. */
   recentParallels?: readonly string[];
+  /** URLs of images already used by published articles — the desk skips a
+   *  source photo that matches so related stories don't share an image. */
+  usedImages?: () => Promise<readonly string[]>;
   blockedHosts?: readonly string[]; // default DEFAULT_BLOCKED_HOSTS
   /** Optional DataGod instance — when present, 0-2 primary-data plays run per
    *  story (see DATA_PLAYS) and their figures join the evidence as
@@ -935,9 +938,11 @@ export function createNewsDesk(opts: {
           // Best-effort like tags: a failure logs and leaves the story imageless.
           let lead: LeadImage | null = null;
           try {
+            const usedImages = new Set((await opts.usedImages?.()) ?? []);
             lead = await pickLeadImage({
               sourceUrls: contributing.map((c) => c.url),
               query: `${story.headline} ${tags.slice(0, 3).join(" ")}`.trim(),
+              usedImages,
               ...(opts.imageSearch === undefined ? {} : { imageSearch: opts.imageSearch }),
             });
             recordArtifact?.("lead-image", lead === null ? "(none found)" : `${lead.source}: ${lead.url}\n${lead.credit}`);

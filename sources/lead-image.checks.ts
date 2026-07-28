@@ -135,6 +135,20 @@ async function main(): Promise<void> {
     JSON.stringify(fell),
   );
 
+  // Dedup (live 2026-07-27): a source og:image already used by another article
+  // is skipped, falling through to a fresh search hit.
+  const dedupFetch = fakeFetch({
+    "https://a.example/1": { body: '<meta property="og:image" content="https://cdn.x/shared.jpg">' },
+    [SEARCH]: { body: JSON.stringify({ results: [{ url: "https://p.example/s", imgSrc: "https://cdn.x/fresh.jpg" }] }) },
+  });
+  const deduped = await pickLeadImage({
+    sourceUrls: ["https://a.example/1"], query: "ukraine military", imageSearch: CFG,
+    usedImages: new Set(["https://cdn.x/shared.jpg"]), fetchImpl: dedupFetch,
+  });
+  ok("pickLeadImage skips an already-used source image and searches instead",
+    deduped !== null && deduped.url === "https://cdn.x/fresh.jpg" && deduped.source === "search",
+    JSON.stringify(deduped));
+
   // No config → no search call, null (the desk publishes imageless).
   const noCfg = await pickLeadImage({ sourceUrls: ["https://dead.example/1"], query: "ukraine military", fetchImpl: fallback });
   ok("pickLeadImage without imageSearch config stops at null", noCfg === null, JSON.stringify(noCfg));

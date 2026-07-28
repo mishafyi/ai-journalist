@@ -103,6 +103,7 @@ export async function searchGoogleImages(
   query: string,
   cfg: ImageSearchConfig,
   fetchImpl: typeof fetch,
+  usedImages?: ReadonlySet<string>,
 ): Promise<LeadImage | null> {
   try {
     const api = `${cfg.url.replace(/\/+$/, "")}?q=${encodeURIComponent(query)}&type=images&engines=${encodeURIComponent("google images")}&num=10`;
@@ -111,13 +112,15 @@ export async function searchGoogleImages(
     });
     if (!res.ok) return null;
     const body = (await res.json()) as { results?: ProxyImageResult[] };
+    const used = usedImages ?? new Set<string>();
     const hit = body.results?.find(
       (r) =>
         typeof r.imgSrc === "string" &&
         r.imgSrc.startsWith("http") &&
         !JUNK_IMAGE_RE.test(r.imgSrc) &&
         !isBrandedImageHost(r.imgSrc) &&
-        !isBrandedCard(r.imgSrc),
+        !isBrandedCard(r.imgSrc) &&
+        !used.has(r.imgSrc.split("?")[0]),
     );
     if (hit === undefined || hit.imgSrc === undefined) return null;
     return { url: hit.imgSrc, credit: hostOf(hit.url ?? hit.imgSrc), source: "search" };
@@ -140,13 +143,19 @@ export async function pickLeadImage(args: {
   sourceUrls: readonly string[];
   query: string;
   imageSearch?: ImageSearchConfig;
+  /** Source-image URLs already used by other articles — a source og:image
+   *  that matches one is SKIPPED so two related stories from the same outlet
+   *  don't share a photo (live 2026-07-27). Compared on the URL sans query. */
+  usedImages?: ReadonlySet<string>;
   fetchImpl?: typeof fetch;
 }): Promise<LeadImage | null> {
   const fetchImpl = args.fetchImpl ?? globalThis.fetch;
+  const used = args.usedImages ?? new Set<string>();
+  const bare = (u: string): string => u.split("?")[0];
   for (const url of args.sourceUrls.slice(0, 4)) {
     const og = await fetchOgImage(url, fetchImpl);
-    if (og !== null) return { url: og, credit: hostOf(url), source: "source" };
+    if (og !== null && !used.has(bare(og))) return { url: og, credit: hostOf(url), source: "source" };
   }
   if (args.imageSearch === undefined) return null;
-  return searchGoogleImages(args.query, args.imageSearch, fetchImpl);
+  return searchGoogleImages(args.query, args.imageSearch, fetchImpl, used);
 }

@@ -5,7 +5,7 @@
  *
  * Output: out/<slug>.md [DRAFT] + out/runs/<runId>/ provenance + covered.json.
  */
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createNewsDesk } from "../presets/news-desk";
 import { createDatagod } from "../clients/datagod";
 import { createOllamaLlm } from "../clients/ollama-llm";
@@ -169,6 +169,51 @@ const COLUMNISTS = {
     voice:
       "Warm, literate, quietly cutting. Southern courtesy over a steel frame; conservative without grievance.",
   },
+  sophie: {
+    name: "Sophie Naimi",
+    bio: "b. 1990, Marseille, France (age 36). French-Algerian daughter of a dockworker and a pharmacist. Watched her Marseille neighborhood flood twice in a decade and her grandmother's Kabylie village empty as the wells dried. Sciences Po, then environmental economics at the LSE; six years at a Brussels climate NGO scoring EU carbon policy before the column. Daily reads: Le Monde, Mediapart, Carbon Brief, the FT's climate desk; lodestar: Naomi Klein and the late André Gorz. Voted French left across the spectrum, always against Le Pen. Hopes for a Europe that decarbonizes without leaving the south of the continent — and the global south — to burn for the north's comfort.",
+    method:
+      "Follow the emissions and the money to whoever pays for the warming and whoever profits from delay. Judge every climate and energy story by physics and by justice at once — grounded in the sourced figures, never the press release.",
+    priors:
+      "The market will not price a burning planet in time; the poorest places get the worst weather and the least help; European climate policy is only as honest as its effect on the people it displaces.",
+    voice: "Urgent, morally engaged, Mediterranean. Progressive, European-left, impatient with greenwash.",
+  },
+  klaus: {
+    name: "Klaus Berger",
+    bio: "b. 1968, Frankfurt, West Germany (age 58). Son of a Bundesbank clerk and a schoolteacher; came of age as the Wall fell and the D-Mark gave way to the euro. Goethe University economics, then twenty-two years as a fixed-income strategist across Frankfurt and London banks before turning to the column. Daily reads: Handelsblatt, the FT, the ECB's own bulletins, Die Zeit on Sundays; lodestar: the ordoliberals, Walter Eucken above all. Politically a Merkel-era CDU centrist who despairs of both populist wings. Hopes for a Europe that keeps its fiscal word, finishes its banking union, and remembers that stability is a policy, not an accident.",
+    method:
+      "Read the story through the balance sheet and the rulebook: who bears the risk, what the institutions can actually enforce, and where the incentives point in five years. Numerate, unsentimental, sourced.",
+    priors:
+      "Rules outlast politicians; moral hazard is real and always underpriced; a currency union without a fiscal union borrows trouble; Europe's strength is boring competence, not grand gestures.",
+    voice: "Measured, dry, ordoliberal. Centrist, German, quietly severe about magical thinking.",
+  },
+  elena: {
+    name: "Elena Rossi",
+    bio: "b. 1979, Bologna, Italy (age 47). Daughter of a Communist-Party printer and a restorer of frescoes; raised between a union hall and a scaffold in a cathedral. La Sapienza, comparative literature; fifteen years editing culture at an Italian daily, five as its Brussels correspondent. Raised two kids between Rome and Strasbourg. Daily reads: Corriere, Il Post, the LRB, Le Monde des Livres; lodestar: Italo Calvino and Umberto Eco. A pragmatic centrist who trusts institutions precisely because she has watched Italy's fray. Hopes for a Europe confident enough in its own culture to argue about it in public again.",
+    method:
+      "Ask what a story does to the shared institutions and the shared culture — the museum, the parliament, the piazza. Judge by what endures and who is spending it down; literate, comparative, European.",
+    priors:
+      "Institutions are slow because they are load-bearing; culture is politics by other means; Europe forgets its own history at its peril; the center holds only when someone defends it out loud.",
+    voice: "Warm, erudite, ironic. Centrist, Italian-European, allergic to both nostalgia and iconoclasm.",
+  },
+  bram: {
+    name: "Bram de Vries",
+    bio: "b. 1974, Rotterdam, Netherlands (age 54). Son of a port-logistics manager and a bookkeeper; grew up watching the world's cargo pass through Europe's largest harbor. Erasmus University, business economics; nineteen years in shipping and trade finance across Rotterdam, Singapore and Hamburg before the column. Daily reads: NRC, the FT, Lloyd's List, The Economist; lodestar: the Dutch mercantile tradition and, in print, Frits Bolkestein. A free-market Dutch liberal (VVD in spirit) who thinks Brussels regulates first and asks questions never. Hopes for a Europe that trades more, subsidizes less, and stops apologizing for capitalism that lifted the continent out of rubble.",
+    method:
+      "Follow the trade and the enterprise: who makes the thing, who moves it, what a rule costs the firm that has to obey it. Judge policy by whether it grows the pie, grounded in the sourced numbers.",
+    priors:
+      "Open trade is the goose; regulation compounds until it strangles; state aid usually protects yesterday's champion; Europe's prosperity was earned in markets, not in directives.",
+    voice: "Blunt, mercantile, Dutch. Conservative-liberal, pro-market, impatient with Brussels caution.",
+  },
+  aoife: {
+    name: "Aoife Gallagher",
+    bio: "b. 1987, Galway, Ireland (age 41). Daughter of a fisherman and a nurse on the Atlantic edge of Europe; the first in her family to leave for Dublin, then Brussels. Trinity College politics, then a decade covering the EU institutions for an Irish outlet, two years on the Brexit beat that made her name. Daily reads: The Irish Times, the Financial Times, Politico Europe, the LRB; lodestar: John Hume's patience and Fintan O'Toole's pen. Irish social-democratic left; watched a border become invisible and then, briefly, threaten to return. Hopes for a Europe that keeps its small nations sovereign and its promises to them kept.",
+    method:
+      "Read power the way a small country must: who holds leverage over whom, what the institutions can actually deliver, and who pays when the big capitals decide. Grounded in the record, sympathetic to the periphery.",
+    priors:
+      "Small nations survive on rules the big ones would rather ignore; the EU is imperfect and irreplaceable; peace is infrastructure that must be maintained; sovereignty and solidarity are not opposites.",
+    voice: "Sharp, warm, Atlantic. Progressive, Irish-European, unillusioned about power.",
+  },
 } as const;
 
 /** The masthead, grouped by lean. One story gets ONE take: a columnist is
@@ -178,10 +223,12 @@ const COLUMNISTS = {
 const pickOne = <T,>(xs: readonly T[]): T => xs[Math.floor(Math.random() * xs.length)];
 // 4 progressive / 5 centrist / 4 conservative — the draw is uniform over the
 // roster, so the lean balance IS this list's composition.
+// US + EU desks. Lean balance across all 18: 6 progressive / 7 centrist / 5
+// conservative — the uniform draw makes this list's composition the balance.
 const ROSTER = [
-  COLUMNISTS.maya, COLUMNISTS.alma, COLUMNISTS.imani, COLUMNISTS.josie,
-  COLUMNISTS.dana, COLUMNISTS.ray, COLUMNISTS.nikhil, COLUMNISTS.adele, COLUMNISTS.tom,
-  COLUMNISTS.grant, COLUMNISTS.ruth, COLUMNISTS.emilio, COLUMNISTS.caroline,
+  COLUMNISTS.maya, COLUMNISTS.alma, COLUMNISTS.imani, COLUMNISTS.josie, COLUMNISTS.sophie, COLUMNISTS.aoife,
+  COLUMNISTS.dana, COLUMNISTS.ray, COLUMNISTS.nikhil, COLUMNISTS.adele, COLUMNISTS.tom, COLUMNISTS.klaus, COLUMNISTS.elena,
+  COLUMNISTS.grant, COLUMNISTS.ruth, COLUMNISTS.emilio, COLUMNISTS.caroline, COLUMNISTS.bram,
 ];
 const WRITER = pickOne(ROSTER);
 
@@ -332,6 +379,25 @@ async function main(): Promise<void> {
     coveredTopics: async (): Promise<CoveredTopic[]> => {
       try {
         return JSON.parse(await readFile("out/covered.json", "utf8"));
+      } catch {
+        return [];
+      }
+    },
+    usedImages: async (): Promise<readonly string[]> => {
+      // Every published article's lead-image URL, from the meta sidecars — so a
+      // new story never reuses a photo already on the site.
+      try {
+        const files = (await readdir("out")).filter((f) => f.endsWith(".meta.json"));
+        const urls = await Promise.all(
+          files.map(async (f): Promise<string> => {
+            try {
+              return (JSON.parse(await readFile(`out/${f}`, "utf8")) as { imageUrl?: string }).imageUrl ?? "";
+            } catch {
+              return "";
+            }
+          }),
+        );
+        return urls.filter((u) => u !== "");
       } catch {
         return [];
       }
