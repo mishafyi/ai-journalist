@@ -1,6 +1,6 @@
 import { DATA_PLAYS, FRED_TITLES, PERSONAS, createNewsDesk, evidenceWordCap, fredChartUrl } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
-import { BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE } from "../gates";
+import { NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
 import type { createDefaultInternals } from "./default";
 import type { TrendingStory } from "../sources/google-news";
@@ -88,7 +88,7 @@ async function orchestrationChecks(): Promise<void> {
     "",
     "Fifty basis points is not a policy, it is a flinch. The Wire account makes clear the bank is still fighting the last war, tightening into a market that has already priced the damage.",
     "",
-    `${BOTTOM_LINE_MARKER} Central banks will blink first, exactly as they always have since 1907.`,
+    `Central banks will blink first, exactly as they always have since 1907, and the savers will pay for the flinch.`,
   ].join("\n");
   // The no-parallel variant for the recentParallels scenario: same story, no
   // historical parallel — carries the NO_PARALLEL_PHRASE verbatim, never
@@ -114,7 +114,7 @@ async function orchestrationChecks(): Promise<void> {
     "",
     "Resolve is cheap until the tape disagrees. Wire's account makes clear the bank is still fighting the last war, tightening into prices that have already turned, and the two-percent drop is the first invoice for that stubbornness. The polite word for this is discipline; the accurate word is inertia, and inertia is not a policy even when it is delivered in a steady voice. There will be more invoices, and they will arrive faster than the next meeting.",
     "",
-    `${BOTTOM_LINE_MARKER} The bank has chosen credibility over flexibility, and it will end up paying for the first with the second before the year is out.`,
+    `The bank has chosen credibility over flexibility, and it will end up paying for the first with the second before the year is out.`,
   ].join("\n");
   const prompts: string[] = [];
   const llm = {

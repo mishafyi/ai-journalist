@@ -4,8 +4,7 @@
  * Part 2 (createNewsDesk) orchestrates: trending → resolution → floors →
  * verified parallel → ONE columnist's fused column → publish.
  */
-import { BOTTOM_LINE_MARKER,
-  mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
+import { mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
 import type { ImageSearchConfig } from "../sources/lead-image";
@@ -122,10 +121,10 @@ export function checkAuthorVersionContract(
     failures.push(
       `must attribute the reporting to at least 2 outlets by name (found ${mentioned.length === 0 ? "none" : mentioned.join(", ")})`,
     );
-  const at = version.indexOf(BOTTOM_LINE_MARKER);
-  if (at === -1) failures.push(`missing the "${BOTTOM_LINE_MARKER}" verdict paragraph`);
-  else if (version.slice(at + BOTTOM_LINE_MARKER.length).trim().length < 40)
-    failures.push("bottom-line verdict too thin (under 40 chars)");
+  // No labeled-verdict requirement: the committed close is enforced by the
+  // prompt ("argue one decided position"), not a "**The bottom line:**" tag that
+  // read as formulaic across every column (operator, 2026-07-28). The label is
+  // stripped in post-processing if the model reaches for it anyway.
   if (args.parallelEvent !== null) {
     // namesEvent: typography-, case-, and leading-article-insensitive — the
     // exact-includes() false-negative class rejected correct columns twice
@@ -181,7 +180,7 @@ export async function composeAuthorVersion(args: {
   const system = `You are ${persona.name}, an opinion columnist with a decided worldview, writing your COMPLETE column on today's story: you retell what happened AND argue what it means, fused in one voice — yours. The facts belong to the reporting; the framing, emphasis, and verdict belong to you.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean; live it, never recite it): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}`;
 
   const target = `${Math.round(args.wordCap * 0.7)}-${Math.round(args.wordCap * 0.85)}`;
-  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position with force; no both-sides hedging, no "time will tell"\n- Close with a paragraph starting exactly: ${BOTTOM_LINE_MARKER} — one committed verdict\n- Break the piece into 2-4 chapters, each opening with a markdown heading ("## ..."). EVERY chapter title must be ORIGINAL and written from what THAT chapter actually says — a specific line a reader could only have written after reading it. NEVER use a generic label ("Analysis", "Context", "Background", "Conclusion", "What happened", "The numbers") and NEVER put your own name in a heading
+  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position with force; no both-sides hedging, no "time will tell"\n- End on ONE committed verdict — a final paragraph that lands your position hard, no hedging. Do NOT label it ("The bottom line", "In sum", "The upshot", "In conclusion"): a columnist doesn't announce the verdict, they just deliver it\n- Break the piece into 2-4 chapters, each opening with a markdown heading ("## ..."). EVERY chapter title must be ORIGINAL and written from what THAT chapter actually says — a specific line a reader could only have written after reading it. NEVER use a generic label ("Analysis", "Context", "Background", "Conclusion", "What happened", "The numbers") and NEVER put your own name in a heading
 - This is an OP-ED, not a briefing: be very opinionated. Take a side in the first paragraph and press it all the way through — name who is wrong and say why, make the judgment call the reporting won't, and let your convictions show in the verbs. No neutrality, no "on the other hand", no hedging\n- ${target} words, hard cap ${args.wordCap} — unmistakably in your voice.`;
 
   // Retry = REVISE the previous draft, never regenerate: full rewrites under
@@ -975,9 +974,13 @@ export function createNewsDesk(opts: {
             maxAttempts: knobs.analysisAttempts,
             log,
           });
-          // The model sometimes opens the verdict "**The bottom line:** — like
-          // this" (seen live 2026-07-25) — normalize the stray dash.
-          const body = rawBody.replace(/(\*\*The bottom line:\*\*)\s*[—–-]\s*/g, "$1 ");
+          // The verdict lands without a label. Strip "**The bottom line:**" and
+          // its formulaic kin if the model reaches for the tag anyway — the
+          // verdict prose after it stays (operator, 2026-07-28: reads canned).
+          const body = rawBody.replace(
+            /\*\*\s*(?:the\s+)?(?:bottom line|in sum|the upshot|in conclusion|the takeaway)\s*:?\s*\*\*\s*[—–-]?\s*/gi,
+            "",
+          );
           const content = `${body}${chartMarkdown}\n\n## Sources\n${sourceLines.join("\n")}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           try {

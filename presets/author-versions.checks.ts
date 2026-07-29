@@ -5,7 +5,7 @@
  *
  * Run: npx tsx presets/author-versions.checks.ts
  */
-import { BOTTOM_LINE_MARKER, NO_PARALLEL_PHRASE } from "../gates";
+import { NO_PARALLEL_PHRASE } from "../gates";
 import type { LlmClient } from "../ports";
 import { checkAuthorVersionContract, composeAuthorVersion, PERSONAS } from "./news-desk";
 
@@ -28,7 +28,7 @@ const GOOD_BODY = [
   `## A lender of last resort, ninety years early`,
   `The Panic of 1907 is the closest rhyme to this squeeze: a systemic halt ended only by a lender of last resort, and the lesson has not aged a day. ${FILLER.repeat(12)}`,
   `The 1907 mechanism is this decision's manual, and it supports the verdict completely. ${FILLER.repeat(8)}`,
-  `${BOTTOM_LINE_MARKER} Central banks will blink first, exactly as they always have since 1907, and savers will pay for the blink.`,
+  `Central banks will blink first, exactly as they always have since 1907, and savers will pay for the blink.`,
 ].join("\n\n");
 
 function contractChecks(): void {
@@ -40,14 +40,12 @@ function contractChecks(): void {
   ok("contract: <2 outlet mentions fails with the count named",
     !single.ok && single.failures.some((f) => f.includes("at least 2 outlets")), single.failures.join(" | "));
 
-  const noBottom = checkAuthorVersionContract(GOOD_BODY.replace(BOTTOM_LINE_MARKER, "**In sum:**"), args);
-  ok("contract: missing bottom-line marker fails",
-    !noBottom.ok && noBottom.failures.some((f) => f.includes(BOTTOM_LINE_MARKER)), noBottom.failures.join(" | "));
-
-  const thin = checkAuthorVersionContract(
-    `${GOOD_BODY.split(BOTTOM_LINE_MARKER)[0]}${BOTTOM_LINE_MARKER} Fine.`, args);
-  ok("contract: bottom-line verdict under 40 chars fails",
-    !thin.ok && thin.failures.some((f) => f.includes("too thin")), thin.failures.join(" | "));
+  // No labeled-verdict gate any more (the "**The bottom line:**" tag read as
+  // canned across every column, 2026-07-28) — a column that ends on an
+  // unlabeled committed verdict, like GOOD_BODY, passes.
+  ok("contract: an unlabeled committed verdict passes (no bottom-line tag required)",
+    checkAuthorVersionContract(GOOD_BODY, args).ok,
+    checkAuthorVersionContract(GOOD_BODY, args).failures.join(" | "));
 
   const noParallel = checkAuthorVersionContract(GOOD_BODY.replace(/Panic of 1907/g, "that old crisis"), args);
   ok("contract: verified parallel unnamed fails",
@@ -66,7 +64,7 @@ function contractChecks(): void {
     !over.ok && over.failures.some((f) => f.includes("cap 600")), over.failures.join(" | "));
 
   const short = checkAuthorVersionContract(
-    `Wire and Beacon report a hike. Panic of 1907. ${BOTTOM_LINE_MARKER} A verdict long enough to clear the forty character floor easily.`, args);
+    `Wire and Beacon report a hike. Panic of 1907. The banks blink first, exactly as they always have, and the savers pay.`, args);
   ok("contract: under the 300-word floor fails",
     !short.ok && short.failures.some((f) => f.includes("floor 300")), short.failures.join(" | "));
 
@@ -121,9 +119,10 @@ function contractChecks(): void {
 }
 
 async function composeChecks(): Promise<void> {
-  // First attempt violates (no bottom line), second passes → 2 calls, retry
-  // prompt carries the failure text.
-  const answers = [GOOD_BODY.replace(BOTTOM_LINE_MARKER, "**In sum:**"), GOOD_BODY];
+  // First attempt violates (only one outlet named), second passes → 2 calls,
+  // retry prompt carries the failure text and the previous draft.
+  const oneOutlet = GOOD_BODY.replace(/Beacon/g, "the wires");
+  const answers = [oneOutlet, GOOD_BODY];
   const prompts: string[] = [];
   const llm = {
     async complete(a: { prompt: string }): Promise<string> {
@@ -138,10 +137,10 @@ async function composeChecks(): Promise<void> {
     wordCap: 600, maxAttempts: 3,
   });
   ok("compose: contract failure retries once then returns the passing column",
-    out === GOOD_BODY && prompts.length === 2 && (prompts[1] ?? "").includes(BOTTOM_LINE_MARKER),
+    out === GOOD_BODY && prompts.length === 2 && (prompts[1] ?? "").includes("at least 2 outlets"),
     `calls=${prompts.length}`);
   ok("compose: the retry REVISES the previous draft (draft included, revise instruction)",
-    (prompts[1] ?? "").includes("YOUR PREVIOUS DRAFT") && (prompts[1] ?? "").includes("**In sum:**") &&
+    (prompts[1] ?? "").includes("YOUR PREVIOUS DRAFT") && (prompts[1] ?? "").includes("the wires") &&
       (prompts[1] ?? "").includes("REVISE the draft above"),
     (prompts[1] ?? "").slice(0, 120));
 
