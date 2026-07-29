@@ -126,8 +126,9 @@ not advice. A draft is rejected and re-attempted unless it:
 
 - lands inside the word floor/cap (`authorVersions.wordCap`, default 600),
 - attributes the reporting to **≥2 outlets by name**,
-- names the verified historical parallel, and carries both
-  `**Where the parallel breaks down:**` and `**The bottom line:**`,
+- names the verified historical parallel (or carries the no-parallel phrase
+  verbatim when none survived), and ends on a committed verdict — unlabeled,
+  no formulaic `**The bottom line:**` tag,
 - never mentions the encyclopedia — parallel verification is internal, and the
   reader never sees a Wikipedia line in `## Sources`,
 - carries **2–5 `##` chapters, each with an original title** drawn from what
