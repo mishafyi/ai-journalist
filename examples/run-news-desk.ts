@@ -12,8 +12,8 @@ import { createOllamaLlm } from "../clients/ollama-llm";
 import { createOllamaEmbedder } from "../clients/ollama-embedder";
 import { createFirecrawlSearch } from "../clients/firecrawl-search";
 import type { OutletFeed } from "../sources/newswire";
-import { dedupeTrending, fetchTopicStories, fetchTrendingStories, GN_TOPICS, GN_US } from "../sources/google-news";
-import type { TrendingStory } from "../sources/google-news";
+import { dedupeTrending, fetchSiteStories, fetchTopicStories, fetchTrendingStories, GN_TOPICS, GN_US } from "../sources/google-news";
+import type { SiteQuery, TrendingStory } from "../sources/google-news";
 import type { BrandProfile, CoveredTopic, GeneratedPost, PublishResult, Sink } from "../ports";
 
 /** PASSing set from examples/probe-feeds.ts — edit after each probe run. */
@@ -30,6 +30,36 @@ const FEEDS: OutletFeed[] = [
   { url: "https://abcnews.go.com/abcnews/topstories", outlet: "ABC News", region: "US" },
   { url: "https://www.euronews.com/rss", outlet: "Euronews", region: "EU" },
   { url: "https://timesofindia.indiatimes.com/rssfeedstopstories.cms", outlet: "Times of India", region: "Asia" },
+  // Non-English batch 2026-08-10: feed-level curl PASS (200 + items); the
+  // probe-feeds.ts Firecrawl half is pending — run it and prune failures.
+  { url: "https://www.lemonde.fr/rss/une.xml", outlet: "Le Monde", region: "EU" },
+  { url: "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada", outlet: "El País", region: "EU" },
+  { url: "https://www.spiegel.de/schlagzeilen/index.rss", outlet: "Der Spiegel", region: "EU" },
+  { url: "https://xml2.corriereobjects.it/rss/homepage.xml", outlet: "Corriere della Sera", region: "EU" },
+  { url: "https://g1.globo.com/rss/g1/", outlet: "G1 Globo", region: "LatAm" },
+  { url: "https://www.clarin.com/rss/lo-ultimo/", outlet: "Clarín", region: "LatAm" },
+  { url: "https://www.yna.co.kr/rss/news.xml", outlet: "Yonhap", region: "Asia" },
+  { url: "https://www3.nhk.or.jp/rss/news/cat0.xml", outlet: "NHK", region: "Asia" },
+  { url: "https://aawsat.com/feed", outlet: "Asharq Al-Awsat", region: "MENA" },
+  { url: "https://www.hurriyet.com.tr/rss/anasayfa", outlet: "Hürriyet", region: "MENA" },
+];
+
+/** Per-paper trending: GN search-RSS site: feeds, each ranked by the paper's
+ *  HOME edition — world stories the US edition never surfaces still reach the
+ *  desk. Domains must stay in step with the outlet feeds above so site
+ *  stories resolve against their own paper's index (same language on both
+ *  sides of the headline match). */
+const SITE_TRENDING: SiteQuery[] = [
+  { domain: "lemonde.fr", edition: { hl: "fr", gl: "FR", ceid: "FR:fr" } },
+  { domain: "elpais.com", edition: { hl: "es", gl: "ES", ceid: "ES:es" } },
+  { domain: "spiegel.de", edition: { hl: "de", gl: "DE", ceid: "DE:de" } },
+  { domain: "corriere.it", edition: { hl: "it", gl: "IT", ceid: "IT:it" } },
+  { domain: "g1.globo.com", edition: { hl: "pt-BR", gl: "BR", ceid: "BR:pt-419" } },
+  { domain: "clarin.com", edition: { hl: "es-419", gl: "AR", ceid: "AR:es-419" } },
+  { domain: "yna.co.kr", edition: { hl: "ko", gl: "KR", ceid: "KR:ko" } },
+  { domain: "nhk.or.jp", edition: { hl: "ja", gl: "JP", ceid: "JP:ja" } },
+  { domain: "aawsat.com", edition: { hl: "ar", gl: "SA", ceid: "SA:ar" } },
+  { domain: "hurriyet.com.tr", edition: { hl: "tr", gl: "TR", ceid: "TR:tr" } },
 ];
 
 
@@ -318,6 +348,9 @@ async function main(): Promise<void> {
   // first-wins at trigram SUPPLY_DEDUPE.
   const TRENDING_LIMIT = 20;
   const TOPIC_TAIL_LIMIT = 30;
+  // Site tail (2026-08-10): ~2 per paper after the round-robin — enough to
+  // surface each paper's top stories without drowning the US supply.
+  const SITE_TAIL_LIMIT = 20;
   const SUPPLY_DEDUPE = 0.55;
 
   // Historical parallels used by the last dozen columns — the desk skips
@@ -366,7 +399,14 @@ async function main(): Promise<void> {
       const topics = await fetchTopicStories({
         edition: GN_US, topics: GN_TOPICS, limit: TOPIC_TAIL_LIMIT, dedupeThreshold: SUPPLY_DEDUPE, log,
       });
-      return dedupeTrending([...top, ...topics], SUPPLY_DEDUPE);
+      // Third tail: per-paper site: feeds. Supply dedupe is trigram, so a
+      // story trending in two LANGUAGES survives as two candidates — the
+      // embedding-based covered ledger catches the translated duplicate on
+      // the next cycle, and one cycle publishes one story, so no double-write.
+      const sites = await fetchSiteStories({
+        sites: SITE_TRENDING, limit: SITE_TAIL_LIMIT, dedupeThreshold: SUPPLY_DEDUPE, log,
+      });
+      return dedupeTrending([...top, ...topics, ...sites], SUPPLY_DEDUPE);
     },
     knobs: {
       trendingLimit: TRENDING_LIMIT, minSources: 3, pagesMax: 6,

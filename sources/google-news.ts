@@ -196,13 +196,71 @@ export async function fetchTopicStories(args: {
       }
     }),
   );
-  const interleaved: TrendingStory[] = [];
-  const deepest = Math.max(0, ...perTopic.map((stories) => stories.length));
+  return dedupeTrending(interleave(perTopic), args.dedupeThreshold).slice(0, args.limit);
+}
+
+/** Round-robin: feeds[0][0], feeds[1][0], …, feeds[0][1], … — no feed dominates. */
+function interleave(perFeed: readonly TrendingStory[][]): TrendingStory[] {
+  const out: TrendingStory[] = [];
+  const deepest = Math.max(0, ...perFeed.map((stories) => stories.length));
   for (let depth = 0; depth < deepest; depth += 1) {
-    for (const stories of perTopic) {
+    for (const stories of perFeed) {
       const story = stories[depth];
-      if (story !== undefined) interleaved.push(story);
+      if (story !== undefined) out.push(story);
     }
   }
-  return dedupeTrending(interleaved, args.dedupeThreshold).slice(0, args.limit);
+  return out;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Site feeds — trending BY newspaper. GN has no native "trending for outlet
+// X" filter; the search RSS with a site: query IS that filter: GN
+// relevance-ranks the outlet's last-day output (~100 items, vs ~15 on a
+// typical outlet front-page RSS). Search items carry the same <source> tag
+// and " - Outlet" title suffix as topic items, so parseTopicStories parses
+// both.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface SiteQuery {
+  /** Bare domain for the site: operator — subdomains match too. */
+  domain: string;
+  /** The paper's home edition; GN ranking and language follow it. */
+  edition: GnEdition;
+}
+
+export function googleNewsSiteUrl(site: SiteQuery): string {
+  const q = encodeURIComponent(`site:${site.domain} when:1d`);
+  const e = site.edition;
+  return `https://news.google.com/rss/search?q=${q}&hl=${e.hl}&gl=${e.gl}&ceid=${encodeURIComponent(e.ceid)}`;
+}
+
+/** fetchTopicStories' contract with one search feed per newspaper: parallel
+ *  best-effort fetch (one dead paper never kills the tail), round-robin
+ *  interleave so no outlet dominates, first-wins trigram dedupe, cap. */
+export async function fetchSiteStories(args: {
+  sites: readonly SiteQuery[];
+  limit: number;
+  /** trigramSimilarity floor for near-identical headlines (≈0.55). */
+  dedupeThreshold: number;
+  fetchImpl?: typeof fetch;
+  log?: (line: string) => void;
+}): Promise<TrendingStory[]> {
+  const fetchImpl = args.fetchImpl ?? fetch;
+  const perSite = await Promise.all(
+    args.sites.map(async (site): Promise<TrendingStory[]> => {
+      try {
+        const res = await fetchImpl(googleNewsSiteUrl(site), {
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        return await parseTopicStories(await res.text());
+      } catch (err: unknown) {
+        args.log?.(`google-news: site feed FAILED ${site.domain} (${site.edition.ceid}): ${String(err)}`);
+        return [];
+      }
+    }),
+  );
+  return dedupeTrending(interleave(perSite), args.dedupeThreshold).slice(0, args.limit);
 }

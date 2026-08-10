@@ -1,6 +1,8 @@
 import {
   dedupeTrending,
+  fetchSiteStories,
   fetchTopicStories,
+  googleNewsSiteUrl,
   googleNewsTopicUrl,
   googleNewsTopUrl,
   GN_US,
@@ -135,6 +137,37 @@ async function main(): Promise<void> {
   ok("a dead topic feed logs FAILED and never kills the others (newswire rule)",
     partial.length === 3 && logged.some((l) => l.includes("topic feed FAILED BUSINESS")),
     JSON.stringify({ n: partial.length, logged }));
+
+  // ── Site feeds (per-newspaper trending) ───────────────────────────────────
+
+  const GN_FR = { hl: "fr", gl: "FR", ceid: "FR:fr" };
+  ok("site URL: search RSS with encoded site:+when:1d query and hl/gl/ceid",
+    googleNewsSiteUrl({ domain: "lemonde.fr", edition: GN_FR }) ===
+      "https://news.google.com/rss/search?q=site%3Alemonde.fr%20when%3A1d&hl=fr&gl=FR&ceid=FR%3Afr",
+    googleNewsSiteUrl({ domain: "lemonde.fr", edition: GN_FR }));
+
+  const siteA = { domain: "worldpaper.test", edition: GN_US };
+  const siteB = { domain: "bizpaper.test", edition: GN_US };
+  const siteDead = { domain: "dead.test", edition: GN_US };
+  const siteLogged: string[] = [];
+  const siteStories = await fetchSiteStories({
+    sites: [siteA, siteB, siteDead],
+    limit: 10, dedupeThreshold: 0.55,
+    fetchImpl: fakeFetch({
+      [googleNewsSiteUrl(siteA)]: WORLD_XML,
+      [googleNewsSiteUrl(siteB)]: BUSINESS_XML,
+    }),
+    log: (l) => siteLogged.push(l),
+  });
+  ok("site feeds interleave, dedupe and re-rank like topic feeds",
+    siteStories.length === 4 &&
+      siteStories[0].headline === "Ceasefire talks resume in Cairo" &&
+      siteStories[1].headline === "Dow closes above 50,000 - a new record" &&
+      siteStories.every((s, i) => s.rank === i + 1),
+    JSON.stringify(siteStories.map((s) => `${s.rank}:${s.headline}`)));
+  ok("a dead site feed logs FAILED and never kills the tail",
+    siteLogged.length === 1 && siteLogged[0].includes("site feed FAILED dead.test"),
+    JSON.stringify(siteLogged));
 
   const prioritized = dedupeTrending(
     [
