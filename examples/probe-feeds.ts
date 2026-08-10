@@ -1,7 +1,14 @@
 /**
- * probe-feeds.ts — scrape ONE article per candidate outlet through the
- * operator's Firecrawl; print PASS/TEASER/FAIL per outlet. The passing set
- * becomes the runner's FEEDS list (examples/run-news-desk.ts).
+ * probe-feeds.ts — scrape up to THREE articles per candidate outlet through
+ * the operator's Firecrawl; print a per-outlet rate verdict. One draw is a
+ * coin flip on a metered paywall; three read as a rate.
+ *
+ *   PASS    every sample scraped clean → keep in FEEDS
+ *   PARTIAL some did (metered paywall / flaky antibot) → KEEP: the runtime
+ *           drops teaser pages per-article (content-quality floor,
+ *           news-desk.ts) and the search hunt backfills, so a partial
+ *           outlet still contributes its free share
+ *   FAIL    none did → prune from FEEDS (examples/run-news-desk.ts)
  *
  *   FIRECRAWL_API_URL=… FIRECRAWL_API_KEY=… npx tsx examples/probe-feeds.ts
  *
@@ -28,6 +35,17 @@ export const CANDIDATE_FEEDS: OutletFeed[] = [
   { url: "https://feeds.skynews.com/feeds/rss/home.xml", outlet: "Sky News", region: "EU" },
   { url: "https://www.euronews.com/rss", outlet: "Euronews", region: "EU" },
   { url: "https://timesofindia.indiatimes.com/rssfeedstopstories.cms", outlet: "Times of India", region: "Asia" },
+  // Non-English batch 2026-08-10 — mirrors the FEEDS additions in run-news-desk.ts.
+  { url: "https://www.lemonde.fr/rss/une.xml", outlet: "Le Monde", region: "EU" },
+  { url: "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada", outlet: "El País", region: "EU" },
+  { url: "https://www.spiegel.de/schlagzeilen/index.rss", outlet: "Der Spiegel", region: "EU" },
+  { url: "https://xml2.corriereobjects.it/rss/homepage.xml", outlet: "Corriere della Sera", region: "EU" },
+  { url: "https://g1.globo.com/rss/g1/", outlet: "G1 Globo", region: "LatAm" },
+  { url: "https://www.clarin.com/rss/lo-ultimo/", outlet: "Clarín", region: "LatAm" },
+  { url: "https://www.yna.co.kr/rss/news.xml", outlet: "Yonhap", region: "Asia" },
+  { url: "https://www3.nhk.or.jp/rss/news/cat0.xml", outlet: "NHK", region: "Asia" },
+  { url: "https://aawsat.com/feed", outlet: "Asharq Al-Awsat", region: "MENA" },
+  { url: "https://www.hurriyet.com.tr/rss/anasayfa", outlet: "Hürriyet", region: "MENA" },
 ];
 
 async function main(): Promise<void> {
@@ -48,18 +66,32 @@ async function main(): Promise<void> {
   });
   const index = await wire.buildIndex();
   for (const feed of CANDIDATE_FEEDS) {
-    const item = index.find((i) => i.outlet === feed.outlet);
-    if (item === undefined) {
-      process.stdout.write(`FAIL   ${feed.outlet} — feed yielded no linked items\n`);
+    const items = index.filter((i) => i.outlet === feed.outlet);
+    if (items.length === 0) {
+      process.stdout.write(`FAIL    ${feed.outlet} — feed yielded no linked items\n`);
       continue;
     }
-    try {
-      const content = (await search.scrape?.(item.url)) ?? "";
-      const verdict = isTeaserContent(content, 400) ? "TEASER" : "PASS  ";
-      process.stdout.write(`${verdict} ${feed.outlet} — ${content.length} chars (${item.url})\n`);
-    } catch (err: unknown) {
-      process.stdout.write(`FAIL   ${feed.outlet} — scrape: ${String(err).slice(0, 100)}\n`);
-    }
+    // First / middle / last of the outlet's feed window — spread the draws so
+    // one promoted-free lead article can't flatter a paywalled catalogue.
+    const picks = [...new Set([0, Math.floor(items.length / 2), items.length - 1])].map((i) => items[i]);
+    const errors: string[] = [];
+    const results = await Promise.all(
+      picks.map(async (item): Promise<"clean" | "teaser" | "error"> => {
+        try {
+          const content = (await search.scrape?.(item.url)) ?? "";
+          return isTeaserContent(content, 400) ? "teaser" : "clean";
+        } catch (err: unknown) {
+          errors.push(`${item.url}: ${String(err).slice(0, 80)}`);
+          return "error";
+        }
+      }),
+    );
+    const clean = results.filter((r) => r === "clean").length;
+    const teaser = results.filter((r) => r === "teaser").length;
+    const verdict = clean === results.length ? "PASS   " : clean > 0 ? "PARTIAL" : "FAIL   ";
+    const counts = `${clean}/${results.length} clean, ${teaser} teaser, ${results.length - clean - teaser} error`;
+    const firstError = errors.length > 0 ? ` — ${errors[0]}` : "";
+    process.stdout.write(`${verdict} ${feed.outlet} — ${counts}${firstError}\n`);
   }
 }
 
