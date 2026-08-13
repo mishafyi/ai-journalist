@@ -5,7 +5,10 @@
  * grammar-constrained `completeStructured` (Ollama's `format` field takes a
  * JSON Schema and constrains decoding server-side, so the reply can't wrap the
  * data in prose), empty completions throw so the caller's retry wrapper can
- * re-ask. No internal retry — retries belong to the engine's helpers.
+ * re-ask. CONTENT retries belong to the engine's helpers; the only thing
+ * retried in here is a request that never got an answer at all (see
+ * postWithRetry) — a dropped connection is worth re-sending verbatim, and a
+ * bad completion is not.
  */
 import { z } from "zod";
 import type { ZodType } from "zod";
@@ -47,6 +50,8 @@ async function chat(args: {
   format: Record<string, unknown> | undefined;
   numCtx: number | undefined;
   keepAlive: string | undefined;
+  /** Where a transport retry announces itself; silent when absent. */
+  log?: (line: string) => void;
 }): Promise<string> {
   const options = {
     ...(args.temperature === undefined ? {} : { temperature: args.temperature }),
@@ -60,11 +65,7 @@ async function chat(args: {
     options,
     ...(args.keepAlive === undefined ? {} : { keep_alive: args.keepAlive }),
   });
-  const res = await fetch(`${args.baseUrl}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-  });
+  const res = await postWithRetry(`${args.baseUrl}/api/chat`, body, args.model, args.log);
   if (!res.ok) {
     const errText = await res.text();
     throw new Error(
@@ -77,6 +78,55 @@ async function chat(args: {
     throw new Error(`Ollama returned an empty completion (model=${args.model})`);
   }
   return text;
+}
+
+/** Attempts for a request that died in TRANSPORT — see postWithRetry. */
+const TRANSPORT_ATTEMPTS = 3;
+
+/**
+ * POST to Ollama, retrying only a request that never produced an answer.
+ *
+ * The local runner is killed mid-request under memory pressure, and the
+ * request fails as a dropped connection (`Post ".../tokenize": EOF`) or a 5xx.
+ * That took down 150 of 345 failed newsroom runs — a whole cycle's work thrown
+ * away because a subprocess died for a second while four desks reached for the
+ * same model at once.
+ *
+ * Deliberately narrow. A 4xx is a bad request and will fail identically; an
+ * empty or malformed completion is a CONTENT failure and still belongs to the
+ * engine's own retry helpers, which can re-ask with a different prompt. Only
+ * "the server never answered" is retried here, because only that is worth
+ * asking again verbatim.
+ */
+async function postWithRetry(
+  url: string,
+  body: string,
+  model: string,
+  log?: (line: string) => void,
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= TRANSPORT_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      if (res.status < 500 || attempt === TRANSPORT_ATTEMPTS) return res;
+      lastErr = new Error(`HTTP ${res.status}`);
+    } catch (err: unknown) {
+      lastErr = err;
+      if (attempt === TRANSPORT_ATTEMPTS) throw err;
+    }
+    // The runner needs a moment to come back up before it can load the model.
+    const backoffMs = 1500 * attempt;
+    log?.(
+      `ollama: transport failure on attempt ${attempt}/${TRANSPORT_ATTEMPTS} (model=${model}): ${String(lastErr)} — retrying in ${backoffMs}ms`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, backoffMs));
+  }
+  // Unreachable: the loop either returns or throws on the final attempt.
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {

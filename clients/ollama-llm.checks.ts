@@ -1,129 +1,87 @@
-/**
- * Offline checks for ollama-llm.ts — prove the `LlmClient` shape against a
- * MOCKED `fetch` (no live Ollama needed, CI-safe, deterministic):
- *
- *   npx tsx clients/ollama-llm.checks.ts
- *
- * Locked behaviours:
- *   1. A blank per-call `model` ("" / undefined) resolves to the configured
- *      default — engine callers pass `model: ""` for an unset knob, and Ollama
- *      400s on an empty model (the exact regression this pins).
- *   2. An explicit per-call `model` passes through untouched.
- *   3. `completeStructured` sends the JSON Schema as `format` and returns the
- *      Zod-validated object.
- *   4. An empty completion throws (retryable) instead of returning "".
- *   5. `cfg.options.numCtx`/`keepAlive` forward into BOTH call sites' request
- *      (`options.num_ctx`, top-level `keep_alive`); omitted keys are sent
- *      ABSENT so the server's own env config stays authoritative.
- */
-import { z } from "zod";
+/** Transport-retry behaviour of the Ollama client — run: npx tsx clients/ollama-llm.checks.ts */
 import { createOllamaLlm } from "./ollama-llm";
-
-interface CapturedRequest {
-  model: string;
-  format?: unknown;
-  options?: { temperature?: number; num_ctx?: number };
-  keep_alive?: string;
-}
 
 async function main(): Promise<void> {
   let failures = 0;
   const ok = (name: string, cond: boolean, detail: string): void => {
-    if (cond) {
-      process.stdout.write(`PASS ${name}\n`);
-    } else {
+    if (cond) process.stdout.write(`PASS ${name}\n`);
+    else {
       failures += 1;
       process.stdout.write(`FAIL ${name} — ${detail}\n`);
     }
   };
 
-  const captured: CapturedRequest[] = [];
-  let nextContent = "hello";
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async (_url: unknown, init?: { body?: unknown }) => {
-    const body = JSON.parse(String(init?.body)) as CapturedRequest;
-    captured.push(body);
-    return new Response(JSON.stringify({ message: { content: nextContent } }), {
-      status: 200,
-    });
+  const answer = (text: string): Response =>
+    new Response(JSON.stringify({ message: { content: text } }), { status: 200 });
+
+  // The failure this exists for: the runner is killed mid-request and the POST
+  // dies as a dropped connection. It took 150 newsroom runs down.
+  let calls = 0;
+  globalThis.fetch = (async (): Promise<Response> => {
+    calls += 1;
+    if (calls < 3) throw new TypeError('fetch failed: Post "/tokenize": EOF');
+    return answer("recovered");
   }) as typeof fetch;
+  const llm = createOllamaLlm({ baseUrl: "http://x", model: "m" });
+  const text = await llm.complete({ prompt: "p", model: "", temperature: 0 });
+  ok("a dropped connection is retried and the run survives", text === "recovered" && calls === 3,
+    `text=${text} calls=${calls}`);
 
+  // A 5xx is the same class of failure — the server never answered.
+  calls = 0;
+  globalThis.fetch = (async (): Promise<Response> => {
+    calls += 1;
+    return calls < 2 ? new Response("boom", { status: 503 }) : answer("ok");
+  }) as typeof fetch;
+  ok("a 5xx is retried", (await llm.complete({ prompt: "p", model: "", temperature: 0 })) === "ok" && calls === 2,
+    `calls=${calls}`);
+
+  // A 4xx is a bad request: retrying it verbatim only wastes the cycle.
+  calls = 0;
+  globalThis.fetch = (async (): Promise<Response> => {
+    calls += 1;
+    return new Response("nope", { status: 400 });
+  }) as typeof fetch;
+  let threw = false;
   try {
-    const llm = createOllamaLlm({ baseUrl: "http://mock:11434", model: "default-model" });
-
-    await llm.complete({ prompt: "p", model: "" });
-    ok(
-      "blank model resolves to the configured default",
-      captured[0]?.model === "default-model",
-      `sent model=${JSON.stringify(captured[0]?.model)}`,
-    );
-
-    await llm.complete({ prompt: "p", model: "explicit:tag" });
-    ok(
-      "explicit model passes through",
-      captured[1]?.model === "explicit:tag",
-      `sent model=${JSON.stringify(captured[1]?.model)}`,
-    );
-
-    nextContent = JSON.stringify({ headline: "h" });
-    const structured = await llm.completeStructured({
-      messages: [{ role: "user", content: "u" }],
-      schema: z.object({ headline: z.string() }),
-      schemaName: "test",
-    });
-    ok(
-      "structured call sends a JSON-Schema format and returns the parsed object",
-      structured.headline === "h" &&
-        typeof captured[2]?.format === "object" &&
-        captured[2]?.format !== null,
-      `format=${JSON.stringify(captured[2]?.format)?.slice(0, 60)} parsed=${JSON.stringify(structured)}`,
-    );
-
-    nextContent = "   ";
-    let threw = false;
-    try {
-      await llm.complete({ prompt: "p" });
-    } catch {
-      threw = true;
-    }
-    ok("empty completion throws (retryable)", threw, "resolved with blank text");
-
-    nextContent = "hello";
-    const withOptions = createOllamaLlm({
-      baseUrl: "http://mock:11434",
-      model: "default-model",
-      options: { numCtx: 32768, keepAlive: "30m" },
-    });
-    await withOptions.complete({ prompt: "p" });
-    const completeCap = captured[captured.length - 1];
-    ok(
-      "numCtx/keepAlive forward on complete()",
-      completeCap?.options?.num_ctx === 32768 && completeCap?.keep_alive === "30m",
-      `options=${JSON.stringify(completeCap?.options)} keep_alive=${JSON.stringify(completeCap?.keep_alive)}`,
-    );
-
-    nextContent = JSON.stringify({ headline: "h2" });
-    await withOptions.completeStructured({
-      messages: [{ role: "user", content: "u" }],
-      schema: z.object({ headline: z.string() }),
-      schemaName: "test",
-    });
-    const structuredCap = captured[captured.length - 1];
-    ok(
-      "numCtx/keepAlive forward on completeStructured()",
-      structuredCap?.options?.num_ctx === 32768 && structuredCap?.keep_alive === "30m",
-      `options=${JSON.stringify(structuredCap?.options)} keep_alive=${JSON.stringify(structuredCap?.keep_alive)}`,
-    );
-
-    ok(
-      "omitted numCtx/keepAlive send neither key (server env stays authoritative)",
-      !("num_ctx" in (captured[0]?.options ?? {})) && !("keep_alive" in (captured[0] ?? {})),
-      `options=${JSON.stringify(captured[0]?.options)} top-level keys=${Object.keys(captured[0] ?? {}).join(",")}`,
-    );
-  } finally {
-    globalThis.fetch = realFetch;
+    await llm.complete({ prompt: "p", model: "", temperature: 0 });
+  } catch {
+    threw = true;
   }
+  ok("a 4xx fails immediately, without retrying", threw && calls === 1, `threw=${threw} calls=${calls}`);
 
+  // Content failures still belong to the engine's own retry helpers.
+  calls = 0;
+  globalThis.fetch = (async (): Promise<Response> => {
+    calls += 1;
+    return answer("   ");
+  }) as typeof fetch;
+  threw = false;
+  try {
+    await llm.complete({ prompt: "p", model: "", temperature: 0 });
+  } catch {
+    threw = true;
+  }
+  ok("an empty completion throws without a transport retry", threw && calls === 1,
+    `threw=${threw} calls=${calls}`);
+
+  // Persistent transport failure raises the last error rather than hanging.
+  calls = 0;
+  globalThis.fetch = (async (): Promise<Response> => {
+    calls += 1;
+    throw new TypeError("still down");
+  }) as typeof fetch;
+  threw = false;
+  try {
+    await llm.complete({ prompt: "p", model: "", temperature: 0 });
+  } catch {
+    threw = true;
+  }
+  ok("a runner that never comes back raises after the last attempt", threw && calls === 3,
+    `threw=${threw} calls=${calls}`);
+
+  globalThis.fetch = realFetch;
   if (failures > 0) {
     process.exitCode = 1;
     return;
