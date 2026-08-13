@@ -1089,7 +1089,12 @@ export function createNewsDesk(opts: {
             keywords: [],
             content,
           };
-          const fin = internals.finalizePost(article, slug, title);
+          // Third arg is telemetry.topic and ONLY that (presets/default.ts) —
+          // the title comes from `article`. It must stay the FEED headline:
+          // the host keys out/covered.json to it, and next run probes that
+          // ledger with raw feed headlines. Passing the chosen title here made
+          // every future dedup compare two different alphabets.
+          const fin = internals.finalizePost(article, slug, story.headline);
           const post: GeneratedPost = {
             ...fin,
             byline: columnist.name,

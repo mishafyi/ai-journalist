@@ -10,6 +10,9 @@ import type { GeneratedArticle } from "../pipeline";
 
 const STORY1 = "Senate passes sweeping tariff bill after marathon vote";
 const STORY2 = "Central bank raises interest rates to twenty-year high";
+/** pickHeadline takes the LONGEST real headline that fits 70 chars, so STORY2
+ *  publishes under Beacon's cluster headline, not the feed's lead. */
+const CHOSEN_SLUG = "central-bank-raises-rates-to-twenty-year-high-markets-react";
 
 async function orchestrationChecks(): Promise<void> {
   let failures = 0;
@@ -240,20 +243,43 @@ async function orchestrationChecks(): Promise<void> {
     md.includes("## A liquidity halt wearing a modern suit"), md.slice(0, 200));
   ok("the column commits to the parallel — no hedge paragraph (operator, 2026-07-26)",
     !md.includes("Where the parallel breaks down"), md.slice(0, 200));
-  ok("## Sources lists exactly the 2 surviving outlets",
-    md.includes("## Sources") && md.includes("- Wire: [") && md.includes("- Beacon: [") &&
-      !md.includes("Teaser Daily") && !md.includes("Blocked Times"), md);
+  // Sources are DATA now, not a chapter: the site renders them for readers,
+  // for crawlers that never run JS, and as schema.org citation, and a "##
+  // Sources" section in the body reached only the first of the three.
+  const cited = (published as GeneratedPost | null)?.sources ?? [];
+  ok("sources[] lists exactly the 2 surviving outlets",
+    cited.length === 2 &&
+      cited.some((c) => c.title.startsWith("Wire: ") && c.url === "https://wire.example/rates") &&
+      cited.some((c) => c.title.startsWith("Beacon: ")) &&
+      !cited.some((c) => /Teaser Daily|Blocked Times/.test(c.title)),
+    JSON.stringify(cited));
+  ok("the body no longer carries a ## Sources chapter",
+    !md.includes("## Sources"), md.slice(-200));
   // v2 (operator, 2026-07-23): verification is internal — the reader never
   // sees Wikipedia. Sources must NOT carry an encyclopedia line.
-  ok("Sources carries NO Wikipedia line (verification is internal)",
-    !md.includes("- Wikipedia:") && !md.includes("wikipedia.org"), md.split("## Sources")[1] ?? md);
+  ok("sources carry NO Wikipedia entry (verification is internal)",
+    !cited.some((c) => /wikipedia/i.test(c.title) || /wikipedia\.org/.test(c.url)) &&
+      !md.includes("wikipedia.org"),
+    JSON.stringify(cited));
   ok("dek is the column's first prose sentence — never a chapter heading",
     ((published as GeneratedPost | null)?.description ?? "").startsWith("The Panic of 1907 is the closest rhyme") &&
       !((published as GeneratedPost | null)?.description ?? "").includes("#") &&
       ((published as GeneratedPost | null)?.description ?? "").length <= 200,
     (published as GeneratedPost | null)?.description ?? "(none)");
-  ok("post returned = post published, slug from internals.slugify",
-    post === (published as GeneratedPost | null) && post.slug === "central-bank-raises-interest-rates-to-twenty-year-high", post.slug);
+  // The slug follows pickHeadline, not the feed headline: both the lead
+  // ("…raises interest rates to twenty-year high", 53 chars) and Beacon's
+  // ("…raises rates to twenty-year high, markets react", 59) fit inside 70, so
+  // the longer real headline wins — more information in the space Google will
+  // actually show. Still verbatim; a headline no outlet printed is the thing
+  // that must never happen.
+  ok("post returned = post published, slug follows the CHOSEN headline",
+    post === (published as GeneratedPost | null) &&
+      post.slug === "central-bank-raises-rates-to-twenty-year-high-markets-react",
+    post.slug);
+  ok("the chosen title is one an outlet actually printed",
+    [STORY2, "Central bank raises rates to twenty-year high, markets react",
+     "Central bank raises interest rates: what it means"].includes(post.title),
+    post.title);
   ok("evidence corpus threaded to internals via gatherResearch",
     internalsOpts.length === 1 &&
       ((await internalsOpts[0].gatherResearch?.("any"))?.block ?? "").includes(`SOURCE Wire — ${STORY2} (https://wire.example/rates):`),
@@ -338,7 +364,7 @@ async function orchestrationChecks(): Promise<void> {
     parallelFetches.length === fetchesBefore, `unexpected fetches: ${parallelFetches.slice(fetchesBefore).join(",")}`);
   ok("recentParallels: the published column takes the legal no-parallel path",
     md3.includes(NO_PARALLEL_PHRASE) && !md3.includes("Panic of 1907") &&
-      post3.slug === "central-bank-raises-interest-rates-to-twenty-year-high",
+      post3.slug === CHOSEN_SLUG,
     md3.slice(0, 200));
   ok("recentParallels: no-parallel run publishes no telemetry.parallel field",
     post3.telemetry !== undefined && !("parallel" in post3.telemetry) && String(post3.telemetry.topic) === STORY2,
@@ -392,13 +418,16 @@ async function orchestrationChecks(): Promise<void> {
     searched4.some((q) => q.includes("Panic of 1907")), JSON.stringify(searched4));
   ok("hunt: log names the shortfall and the pages added",
     logs4.some((l) => l.includes(`index gave 1/3 — search hunt added 2 candidate page(s)`)), logs4.join(" | "));
+  const cited4 = (published4 as GeneratedPost | null)?.sources ?? [];
   ok("hunt: published with index + hunted sources, google.com redirect filtered",
-    md4.includes("- Wire: [") && md4.includes("- hunt-a.example: [") && md4.includes("- hunt-b.example: [") &&
-      !md4.includes("news.google.com"),
-    md4.split("## Sources")[1] ?? md4.slice(0, 200));
+    cited4.some((c) => c.title.startsWith("Wire: ")) &&
+      cited4.some((c) => c.title.startsWith("hunt-a.example: ")) &&
+      cited4.some((c) => c.title.startsWith("hunt-b.example: ")) &&
+      !cited4.some((c) => c.url.includes("news.google.com")),
+    JSON.stringify(cited4));
   ok("hunt: the run returns the published post",
     post4 === (published4 as GeneratedPost | null) &&
-      post4.slug === "central-bank-raises-interest-rates-to-twenty-year-high",
+      post4.slug === CHOSEN_SLUG,
     post4.slug);
 
   // Chart helper (operator, 2026-07-25: graphs from DataGod series, rendered
