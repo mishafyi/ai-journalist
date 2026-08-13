@@ -320,11 +320,19 @@ async function main(): Promise<void> {
             imageCredit: post.imageCredit ?? "",
             imageSource: post.imageSource ?? "",
             parallel: typeof post.telemetry?.parallel === "string" ? post.telemetry.parallel : "",
+            breaking: post.breaking === true,
           },
           null,
           2,
         ),
       );
+      // Citations go in their own sidecar because publish-article.mjs already
+      // takes `--sources file.json`, and because they belong in the `sources`
+      // FIELD: the site renders them for readers, for crawlers that never run
+      // JS, and as schema.org citation, and prose reaches only the first.
+      if (post.sources !== undefined && post.sources.length > 0) {
+        await writeFile(`out/${post.slug}.sources.json`, JSON.stringify(post.sources, null, 2));
+      }
       process.stdout.write(`Published "${post.title}" → ${path} [DRAFT]\n`);
       let ledger: { title: string; slug: string; date: string }[] = [];
       try {
@@ -346,6 +354,54 @@ async function main(): Promise<void> {
   // GN topic feeds (WORLD…HEALTH) append as the tail: top stories keep
   // priority, round-robin topics fill it, near-identical headlines collapse
   // first-wins at trigram SUPPLY_DEDUPE.
+  // ── Velocity tripwire ────────────────────────────────────────────────────
+  // Google News publishes a RANKING, never a rate of climb, so "breaking" has
+  // to be derived across runs: a story counts only if it is near the top of
+  // the top-stories feed AND the desk has never seen it before. New + already
+  // near the top is the shape of a story climbing fast; a story that has sat
+  // in the ledger for hours is merely big.
+  //
+  // The first run has no ledger, so every headline is "new" and everything
+  // would be breaking — hence the has-ledger guard. One per run, maximum: a
+  // paper where two stories in every cycle are BREAKING has spent the word.
+  const BREAKING_TOP_RANK = 5;
+  const BREAKING_LEDGER = "out/trending-seen.json";
+
+  async function markBreaking(top: readonly TrendingStory[]): Promise<TrendingStory[]> {
+    let seen: Record<string, string> = {};
+    let hadLedger = true;
+    try {
+      seen = JSON.parse(await readFile(BREAKING_LEDGER, "utf8")) as Record<string, string>;
+    } catch {
+      hadLedger = false; // first run on this machine
+    }
+    const now = new Date().toISOString();
+    let flagged = false;
+    const out = top.map((story): TrendingStory => {
+      const first = seen[story.headline];
+      const isNew = first === undefined;
+      if (isNew) seen[story.headline] = now;
+      if (!hadLedger || flagged || !isNew || story.rank > BREAKING_TOP_RANK) return story;
+      flagged = true;
+      log(`news-desk: BREAKING — "${story.headline}" entered at rank ${story.rank}`);
+      return { ...story, breaking: true };
+    });
+    // Keep the ledger from growing without bound: the tripwire only ever asks
+    // "have I seen this before", and a day is far longer than a news cycle.
+    const cutoff = Date.now() - 24 * 3600_000;
+    const pruned = Object.fromEntries(
+      Object.entries(seen).filter(([, at]) => new Date(at).getTime() >= cutoff),
+    );
+    try {
+      await writeFile(BREAKING_LEDGER, JSON.stringify(pruned, null, 2));
+    } catch (err: unknown) {
+      // Best-effort, exactly like the covered ledger: a tripwire that cannot
+      // write must not take down the run that would have published.
+      log(`news-desk: could not write ${BREAKING_LEDGER} (continuing): ${String(err)}`);
+    }
+    return out;
+  }
+
   const TRENDING_LIMIT = 20;
   const TOPIC_TAIL_LIMIT = 30;
   // Site tail (2026-08-10): ~2 per paper after the round-robin — enough to
@@ -395,7 +451,11 @@ async function main(): Promise<void> {
       ? { imageSearch: { url: process.env.IMAGE_SEARCH_URL, apiKey: process.env.IMAGE_SEARCH_KEY } }
       : {}),
     trendingImpl: async (): Promise<TrendingStory[]> => {
-      const top = await fetchTrendingStories({ edition: GN_US, limit: TRENDING_LIMIT });
+      // Only the top-stories feed carries a meaningful rank, so the tripwire
+      // reads that one; the topic and site tails are supply, not signal.
+      const top = await markBreaking(
+        await fetchTrendingStories({ edition: GN_US, limit: TRENDING_LIMIT }),
+      );
       const topics = await fetchTopicStories({
         edition: GN_US, topics: GN_TOPICS, limit: TOPIC_TAIL_LIMIT, dedupeThreshold: SUPPLY_DEDUPE, log,
       });
@@ -415,6 +475,24 @@ async function main(): Promise<void> {
       // minScore 0.5 (operator, 2026-07-26): a parallel must genuinely fit or the
       // column takes the honest no-parallel path — no more Tiananmen-for-a-car-attack.
       parallelCount: 4, parallelMinScore: 0.5, analysisAttempts: 3,
+    },
+    // A covered story that is STILL trending is a developing story. The desk
+    // used to drop it (573 of 1,929 runs ended with nothing for this reason);
+    // now it lands in a queue that scripts/append-update.mjs drains, the same
+    // out/-sidecar-then-publish shape everything else here uses. Writing the
+    // update is deliberately NOT done inline: the desk's hot path publishes
+    // the paper every 25 minutes and must not grow a second failure mode.
+    onCovered: async (dev): Promise<void> => {
+      let queue: unknown[] = [];
+      try {
+        queue = JSON.parse(await readFile("out/developing.json", "utf8")) as unknown[];
+      } catch {
+        // first developing story
+      }
+      queue.push({ ...dev, at: new Date().toISOString() });
+      // Bounded: the drain script removes what it files, and a queue that grew
+      // without bound would replay week-old clusters after any outage.
+      await writeFile("out/developing.json", JSON.stringify(queue.slice(-100), null, 2));
     },
     coveredTopics: async (): Promise<CoveredTopic[]> => {
       try {

@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, createNewsDesk, evidenceWordCap, fredChartUrl } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, pickHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -456,6 +456,40 @@ async function orchestrationChecks(): Promise<void> {
     edgar !== undefined && edgar.request({ ticker: "TSLA" })?.path === "/edgar/company/TSLA" &&
       edgar.request({ ticker: "not a ticker" }) === null && edgar.request({}) === null,
     JSON.stringify(edgar?.request({ ticker: "TSLA" })));
+
+  // ── pickHeadline: still verbatim, just chosen ────────────────────────────
+  const story = (headline: string, coverage: string[]): TrendingStory => ({
+    rank: 1,
+    headline,
+    leadOutlet: "BBC",
+    coverage: coverage.map((h) => ({ headline: h, outlet: "x" })),
+  });
+
+  const LONG = "Senate passes the sweeping tariff bill after a marathon overnight session that split both parties";
+  const FITS_LONG = "Senate passes sweeping tariff bill after marathon vote";
+  const FITS_SHORT = "Senate passes tariff bill at last";
+
+  ok("picks the LONGEST headline that still fits the SERP limit",
+    pickHeadline(story(LONG, [FITS_SHORT, FITS_LONG]), SERP_TITLE_CHARS) === FITS_LONG,
+    pickHeadline(story(LONG, [FITS_SHORT, FITS_LONG]), SERP_TITLE_CHARS));
+
+  ok("when nothing fits, takes the shortest so it truncates least",
+    pickHeadline(story(LONG, [LONG + " and more besides"]), 20) === LONG,
+    pickHeadline(story(LONG, [LONG + " and more besides"]), 20));
+
+  ok("a feed-truncated candidate is never a title",
+    pickHeadline(story(LONG, ["Senate passes sweeping tariff bill after a marathon…"]), SERP_TITLE_CHARS) === LONG,
+    pickHeadline(story(LONG, ["Senate passes sweeping tariff bill after a marathon…"]), SERP_TITLE_CHARS));
+
+  ok("no usable candidate falls back to the feed headline unchanged",
+    pickHeadline(story("Too short", []), SERP_TITLE_CHARS) === "Too short",
+    pickHeadline(story("Too short", []), SERP_TITLE_CHARS));
+
+  ok("the chosen title is always one an outlet actually printed",
+    [LONG, FITS_SHORT, FITS_LONG].includes(
+      pickHeadline(story(LONG, [FITS_SHORT, FITS_LONG]), SERP_TITLE_CHARS),
+    ),
+    "invented a headline");
 
   if (failures > 0) {
     process.exitCode = 1;

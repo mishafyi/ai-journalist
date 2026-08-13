@@ -32,6 +32,10 @@ export interface TrendingStory {
   headline: string;
   leadOutlet: string;
   coverage: CoverageEntry[];
+  /** Set by the host's velocity tripwire (see markBreaking in
+   *  examples/run-news-desk.ts), not by any feed — Google News publishes a
+   *  ranking, never a rate of climb. */
+  breaking?: boolean;
 }
 
 export function googleNewsTopUrl(edition: GnEdition): string {

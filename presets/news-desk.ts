@@ -542,6 +542,38 @@ export function evidenceWordCap(sourceCount: number, evidenceChars: number, maxC
   return Math.max(500, Math.min(maxCap, bySources + byEvidence));
 }
 
+/** Google truncates a result title around here; a headline past it is cut
+ *  mid-phrase in the one place most readers meet this paper. */
+export const SERP_TITLE_CHARS = 70;
+
+/** Longest headline in the SERP limit, chosen from what real outlets printed.
+ *
+ *  The desk never invents a headline — it prints the trending one verbatim, so
+ *  the title matches what the sources actually said. But a story arrives with
+ *  several real headlines (the lead outlet's plus every outlet in the coverage
+ *  cluster), and taking the lead one unexamined put 592 of 1,111 titles past
+ *  70 characters, where Google truncates them mid-phrase.
+ *
+ *  So: still verbatim, just chosen. Among headlines that fit, take the LONGEST
+ *  — the most information that will actually be shown. If none fit, take the
+ *  shortest of the rest and let it truncate as little as possible. Candidates
+ *  that were themselves cut off by the feed ("…") are never titles.
+ */
+export function pickHeadline(story: TrendingStory, maxChars: number): string {
+  const candidates = [story.headline, ...story.coverage.map((c) => c.headline)]
+    .map((h) => h.trim())
+    .filter((h) => h.length >= 25 && !/[…]|\.\.\.$/.test(h));
+  if (candidates.length === 0) return story.headline;
+  const fits = candidates.filter((h) => h.length <= maxChars);
+  const pool = fits.length > 0 ? fits : candidates;
+  // Ties broken alphabetically so the choice never depends on feed ordering.
+  return [...pool].sort((a, b) =>
+    fits.length > 0
+      ? b.length - a.length || (a < b ? -1 : 1)
+      : a.length - b.length || (a < b ? -1 : 1),
+  )[0];
+}
+
 export function createNewsDesk(opts: {
   llm: LlmClient;
   search: SearchClient;
@@ -560,6 +592,23 @@ export function createNewsDesk(opts: {
   imageSearch?: ImageSearchConfig;
   knobs: NewsDeskKnobs;
   coveredTopics?: () => Promise<CoveredTopic[]>;
+  /** Called when a trending story matches one the paper has already run.
+   *
+   *  Nearly a third of all runs used to end here having thrown the whole cycle
+   *  away — the desk found a live story, recognised it, and discarded the
+   *  work. A story that keeps trending after publication is the definition of
+   *  developing, so the host is handed the match (which article, and what the
+   *  cluster is saying NOW) and can file an update against it.
+   *
+   *  Best-effort and non-blocking by contract: the desk logs a failure and
+   *  carries on to the next story, exactly as it did when it only skipped. */
+  onCovered?: (developing: {
+    headline: string;
+    slug: string;
+    coveredTitle: string;
+    score: number;
+    coverage: readonly { headline: string; outlet: string }[];
+  }) => Promise<void>;
   /** Historical parallels recent columns already ran (a host draws them from
    *  its last N published articles). A proposed candidate whose event names
    *  ANY entry (namesEvent — typography-, case-, and leading-article-
@@ -615,9 +664,25 @@ export function createNewsDesk(opts: {
         // Covered-story skip: mechanical ledger match, threshold-gated.
         const coveredHit = await matcher.match(story.headline, coveredTitles, knobs.coveredThreshold);
         if (coveredHit !== null) {
+          const hitSlug = covered[coveredHit.index]?.slug ?? "";
           log?.(
-            `news-desk: "${story.headline}" already covered ("${coveredTitles[coveredHit.index]}", score ${coveredHit.score.toFixed(2)}) — skipping`,
+            `news-desk: "${story.headline}" already covered ("${coveredTitles[coveredHit.index]}", score ${coveredHit.score.toFixed(2)}) — still trending, filing as developing`,
           );
+          if (opts.onCovered !== undefined && hitSlug !== "") {
+            try {
+              await opts.onCovered({
+                headline: story.headline,
+                slug: hitSlug,
+                coveredTitle: coveredTitles[coveredHit.index],
+                score: coveredHit.score,
+                coverage: story.coverage,
+              });
+            } catch (err: unknown) {
+              // Never fatal: a story the desk cannot follow up is still a
+              // story it has already published.
+              log?.(`news-desk: onCovered failed (continuing): ${String(err)}`);
+            }
+          }
           continue;
         }
 
@@ -907,7 +972,13 @@ export function createNewsDesk(opts: {
         );
 
         const outletNames = contributing.map((c) => c.outlet);
-        const sourceLines = contributing.map((c) => `- ${c.outlet}: [${c.title}](${c.url})`);
+        // Structured, not a "## Sources" chapter in the body. The site renders
+        // this field for readers, for crawlers that never run JS, and as
+        // schema.org `citation`; prose reaches only the first of the three.
+        const sources = contributing.map((c) => ({
+          title: `${c.outlet}: ${c.title}`,
+          url: c.url,
+        }));
 
         // Author-versions format: one complete fused column per columnist,
         // each its own post — same title (the trending headline verbatim),
@@ -981,7 +1052,7 @@ export function createNewsDesk(opts: {
             /\*\*\s*(?:the\s+)?(?:bottom line|in sum|the upshot|in conclusion|the takeaway)\s*:?\s*\*\*\s*[—–-]?\s*/gi,
             "",
           );
-          const content = `${body}${chartMarkdown}\n\n## Sources\n${sourceLines.join("\n")}`;
+          const content = `${body}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           try {
             const audit = await runFactCheckAudit(content, evidence, {
@@ -1003,22 +1074,28 @@ export function createNewsDesk(opts: {
           }
           // One take per story → the headline alone is the slug, capped at a
           // WORD boundary (a raw 70-char slice shipped ".../criminal-co").
-          const rawSlug = internals.slugify(story.headline);
+          // `title` is the chosen verbatim headline; `telemetry.topic` below
+          // stays the GN headline, because the covered-story ledger is keyed
+          // to what the feed said and must keep matching next run.
+          const title = pickHeadline(story, SERP_TITLE_CHARS);
+          const rawSlug = internals.slugify(title);
           const slug =
             rawSlug.length <= 70 ? rawSlug : rawSlug.slice(0, 70).replace(/-[^-]*$/, "").replace(/-+$/, "");
           const article: GeneratedArticle = {
-            title: story.headline,
+            title,
             description: dekFrom(body),
             category: "news",
             tags: [...tags],
             keywords: [],
             content,
           };
-          const fin = internals.finalizePost(article, slug, story.headline);
+          const fin = internals.finalizePost(article, slug, title);
           const post: GeneratedPost = {
             ...fin,
             byline: columnist.name,
             tags,
+            sources,
+            ...(story.breaking === true ? { breaking: true } : {}),
             ...(section === "" ? {} : { section }),
             ...(lead === null ? {} : { imageUrl: lead.url, imageCredit: lead.credit, imageSource: lead.source }),
             // The parallel this column ran on — a host records it per post

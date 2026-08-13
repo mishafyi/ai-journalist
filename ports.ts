@@ -156,6 +156,14 @@ export interface GeneratedPost {
   imageUrl?: string;
   imageCredit?: string;
   imageSource?: string;
+  /** The pages this story was written from, as structured citations. The site
+   *  renders them from this field in three places (reader list, crawler HTML,
+   *  schema.org citation), so a post that buries them in the prose instead is
+   *  invisible to two of the three. */
+  sources?: readonly { title: string; url: string }[];
+  /** Set when the story cleared the trending-velocity tripwire — the desk
+   *  reached it while it was still climbing, not after it had settled. */
+  breaking?: boolean;
   /** Gate results the pipeline recorded (publish-blockers, budgets, etc.). */
   telemetry?: Record<string, unknown>;
 }
