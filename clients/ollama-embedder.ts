@@ -8,7 +8,21 @@ import { Ollama } from "ollama";
 import type { Embedder } from "../ports";
 
 /** Attempts for an embed that died in TRANSPORT — see isTransient. */
-const TRANSPORT_ATTEMPTS = 3;
+const TRANSPORT_ATTEMPTS = 4;
+
+/**
+ * Backoff before each retry, in ms.
+ *
+ * Sized to outlast a RUNNER RESPAWN, not a blip. Observed on the mini
+ * 2026-08-13: attempt 1 got "read: connection reset by peer", attempt 2 the
+ * same, and attempt 3 — still only 4.5s in — got "dial: connect: connection
+ * reset by peer", i.e. the port had no listener at all yet. Ollama needs
+ * roughly ten seconds to notice a dead runner, respawn it and reload the
+ * model, so retrying faster than that just burns the attempts on a socket
+ * nobody is holding. The desk runs every ~25 minutes; 23 seconds of patience
+ * is free.
+ */
+const BACKOFF_MS = [2_000, 6_000, 15_000];
 
 /**
  * True for a failure that says "the server never answered", not "the request
@@ -61,8 +75,7 @@ export function createOllamaEmbedder(cfg: {
         } catch (err: unknown) {
           if (!isTransient(err) || attempt === TRANSPORT_ATTEMPTS) throw err;
           lastErr = err;
-          // The runner needs a moment to come back up and reload the model.
-          const backoffMs = 1500 * attempt;
+          const backoffMs = BACKOFF_MS[attempt - 1] ?? BACKOFF_MS[BACKOFF_MS.length - 1];
           cfg.log?.(
             `ollama-embedder: transport failure on attempt ${attempt}/${TRANSPORT_ATTEMPTS} (model=${cfg.model}): ${String(lastErr)} — retrying in ${backoffMs}ms`,
           );
