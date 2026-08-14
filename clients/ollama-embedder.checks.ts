@@ -90,6 +90,38 @@ async function main(): Promise<void> {
       `msg=${mismatch} retries=${short}`);
   }
 
+  // Chunking: a batch larger than BATCH must arrive as several requests, in
+  // order, and reassemble into exactly one vector per input. The oversized
+  // single request is what wedged the runner in the first place.
+  {
+    let requests = 0;
+    let sizes: number[] = [];
+    globalThis.fetch = (async (_u: unknown, init?: RequestInit): Promise<Response> => {
+      requests += 1;
+      const body = JSON.parse(String(init?.body ?? "{}")) as { input?: string[] };
+      const n = body.input?.length ?? 0;
+      sizes.push(n);
+      return new Response(
+        JSON.stringify({ embeddings: Array.from({ length: n }, (_, i) => [i]) }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const big = createOllamaEmbedder({ host: "http://x", model: "m" });
+    const res = await big.embed(Array.from({ length: 300 }, (_, i) => `text ${i}`));
+    ok("300 texts are split into 128-sized requests, not one giant one",
+      requests === 3 && sizes[0] === 128 && sizes[1] === 128 && sizes[2] === 44,
+      `requests=${requests} sizes=${JSON.stringify(sizes)}`);
+    ok("chunked vectors come back in order, one per input",
+      res.length === 300 && res[0][0] === 0 && res[127][0] === 127 && res[128][0] === 0,
+      `len=${res.length}`);
+
+    requests = 0;
+    sizes = [];
+    await big.embed(Array.from({ length: 128 }, (_, i) => `t${i}`));
+    ok("a batch at the limit stays a single request", requests === 1 && sizes[0] === 128,
+      `requests=${requests} sizes=${JSON.stringify(sizes)}`);
+  }
+
   globalThis.fetch = realFetch;
   if (failures > 0) {
     process.exitCode = 1;
