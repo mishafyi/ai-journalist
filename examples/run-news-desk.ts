@@ -293,7 +293,13 @@ async function main(): Promise<void> {
     model: "gemma4:e4b",
     options: { numCtx: 32768, keepAlive: "30m" },
   });
-  const embedder = createOllamaEmbedder({ host: "http://localhost:11434", model: "embeddinggemma" });
+  // log: the embed path is where the model-swap race surfaces (197 runs died
+  // on it), so its retries must be visible in the run log, not silent.
+  const embedder = createOllamaEmbedder({
+    host: "http://localhost:11434",
+    model: "embeddinggemma",
+    log,
+  });
   const search = createFirecrawlSearch({
     apiKey: process.env.FIRECRAWL_API_KEY,
     apiUrl: process.env.FIRECRAWL_API_URL,
