@@ -371,7 +371,12 @@ async function main(): Promise<void> {
   // would be breaking — hence the has-ledger guard. One per run, maximum: a
   // paper where two stories in every cycle are BREAKING has spent the word.
   const BREAKING_TOP_RANK = 5;
-  const BREAKING_LEDGER = "out/trending-seen.json";
+  // NOT out/trending-seen.json — that path belongs to examples/poll-trending.ts,
+  // which stores a string[]. This ledger is a headline->first-seen map, and
+  // writing an object there made the poller's `[...seen, ...fresh]` throw
+  // "object is not iterable" every minute, wedging the newsroom for ~10
+  // minutes on 2026-08-13 until the collision was spotted.
+  const BREAKING_LEDGER = "out/breaking-seen.json";
 
   async function markBreaking(top: readonly TrendingStory[]): Promise<TrendingStory[]> {
     let seen: Record<string, string> = {};

@@ -33,7 +33,12 @@ async function main(): Promise<void> {
 
   let seen: string[] = [];
   try {
-    seen = JSON.parse(await readFile(SEEN_PATH, "utf8")) as string[];
+    const parsed: unknown = JSON.parse(await readFile(SEEN_PATH, "utf8"));
+    // Shape-check, don't just cast: a JSON file that parses fine but holds the
+    // wrong shape sailed past this `catch` and threw "object is not iterable"
+    // on the spread below, every minute, with the desk never running
+    // (2026-08-13 — another script had claimed this filename for a map).
+    seen = Array.isArray(parsed) ? (parsed as string[]) : [];
   } catch {
     // first run — everything is new
   }
