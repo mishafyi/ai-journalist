@@ -546,6 +546,36 @@ export function evidenceWordCap(sourceCount: number, evidenceChars: number, maxC
  *  mid-phrase in the one place most readers meet this paper. */
 export const SERP_TITLE_CHARS = 70;
 
+// English function words that appear in essentially every English headline vs
+// markers of the languages the site: feeds actually supply (es/pt/fr/de/it/tr).
+// "a"/"en"/"no" are deliberately in NEITHER set — they are words in both camps.
+const ENGLISH_WORDS =
+  /\b(the|of|to|in|on|for|as|at|by|with|from|after|amid|over|under|against|and|or|but|not|is|are|was|were|will|would|has|have|had|says|said|new|its|his|her|their|this|that|who|what|why|how|more|than|out|up|down|off|about|into)\b/gi;
+const FOREIGN_WORDS =
+  /\b(el|la|los|las|un|una|del|de|que|por|para|con|se|es|son|está|más|y|o|ao|da|do|dos|das|em|um|uma|não|são|le|les|des|du|au|aux|dans|est|et|une|der|die|das|und|ist|für|mit|von|zu|im|il|di|che|per|dei|della|nel|ve|bir|bu|için|ile)\b/gi;
+
+/** Is this headline written in English?
+ *
+ *  Needed because the per-paper site: feeds supply stories whose every
+ *  headline is Spanish or Portuguese, and six of them published verbatim as
+ *  titles on an English-language front page (2026-08-14/16). The columnists
+ *  write their COLUMNS in English regardless — only the title leaks.
+ *
+ *  ponytail: stopword counting, not language ID. A headline with no function
+ *  words in either set reads as not-English, which can drop a rare
+ *  all-proper-noun English headline — acceptable, because the gate sees every
+ *  headline in the cluster and a story that matters re-trends with English
+ *  coverage within a cycle or two. */
+export function isEnglishHeadline(headline: string): boolean {
+  // Non-Latin scripts are never English headlines.
+  if (/[Ѐ-ӿ֐-׿؀-ۿ぀-ヿ一-鿿가-힯]/.test(headline)) {
+    return false;
+  }
+  const english = (headline.match(ENGLISH_WORDS) ?? []).length;
+  const foreign = (headline.match(FOREIGN_WORDS) ?? []).length;
+  return english >= 1 && english > foreign;
+}
+
 /** Longest headline in the SERP limit, chosen from what real outlets printed.
  *
  *  The desk never invents a headline — it prints the trending one verbatim, so
@@ -559,11 +589,17 @@ export const SERP_TITLE_CHARS = 70;
  *  shortest of the rest and let it truncate as little as possible. Candidates
  *  that were themselves cut off by the feed ("…") are never titles.
  */
-export function pickHeadline(story: TrendingStory, maxChars: number): string {
+export function pickHeadline(story: TrendingStory, maxChars: number): string | null {
   const candidates = [story.headline, ...story.coverage.map((c) => c.headline)]
     .map((h) => h.trim())
-    .filter((h) => h.length >= 25 && !/[…]|\.\.\.$/.test(h));
-  if (candidates.length === 0) return story.headline;
+    .filter((h) => h.length >= 25 && !/[…]|\.\.\.$/.test(h))
+    // The paper prints in English, so the title must be an ENGLISH verbatim
+    // headline. A story whose entire cluster is non-English returns null and
+    // the desk moves on — see isEnglishHeadline for why that is safe.
+    .filter(isEnglishHeadline);
+  if (candidates.length === 0) {
+    return isEnglishHeadline(story.headline) ? story.headline : null;
+  }
   const fits = candidates.filter((h) => h.length <= maxChars);
   const pool = fits.length > 0 ? fits : candidates;
   // Ties broken alphabetically so the choice never depends on feed ordering.
@@ -1078,6 +1114,12 @@ export function createNewsDesk(opts: {
           // stays the GN headline, because the covered-story ledger is keyed
           // to what the feed said and must keep matching next run.
           const title = pickHeadline(story, SERP_TITLE_CHARS);
+          if (title === null) {
+            log?.(
+              `news-desk: "${story.headline}" has no English headline in its cluster — next story`,
+            );
+            continue;
+          }
           const rawSlug = internals.slugify(title);
           const slug =
             rawSlug.length <= 70 ? rawSlug : rawSlug.slice(0, 70).replace(/-[^-]*$/, "").replace(/-+$/, "");

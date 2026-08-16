@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, pickHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, pickHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -500,25 +500,46 @@ async function orchestrationChecks(): Promise<void> {
 
   ok("picks the LONGEST headline that still fits the SERP limit",
     pickHeadline(story(LONG, [FITS_SHORT, FITS_LONG]), SERP_TITLE_CHARS) === FITS_LONG,
-    pickHeadline(story(LONG, [FITS_SHORT, FITS_LONG]), SERP_TITLE_CHARS));
+    String(pickHeadline(story(LONG, [FITS_SHORT, FITS_LONG]), SERP_TITLE_CHARS)));
 
   ok("when nothing fits, takes the shortest so it truncates least",
     pickHeadline(story(LONG, [LONG + " and more besides"]), 20) === LONG,
-    pickHeadline(story(LONG, [LONG + " and more besides"]), 20));
+    String(pickHeadline(story(LONG, [LONG + " and more besides"]), 20)));
 
   ok("a feed-truncated candidate is never a title",
     pickHeadline(story(LONG, ["Senate passes sweeping tariff bill after a marathon…"]), SERP_TITLE_CHARS) === LONG,
-    pickHeadline(story(LONG, ["Senate passes sweeping tariff bill after a marathon…"]), SERP_TITLE_CHARS));
+    String(pickHeadline(story(LONG, ["Senate passes sweeping tariff bill after a marathon…"]), SERP_TITLE_CHARS)));
 
-  ok("no usable candidate falls back to the feed headline unchanged",
-    pickHeadline(story("Too short", []), SERP_TITLE_CHARS) === "Too short",
-    pickHeadline(story("Too short", []), SERP_TITLE_CHARS));
+  ok("no usable candidate falls back to the ENGLISH feed headline unchanged",
+    pickHeadline(story("Senate votes on the tariff bill today", []), SERP_TITLE_CHARS) ===
+      "Senate votes on the tariff bill today",
+    String(pickHeadline(story("Senate votes on the tariff bill today", []), SERP_TITLE_CHARS)));
 
   ok("the chosen title is always one an outlet actually printed",
     [LONG, FITS_SHORT, FITS_LONG].includes(
-      pickHeadline(story(LONG, [FITS_SHORT, FITS_LONG]), SERP_TITLE_CHARS),
+      pickHeadline(story(LONG, [FITS_SHORT, FITS_LONG]), SERP_TITLE_CHARS) ?? "",
     ),
     "invented a headline");
+
+  // ── the language gate: an English paper never prints a Spanish title ─────
+  // Live 2026-08-14/16: six stories from the per-paper site: feeds published
+  // with verbatim Spanish/Portuguese titles over English columns.
+  const ES = "Marruecos frustra el intento de cientos de migrantes subsaharianos de alcanzar Ceuta";
+  const PT = "Os pedreiros que encontraram tesouro de R$ 5,4 milhões em moedas raras";
+  ok("a Spanish headline is not English",
+    !isEnglishHeadline(ES) && !isEnglishHeadline(PT) && !isEnglishHeadline("Netanyahu chama Reino Unido de primeira república islâmica"),
+    "");
+  ok("ordinary English headlines pass, including ones with names and numbers",
+    isEnglishHeadline(LONG) && isEnglishHeadline("Hawaii records 140 mph wind gust as hurricane nears") &&
+      isEnglishHeadline("Tyson Foods will close or sell three US beef facilities"),
+    "");
+  ok("an all-foreign cluster yields NO title — the desk skips the story",
+    pickHeadline(story(ES, [PT]), SERP_TITLE_CHARS) === null,
+    String(pickHeadline(story(ES, [PT]), SERP_TITLE_CHARS)));
+  ok("a foreign lead with one English headline in the cluster uses the English one",
+    pickHeadline(story(ES, ["Morocco blocks hundreds of migrants from reaching the Ceuta enclave"]), SERP_TITLE_CHARS) ===
+      "Morocco blocks hundreds of migrants from reaching the Ceuta enclave",
+    String(pickHeadline(story(ES, ["Morocco blocks hundreds of migrants from reaching the Ceuta enclave"]), SERP_TITLE_CHARS)));
 
   if (failures > 0) {
     process.exitCode = 1;
