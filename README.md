@@ -103,6 +103,28 @@ Search is fully swappable (`SearchClient` port): reference clients ship for
 [Firecrawl](https://firecrawl.dev) (cloud or self-hosted) and self-hosted
 [SearXNG](https://github.com/searxng/searxng), with no baked-in hosts.
 
+### LLM clients
+
+Three ship, all satisfying the same `LlmClient` port — free-text `complete`
+plus schema-constrained `completeStructured`:
+
+| Client | For |
+| --- | --- |
+| [`ollama-llm`](./clients/ollama-llm.ts) | A local model. No key, no per-token cost. |
+| [`openrouter-llm`](./clients/openrouter-llm.ts) | Any hosted model behind one key. |
+| [`gemini-llm`](./clients/gemini-llm.ts) | Google AI. Rotates across several API keys — AI Studio quota is **per project**, so a key from a second project is an independent pool, not a share of the same one — with a per-key pacing clock and a model fallback chain per key. Honors the `retryDelay` Google sends on a 429 instead of guessing backoff. |
+
+### Photos
+
+The engine decides whether a photo is *usable*; a `Sink` decides where it
+lives. Nothing here writes to storage.
+
+| Module | What it does |
+| --- | --- |
+| [`sources/lead-image`](./sources/lead-image.ts) | One hero per story: the outlet's own `og:image` from a page you already cited, else an image search. |
+| [`sources/image`](./sources/image.ts) | Is this a real editorial photo, and is it big enough? URL verdict (`keepImage`), content-type and byte gates (`downloadImage`), and the true pixel size read from the file header (`imageDims`) — because URL heuristics let a 200x200 graphic reach a splash. `DeadImageError` vs `Error` tells a caller to DROP a URL rather than retry it. |
+| [`sources/gallery`](./sources/gallery.ts) | Every usable photo across the pages a story cites, split by trust: a page's `og:image` is the outlet's photo *of this story*, its `<img>` tags include the off-topic recirculation rail. |
+
 ## Guarantees, enforced in CI
 
 - **Purity** — an AST guard fails the build on any `process.env` read or
