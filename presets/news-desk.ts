@@ -36,6 +36,7 @@ import type { DatagodClient } from "../clients/datagod";
 import { fetchTrendingStories, GN_US } from "../sources/google-news";
 import type { TrendingStory } from "../sources/google-news";
 import { createNewswire } from "../sources/newswire";
+import { provenanceOf } from "../sources/provenance";
 import type { OutletFeed, OutletItem } from "../sources/newswire";
 import { createDefaultInternals } from "./default";
 
@@ -734,9 +735,14 @@ export function createNewsDesk(opts: {
           if (prev === undefined || hit.score > prev.score) bestByOutlet.set(item.outlet, { item, score: hit.score });
         }
         const unblocked = [...bestByOutlet.values()].filter(({ item }) => {
-          const blocked = isBlockedHost(hostOf(item.url), blockedHosts);
+          const host = hostOf(item.url);
+          const blocked = isBlockedHost(host, blockedHosts);
           if (blocked) log?.(`news-desk: dropped ${item.outlet} (${item.url}) — blocked host`);
-          return !blocked;
+          // Feeds are curated, but a feed can still link out to a deny-tier
+          // host inside its cluster; the tier applies at every door.
+          const denied = provenanceOf(host) === "deny";
+          if (denied) log?.(`news-desk: dropped ${item.outlet} (${item.url}) — deny-tier provenance`);
+          return !blocked && !denied;
         });
         // Source hunt (operator, 2026-07-25: "make sure we write news for every
         // trending news"): the outlet index is ten shallow RSS windows, so real
@@ -750,15 +756,38 @@ export function createNewsDesk(opts: {
           try {
             const found = await search.search(story.headline, { limit: 8 });
             const held = new Set(unblocked.map(({ item }) => hostOf(item.url)));
-            for (const r of found) {
-              if (unblocked.length + hunted.length >= knobs.pagesMax) break;
-              if (!r.url.startsWith("http")) continue;
-              const host = hostOf(r.url);
-              if (held.has(host) || isBlockedHost(host, blockedHosts)) continue;
-              if (host.endsWith("google.com") || host.endsWith("youtube.com")) continue;
-              held.add(host);
-              hunted.push({ item: { outlet: host, region: "", title: r.title, url: r.url }, score: 0 });
-            }
+            // Provenance gate (2026-08-16). The hunt is the ONE door through
+            // which an unvetted host reaches the paper, and until now the only
+            // filter on it was the paywall list. Deny-tier hosts (impersonators
+            // like telegraph.com, scrapers, aggregators, social) never enter.
+            // Unknown-tier hosts may only CORROBORATE: admitted once the story
+            // already holds an allow-tier source, never as its backbone — an
+            // unknown site can second a real newsroom, not stand in for one.
+            // Two passes so an allow-tier hit later in the results still
+            // unlocks the unknowns before it.
+            // An anchor is a curated FEED hit (the operator vetted that outlet
+            // when adding its feed — region !== "" marks index items) or an
+            // allow-tier hunted host.
+            const hasAnchor = (): boolean =>
+              unblocked.length > 0 ||
+              hunted.some(({ item }) => provenanceOf(hostOf(item.url)) === "allow");
+            const admit = (tier: "allow" | "unknown"): void => {
+              for (const r of found) {
+                if (unblocked.length + hunted.length >= knobs.pagesMax) break;
+                if (!r.url.startsWith("http")) continue;
+                const host = hostOf(r.url);
+                if (held.has(host) || isBlockedHost(host, blockedHosts)) continue;
+                const tierOf = provenanceOf(host);
+                if (tierOf !== tier) continue;
+                if (tier === "unknown" && !hasAnchor()) continue;
+                held.add(host);
+                hunted.push({ item: { outlet: host, region: "", title: r.title, url: r.url }, score: 0 });
+              }
+            };
+            admit("allow");
+            admit("unknown");
+            const denied = found.filter((r) => provenanceOf(hostOf(r.url)) === "deny").map((r) => hostOf(r.url));
+            if (denied.length > 0) log?.(`news-desk: hunt refused deny-tier host(s): ${[...new Set(denied)].join(", ")}`);
             log?.(
               `news-desk: "${story.headline}" index gave ${unblocked.length}/${knobs.minSources} — search hunt added ${hunted.length} candidate page(s)`,
             );

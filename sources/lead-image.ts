@@ -9,6 +9,8 @@
  * URL/key are deployment secrets, so they arrive as an injected config.
  */
 
+import { provenanceOf } from "./provenance";
+
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 
@@ -153,6 +155,9 @@ export async function pickLeadImage(args: {
   const used = args.usedImages ?? new Set<string>();
   const bare = (u: string): string => u.split("?")[0];
   for (const url of args.sourceUrls.slice(0, 4)) {
+    // A deny-tier host's photo is a deny-tier host's brand on the front page:
+    // telegraph.com's red WordPress card ran as a lead (2026-08-16).
+    if (provenanceOf(hostOf(url)) === "deny") continue;
     const og = await fetchOgImage(url, fetchImpl);
     if (og !== null && !used.has(bare(og))) return { url: og, credit: hostOf(url), source: "source" };
   }
