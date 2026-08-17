@@ -712,3 +712,93 @@ export function convertPairedEmdashParentheticals(
   }
   return { text: lines.join("\n"), converted };
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// HEADING CASE + VERDICT LABELS — upstreamed from two papers that had each
+// written them and then drifted (2 lines apart, which is duplication, not
+// divergence).
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Words a title case leaves lowercase in the middle of a heading. */
+const SMALL_WORDS = new Set([
+  "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into",
+  "nor", "of", "on", "onto", "or", "over", "per", "so", "the", "to", "under",
+  "up", "upon", "via", "vs", "vs.", "with", "yet",
+]);
+
+/** Already-uppercase tokens that must survive untouched: acronyms, numbers,
+ *  money — NATO, U.S., G7, $5M. */
+const KEEP_AS_IS = /^[A-Z0-9][A-Z0-9.&$%-]*$/;
+
+/** Capitalize the first LETTER of each hyphen part. Leading quotes and parens
+ *  must not eat the capital: `"systemic` → `"Systemic`, and
+ *  `military-industrial` → `Military-Industrial`. */
+function capWord(w: string): string {
+  return w
+    .split("-")
+    .map((p) => p.replace(/[a-zA-Z]/, (c) => c.toUpperCase()))
+    .join("-");
+}
+
+/**
+ * AP-style title case for a heading.
+ *
+ * A model writes "The Rate That Will Break First" one day and "The rate that
+ * will break first" the next; an archive should read as one paper. Title case
+ * is the SAFE direction — it only ever capitalizes first letters or lowercases
+ * a fixed small-word list, so a proper noun can never be mangled.
+ * Sentence-casing would have to KNOW which words are proper nouns, and model
+ * bodies over-capitalize too much to tell.
+ *
+ * Idempotent: an already-title-cased heading maps to itself.
+ */
+export function titleCaseHeading(heading: string): string {
+  const words = heading.split(/\s+/);
+  // The first word, and any word after a colon or dash, is always capitalized.
+  let afterBreak = true;
+  return words
+    .map((w, i) => {
+      if (KEEP_AS_IS.test(w)) {
+        afterBreak = /[:—–]$/.test(w);
+        return w;
+      }
+      const bare = w.toLowerCase().replace(/[^a-z.]/g, "");
+      const isLast = i === words.length - 1;
+      const out = !afterBreak && !isLast && SMALL_WORDS.has(bare) ? w.toLowerCase() : capWord(w.toLowerCase());
+      afterBreak = /[:—–]$/.test(w);
+      return out;
+    })
+    .join(" ");
+}
+
+/** The canned verdict label, inline: `**The bottom line:** …`. */
+const VERDICT_LABEL =
+  /\*\*\s*(?:the\s+)?(?:bottom line|in sum|the upshot|in conclusion|the takeaway)\s*:?\s*\*\*\s*[—–-]?\s*/gi;
+
+/**
+ * The same tic as a CHAPTER HEADING.
+ *
+ * `[^\S\n]` is whitespace but NEVER a newline, and that is load-bearing: a bare
+ * `\s*` here crossed the blank line and captured the following verdict
+ * PARAGRAPH as the heading title, promoting body prose into a giant heading.
+ */
+const VERDICT_HEADING =
+  /^##+[^\S\n]*(?:the\s+)?(?:bottom line|in sum|the upshot|in conclusion|the takeaway)[^\S\n]*:?[^\S\n]*([^\n]*)$/gim;
+
+/**
+ * Drop the formulaic verdict label from a body. The verdict PARAGRAPH stays —
+ * only the canned label goes, because it reads repetitive across an archive.
+ *
+ * A bare label heading is removed outright (the paragraph below IS the
+ * verdict); a labelled heading carrying a real title keeps the title:
+ * `## The Bottom Line: Process Over Principle` → `## Process Over Principle`.
+ *
+ * Idempotent: a body with no label is returned unchanged, so a caller can use
+ * identity to decide whether to write.
+ */
+export function stripVerdictLabel(markdown: string): string {
+  return markdown
+    .replace(VERDICT_LABEL, "")
+    .replace(VERDICT_HEADING, (_m, rest: string) => (rest.trim() === "" ? "" : `## ${rest.trim()}`))
+    .replace(/\n{3,}/g, "\n\n");
+}

@@ -151,8 +151,10 @@ export interface GeneratedPost {
   tags?: readonly string[];
   /** The masthead section this story files under (World, Politics, Business…). */
   section?: string;
-  /** Story lead image (author-versions format): the outlet's og:image or an
-   *  Openverse CC search result. imageSource is "source" | "openverse". */
+  /** Story lead image (author-versions format): the outlet's own og:image from
+   *  a page the story cites, else an image search. `imageSource` is
+   *  `"source"` or `"search"` — the Openverse path was replaced in 2026-07 and
+   *  `"openverse"` is never produced. */
   imageUrl?: string;
   imageCredit?: string;
   imageSource?: string;

@@ -10,6 +10,8 @@
  * Prints one PASS/FAIL line per case; exits 1 on any failure.
  */
 import {
+  stripVerdictLabel,
+  titleCaseHeading,
   splitSentences,
   extractRelativeLinks,
   countHeadings,
@@ -769,6 +771,53 @@ eq(
   cosineSimilarity([3, 4], [-3, -4]),
   -1,
 );
+
+// ── titleCaseHeading ─────────────────────────────────────────────────────────
+// Title case is the SAFE direction: it only capitalizes first letters or
+// lowercases a fixed small-word list, so a proper noun can never be mangled.
+eq("titleCaseHeading: lowercase heading is title-cased",
+  titleCaseHeading("the rate that will break first"), "The Rate That Will Break First");
+eq("titleCaseHeading: idempotent on an already-cased heading",
+  titleCaseHeading("The Rate That Will Break First"), "The Rate That Will Break First");
+eq("titleCaseHeading: small words stay lowercase in the middle",
+  titleCaseHeading("a tale of two cities in the rain"), "A Tale of Two Cities in the Rain");
+eq("titleCaseHeading: the LAST word is capitalized even if small",
+  titleCaseHeading("what the crisis was about"), "What the Crisis Was About");
+eq("titleCaseHeading: the word after a colon is capitalized",
+  titleCaseHeading("the verdict: of markets and men"), "The Verdict: Of Markets and Men");
+// Acronyms and money must survive untouched — this is why KEEP_AS_IS exists.
+eq("titleCaseHeading: acronyms and figures survive",
+  titleCaseHeading("NATO and the U.S. spent $5M on G7"), "NATO and the U.S. Spent $5M on G7");
+// Both halves of a hyphenate, and a leading quote must not eat the capital.
+eq("titleCaseHeading: hyphenates capitalize both parts",
+  titleCaseHeading("the military-industrial problem"), "The Military-Industrial Problem");
+eq("titleCaseHeading: a leading quote does not swallow the capital",
+  titleCaseHeading('the "systemic" failure'), 'The "Systemic" Failure');
+eq("titleCaseHeading: empty string is safe", titleCaseHeading(""), "");
+
+// ── stripVerdictLabel ────────────────────────────────────────────────────────
+// The verdict PARAGRAPH stays; only the canned label goes.
+eq("stripVerdictLabel: the inline label is removed, the sentence kept",
+  stripVerdictLabel("**The bottom line:** The tax will not pay for itself."),
+  "The tax will not pay for itself.");
+eq("stripVerdictLabel: kin labels are caught too",
+  stripVerdictLabel("**The upshot:** It fails."), "It fails.");
+eq("stripVerdictLabel: a bare label HEADING is dropped outright",
+  stripVerdictLabel("## The Bottom Line:\n\nIt fails.").trim(), "It fails.");
+// A labelled heading carrying a real title keeps the title.
+eq("stripVerdictLabel: a labelled heading keeps its real title",
+  stripVerdictLabel("## The Bottom Line: Process Over Principle").trim(),
+  "## Process Over Principle");
+// THE REGRESSION: a bare \\s* crossed the blank line and captured the following
+// PARAGRAPH as the heading title, promoting body prose into a giant heading.
+eq("stripVerdictLabel: the heading match never crosses a blank line into the body",
+  stripVerdictLabel("## In Sum:\n\nThe council voted 6-3 to approve it.").trim(),
+  "The council voted 6-3 to approve it.");
+// Idempotent, so a caller can use identity to decide whether to write.
+eq("stripVerdictLabel: a body with no label is returned unchanged",
+  stripVerdictLabel("A normal paragraph.\n\nAnother one."), "A normal paragraph.\n\nAnother one.");
+ok("stripVerdictLabel: running twice changes nothing further",
+  stripVerdictLabel(stripVerdictLabel("**In sum:** done.")) === stripVerdictLabel("**In sum:** done."), "");
 
 // ── summary ──────────────────────────────────────────────────────────────────
 process.stdout.write(

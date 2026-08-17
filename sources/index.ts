@@ -8,6 +8,11 @@
  *   - `createFileSource` — read the signal / facts from local JSON files.
  *   - `composeSources`   — merge several Sources into one.
  *
+ * Also re-exported here so `from "ai-journalist/sources"` reaches them:
+ * `provenance` (is this host a real outlet?), `lead-image` (one hero per
+ * story), `image` (is this a usable photo, and how big is it?) and `gallery`
+ * (every photo on the pages a story cites). Each also has its own subpath.
+ *
  * (The OUTPUT — `publish(post)` — is always adopter-implemented; no Sink class
  * ships. See the README.)
  */
@@ -31,3 +36,38 @@ export {
   type CoverageEntry,
 } from "./google-news";
 export { createNewswire, type OutletFeed, type OutletItem } from "./newswire";
+export { provenanceOf, type Provenance } from "./provenance";
+export {
+  pickLeadImage,
+  extractOgImage,
+  fetchOgImage,
+  searchGoogleImages,
+  type LeadImage,
+  type ImageSearchConfig,
+} from "./lead-image";
+export {
+  keepImage,
+  isBrandedImageHost,
+  downloadImage,
+  downloadLeadImage,
+  imageDims,
+  imageFilename,
+  meetsLeadFloor,
+  normalizeImageUrl,
+  DeadImageError,
+  MIN_LEAD_PX,
+  type ImageDims,
+  type DownloadedImage,
+} from "./image";
+export {
+  harvestPages,
+  pickGallery,
+  collectSourcePages,
+  extractImages,
+  dedupeKey,
+  type GalleryPhoto,
+  type HarvestResult,
+  type HarvestArgs,
+  type PageImages,
+  type CollectPagesArgs,
+} from "./gallery";

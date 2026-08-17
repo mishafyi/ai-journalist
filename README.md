@@ -5,41 +5,62 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-43853d.svg)](https://nodejs.org)
 
-**An autonomous AI journalist behind hexagonal ports — feed it your data signal, get a researched, fact-guarded, edited article out.**
+**Point it at a data signal. Get back a researched, fact-checked, edited
+article — or a hard failure naming the rule it couldn't meet.**
 
-Point it at whatever your product knows (a live dataset, an API, an RSS feed)
-and it runs the full newsroom loop on top: **discover** a story worth telling,
-**research** it across the web, **write** it section by section against the
-evidence, then push it through an **editor + fact-integrity gate chain** before
-a single word is published. Domain-agnostic by construction: the engine imports
-nothing from any host app, and everything brand- or domain-specific arrives
-through typed ports.
+Most "AI writes your blog" tools are a prompt in a trench coat. Ask one for an
+article and it will happily invent a source, a statistic, and a person who said
+it. This is the other thing: the machinery a newsroom actually runs on.
+Discover a story, research it across the web, write it section by section
+against the evidence, then put the draft through an editor and a fact-integrity
+gate chain before a word ships.
 
-## Why it's different
+## The part worth caring about
 
-Most "AI blog writers" are a prompt in a trench coat. This is a **pipeline with
-editorial machinery**, hardened in production:
+**The article has to pass a contract, or the run fails.** Not a vibe check — a
+mechanical one: at least 300 words, at least two outlets named in the prose, a
+verified historical parallel named (or an explicit sentence saying there isn't
+one), two to five chapters. Miss it and the desk rewrites and re-checks; miss it
+after every attempt and the run throws. Most generators cannot fail. This one
+can, on purpose.
 
-- **Grounded by construction** — sections are written from researched,
-  source-tiered material (wire/gov primary sources ranked first, low-authority
-  hosts down-ranked and labeled; re-reported claims chased to their primary
-  source). An extractive digest layer keeps prompts sharp while the *raw*
-  corpus remains the guards' ground truth.
-- **Fact-integrity gates** — a fact-guard pass strips fabricated people,
-  scenes, quotes, relationships, and unsourced statistics; a fact-check audit
-  rates every claim against the research and can force a weak article to DRAFT
-  instead of publishing it.
-- **A real editorial desk** — a theme statement recast against what research
-  actually found (stale or dead stories get killed, not published), newspaper
-  line-edit and managing-editor passes with explicit length floors, headline
-  candidates judged against a corpus of editor-written exemplars, structure and
-  corroboration gates.
-- **Deterministic guardrails around every LLM step** — repetition budgets,
-  figure-grounding checks, attribution budgets, title-candidate membership,
-  length-ratio guards. Models drift; the gates don't.
-- **Total provenance** — every prompt, response, search, digest, and gate
-  verdict is recorded per run through a pluggable run-context, so any article
-  can be audited after the fact.
+**It refuses to persist a broken article.** If the body comes out render-broken,
+or isn't article-shaped once the gates are done with it, the pipeline throws
+instead of writing it anywhere.
+
+**Fabrication gets deleted, not reworded.** A dedicated pass hunts invented
+people — including the unnamed composite, the *"a 26-year-old researcher at…"*
+who never existed — and invented scenes narrated with convincing specifics. Not
+"please don't hallucinate" in a system prompt. A pass that cuts.
+
+**The numbers can come from the Federal Reserve, not from the model.** Point it
+at a [DataGod](https://github.com/mishafyi/datagod) instance — one keyed gateway
+over 22 primary sources — and per story it decides whether hard data would
+actually sharpen this piece, then goes and gets it. Ten plays ship: a FRED
+series (CPI, unemployment, fed funds, the 10-year), who received federal money
+on USAspending, SEC EDGAR filings, a live Nasdaq price, Treasury debt, World
+Bank and IMF indicators, USGS earthquakes, NASA EONET events. Those figures join
+the evidence as primary data the article is written *against*.
+
+Two details make it work rather than backfire. Series IDs are **whitelisted**,
+so the model picks from a menu and cannot invent `CPIAUCSL2`. And it is told to
+be selective — *"most stories need NONE"* — because a macro chart bolted onto a
+story that doesn't need one is noise, not authority.
+
+**The guardrails are deterministic.** Repetition budgets, figure-grounding
+checks, attribution budgets, length-ratio guards. Models drift. The gates don't.
+
+Afterwards, a fact-check audit rates every claim against the research —
+`FOUND`, `DERIVABLE`, or `NOT FOUND` — and files the table with the run. That
+one is advisory by design: it replaced a hard gate that kept killing good
+articles because it couldn't tell a derived total from a fabrication.
+
+**659 checks, and the prompts are byte-locked.** Change a prompt's wording and a
+test fails — prompt drift is a red build, not a Tuesday-morning mystery. An AST
+guard fails CI on any `process.env` read or hardcoded brand literal in the core,
+so "domain-agnostic" is enforced rather than asserted.
+
+Extracted from a newspaper that publishes on it daily.
 
 ## Install
 
@@ -47,15 +68,13 @@ editorial machinery**, hardened in production:
 npm i ai-journalist
 ```
 
-Node 20+ (CI tests 20 and 22), ESM, ships as TypeScript source — consume it via
-`tsx` or your own bundler. Dependencies are small and boring: `zod`, `p-limit`,
-`@openrouter/sdk`, `firecrawl`, `rss-parser`, `date-fns`, `remark`.
+Node 20+, ESM, ships as TypeScript source — consume it via `tsx` or your own
+bundler.
 
 ## Quickstart
 
-A minimal adopter brings four things — a **Source** (your data), an
-**LlmClient**, a **SearchClient**, and a **BrandProfile** — and the
-batteries-included preset assembles the rest:
+Bring four things — your data (`Source`), a model, a search backend, and who you
+are. The preset assembles the rest.
 
 ```ts
 import { runPipeline } from "ai-journalist";
@@ -65,7 +84,7 @@ import { createOpenRouterLlm } from "ai-journalist/clients/openrouter-llm";
 import { createFirecrawlSearch } from "ai-journalist/clients/firecrawl-search";
 
 const source = createHttpSource({ signalUrl: "https://my-api/signal" });
-const llm = createOpenRouterLlm({}); // OPENROUTER_API_KEY; dynamic model selection
+const llm = createOpenRouterLlm({});
 const search = createFirecrawlSearch({ apiUrl: process.env.FIRECRAWL_API_URL });
 const brand = {
   name: "My Outlet",
@@ -82,44 +101,37 @@ await runPipeline({
 });
 ```
 
-Two runnable demos ship in [`examples/`](./examples): `basic.ts` (fully
-offline — also the CI wiring proof) and `live-minimal.ts` (real LLM + search,
-writes `out/<slug>.md`, safely prints `SKIP` without keys).
+Run [`examples/basic.ts`](./examples/basic.ts) to see it work with zero API keys
+— it is also the CI wiring proof. [`examples/live-minimal.ts`](./examples/live-minimal.ts)
+is the same run against a real model and search, and prints `SKIP` rather than
+failing if you have no keys.
 
 ## The contract
 
-[`ports.ts`](./ports.ts) is the entire customization surface — four public
-ports, typed and documented in place:
+[`ports.ts`](./ports.ts) is the whole customization surface. Four ports:
 
-| Port           | What you decide                                                                  |
-| -------------- | -------------------------------------------------------------------------------- |
-| `Source`       | Where signal + grounding facts come from (`Http`/`Rss`/`File` ship; or your own) |
-| `Sink`         | Where finished posts land — one `publish(post)` function, no class to subclass   |
-| `EngineConfig` | Which LLM, which search backend, your brand identity/voice, ~70 documented knobs |
-| `Linker`       | Optional on-site entity links                                                    |
+| Port           | You decide                                                        |
+| -------------- | ----------------------------------------------------------------- |
+| `Source`       | Where the signal comes from (`Http`/`Rss`/`File` ship, or your own) |
+| `Sink`         | Where finished posts land — one `publish(post)` function           |
+| `EngineConfig` | Model, search backend, brand voice, ~70 documented knobs           |
+| `Linker`       | Optional on-site entity links                                      |
 
-"I want to change X" → [`CUSTOMIZING.md`](./CUSTOMIZING.md) maps every seam.
-Search is fully swappable (`SearchClient` port): reference clients ship for
-[Firecrawl](https://firecrawl.dev) (cloud or self-hosted) and self-hosted
-[SearXNG](https://github.com/searxng/searxng), with no baked-in hosts.
+Swap the model (OpenRouter, Ollama, Google AI), the search backend (Firecrawl,
+SearXNG, your own), or how photos are chosen — nothing is baked in.
 
-## Guarantees, enforced in CI
+**→ [`CUSTOMIZING.md`](./CUSTOMIZING.md) maps every seam, one runnable snippet
+each.**
 
-- **Purity** — an AST guard fails the build on any `process.env` read or
-  hardcoded brand/host literal inside the core: everything host-specific must
-  arrive through the ports.
-- **Prompt stability** — 300+ byte-lock checks pin the exact text of every LLM
-  prompt, so prompt drift is a failing test, never a production surprise.
-- **Wiring** — the offline end-to-end example runs under vitest on every push.
+## Docs
 
-## Releases
-
-Semver, with a [`CHANGELOG.md`](./CHANGELOG.md) section per version. Every
-release is published to npm **and** GitHub Releases from the same tag by CI
-(npm trusted publishing, tokenless).
+| | |
+| --- | --- |
+| [`CUSTOMIZING.md`](./CUSTOMIZING.md) | "I want to change X" → the exact seam |
+| [`AGENTS.md`](./AGENTS.md) | Component map and the invariants you must not loosen |
+| [`CHANGELOG.md`](./CHANGELOG.md) | Semver, a section per version |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Contributions that keep it universal are welcome |
 
 ## License
 
-[MIT](./LICENSE). Extracted from a production news pipeline and maintained as a
-standalone, host-agnostic engine — contributions that keep it universal are
-welcome (see [`CONTRIBUTING.md`](./CONTRIBUTING.md)).
+[MIT](./LICENSE).

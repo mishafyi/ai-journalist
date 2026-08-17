@@ -10,40 +10,23 @@
  */
 
 import { provenanceOf } from "./provenance";
+import { isBrandedImageHost, keepImage } from "./image";
 
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 
-/** Reject URLs that are clearly not a story photo (logos, icons, sprites,
- *  generic social-card defaults). */
-const JUNK_IMAGE_RE =
-  /logo|\/default|placeholder|sprite|\/icon|social-|-social|\/favicon|\/apple-touch|\/brand|watermark|\.image\.png/i;
-
-/** Station/outlet branding cards that pose as photos: a generic "breaking
- *  news" or "<Outlet> Daily" graphic, not the story's image. These slip past
- *  the URL check (the URL looks like a normal asset), so they're caught by the
- *  hosts that serve them and by the townnews/bloximages CMS pattern that ships
- *  station logo cards as the og:image (live 2026-07-27: a Central Oregon Daily
- *  logo card landed on a Bitcoin story). */
-const BRANDED_CARD_RE = /bloximages|townnews|\/tncms\/|brightspot.*\/logo|station.?logo/i;
-
-function isBrandedCard(url: string): boolean {
-  return BRANDED_CARD_RE.test(url);
-}
-
-/** Image hosts whose promo images carry the outlet's own branding baked into
- *  the pixels — a Guardian og:image ships with the Guardian live-blog overlay
- *  (operator rule 2026-07-24: "don't take guardian images"). Skipping the
- *  host falls through to the next outlet's photo or the image search. */
-const BRANDED_IMAGE_HOSTS = ["guim.co.uk", "guardianapis.com"];
-
-export function isBrandedImageHost(url: string): boolean {
-  try {
-    const host = new URL(url).hostname;
-    return BRANDED_IMAGE_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
-  } catch {
-    return false;
-  }
+/**
+ * One verdict for "is this a usable story photo", shared with every other
+ * caller in the engine.
+ *
+ * This module used to carry its own JUNK_IMAGE_RE and BRANDED_CARD_RE, a
+ * weaker filter than the papers downstream had independently grown: no stock
+ * agencies, no URL-encoded size check, no vector/animated extension test. Both
+ * are now `keepImage` in ./image, and the four tokens this module had that the
+ * other did not (social-, -social, /brand, .image.png) were carried across.
+ */
+function usablePhoto(url: string): boolean {
+  return keepImage(url) && !isBrandedImageHost(url);
 }
 
 /** Pull og:image (twitter:image as fallback) out of a page's HTML. Returns a
@@ -58,9 +41,7 @@ export function extractOgImage(html: string): string | null {
       if (
         content !== undefined &&
         content.startsWith("http") &&
-        !JUNK_IMAGE_RE.test(content) &&
-        !isBrandedImageHost(content) &&
-        !isBrandedCard(content)
+        usablePhoto(content)
       )
         return content;
     }
@@ -119,9 +100,7 @@ export async function searchGoogleImages(
       (r) =>
         typeof r.imgSrc === "string" &&
         r.imgSrc.startsWith("http") &&
-        !JUNK_IMAGE_RE.test(r.imgSrc) &&
-        !isBrandedImageHost(r.imgSrc) &&
-        !isBrandedCard(r.imgSrc) &&
+        usablePhoto(r.imgSrc) &&
         !used.has(r.imgSrc.split("?")[0]),
     );
     if (hit === undefined || hit.imgSrc === undefined) return null;

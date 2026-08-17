@@ -100,6 +100,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `datagod-drift.checks.ts` + weekly CI validate the menu against datagod's
   published endpoint index. Opt-in (`datagod` option); defaults unchanged.
 
+- Image validation (`sources/image.ts`): `keepImage` (URL verdict, no network),
+  `downloadImage` (content-type allowlist + 8MB cap), `downloadLeadImage` (the
+  same, refusing anything under the 800px `MIN_LEAD_PX` floor), and `imageDims`
+  reading true pixel size from PNG/JPEG/WebP/GIF headers — URL heuristics alone
+  let a 200x200 graphic reach a splash. `DeadImageError` vs plain `Error` tells
+  a caller to DROP a URL rather than retry it (a 404 is dead; an over-cap file
+  is transient). Injected `fetch`, no `Buffer` (DataView). Storage stays out —
+  the engine decides whether a photo is usable, a `Sink` decides where it lives.
+  New module; 54 checks.
+- **Behavior change** — `sources/lead-image.ts` now filters through
+  `keepImage` instead of its own weaker `JUNK_IMAGE_RE`/`BRANDED_CARD_RE`. It
+  consequently REJECTS images it previously accepted: stock-agency hosts,
+  vector/animated extensions, and URLs whose encoded dimensions are under
+  400px. The four tokens the old filter had that `keepImage` did not
+  (`social-`, `-social`, `/brand`, `.image.png`) were added to `keepImage`
+  first, so nothing it used to reject is now accepted. Its 17 checks are
+  unchanged and pass.
+- Gallery harvesting (`sources/gallery.ts`): every usable photo across the
+  pages a story cites, split by trust — a page's `og:image` is the outlet's own
+  photo OF THIS STORY, while its `<img>` tags include off-topic recirculation
+  rails, so `harvestPages` returns `meta`/`body` separately and `pickGallery`
+  prefers meta. `dedupeKey` collapses one photograph served at several widths
+  or behind a resizer's `?url=`. `collectSourcePages` unions structured sources
+  with the body's inline links, one page per host, dropping deny-tier hosts.
+  The paper's own domains arrive as `ownHosts` (no brand literal). Never
+  throws — a page that 404s, times out or answers JSON is skipped. Opt-in; new
+  module, 27 checks.
+- Google AI client (`clients/gemini-llm.ts` `createGeminiLlm`): a third
+  `LlmClient` alongside Ollama and OpenRouter. Rotates across several API keys
+  — AI Studio quota is per PROJECT, so a key from a second project is an
+  independent pool rather than a share of the same one — each key a lane with
+  its own pacing clock and its own model fallback chain. Honors the
+  server-specified `retryDelay` on a 429 instead of guessing backoff, which is
+  why it is hand-rolled rather than wrapped in a generic retry helper.
+  Classification reads `ApiError.status`, not message strings. `pickLane` and
+  `demoteLane` are exported and pure so the rotation is testable without a
+  network, a key, or an SDK stand-up. Opt-in; 22 checks.
+- Prose transforms (`text.ts`): `titleCaseHeading` normalizes chapter headings
+  to AP-style title case — the safe direction, since it only capitalizes first
+  letters or lowercases a fixed small-word list, so a proper noun can never be
+  mangled; acronyms/money pass through, hyphenates capitalize both parts.
+  `stripVerdictLabel` drops the canned "**The bottom line:**" tic and its kin
+  while keeping the verdict paragraph. Both idempotent, so a caller can use
+  identity to decide whether to write. Opt-in; 22 checks.
+- New dependency: `@google/genai` (official Google AI SDK, `clients/gemini-llm.ts`).
+
 ## 0.8.2
 
 - Discovery query-gen prompt: operator guidance inverted — plain natural-language
