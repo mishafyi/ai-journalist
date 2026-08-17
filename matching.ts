@@ -24,20 +24,44 @@ function trigramScores(probes: readonly string[], candidates: readonly string[])
   });
 }
 
+/**
+ * Vector cache, keyed by the exact text.
+ *
+ * The desk matches every trending story against the SAME outlet index — one
+ * run re-embedded those thousands of headlines once per story. With the feed
+ * list grown past sixty papers that is the dominant cost of a run, and every
+ * repeat is provably redundant: the index does not change mid-run and an
+ * embedding is a pure function of its text. The matcher is created per run,
+ * so the cache dies with it and can never serve a stale vector.
+ */
+function createVectorCache(embedder: Embedder) {
+  const cache = new Map<string, number[]>();
+  return async function embedCached(texts: readonly string[]): Promise<number[][]> {
+    const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
+    if (missing.length > 0) {
+      const fresh = await embedder.embed(missing);
+      missing.forEach((t, i) => cache.set(t, fresh[i]));
+    }
+    // Non-null: every text is either cached or was just embedded.
+    return texts.map((t) => cache.get(t) as number[]);
+  };
+}
+
 async function embedScores(
-  embedder: Embedder,
+  embed: (texts: readonly string[]) => Promise<number[][]>,
   probes: readonly string[],
   candidates: readonly string[],
 ): Promise<number[]> {
-  const vecs = await embedder.embed([...probes, ...candidates]);
+  const vecs = await embed([...probes, ...candidates]);
   const probeVecs = vecs.slice(0, probes.length);
   const candVecs = vecs.slice(probes.length);
   return candVecs.map((cv) => Math.max(...probeVecs.map((pv) => cosineSimilarity(pv, cv))));
 }
 
 export function createHeadlineMatcher(opts: { embedder?: Embedder }): HeadlineMatcher {
+  const embed = opts.embedder ? createVectorCache(opts.embedder) : null;
   const scoresFor = (probes: readonly string[], candidates: readonly string[]): Promise<number[]> =>
-    opts.embedder ? embedScores(opts.embedder, probes, candidates) : Promise.resolve(trigramScores(probes, candidates));
+    embed ? embedScores(embed, probes, candidates) : Promise.resolve(trigramScores(probes, candidates));
 
   return {
     async match(probe, candidates, threshold): Promise<MatchHit | null> {

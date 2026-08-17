@@ -695,7 +695,10 @@ export function createNewsDesk(opts: {
       const fetchTrending =
         opts.trendingImpl ?? ((): Promise<TrendingStory[]> => fetchTrendingStories({ edition: GN_US, limit: knobs.trendingLimit }));
       const buildIndex =
-        opts.indexImpl ?? ((): Promise<OutletItem[]> => createNewswire({ feeds, concurrency: 4, timeoutMs: 15_000, log }).buildIndex());
+        opts.indexImpl ??
+        // concurrency 8: the feed list went from 10 papers to 65 (2026-08-16),
+        // and at 4 a cold index build serialised into ~17 rounds of waiting.
+        ((): Promise<OutletItem[]> => createNewswire({ feeds, concurrency: 8, timeoutMs: 15_000, log }).buildIndex());
 
       const stories = await fetchTrending();
       recordArtifact?.(

@@ -42,6 +42,77 @@ const FEEDS: OutletFeed[] = [
   { url: "https://www3.nhk.or.jp/rss/news/cat0.xml", outlet: "NHK", region: "Asia" },
   { url: "https://aawsat.com/feed", outlet: "Asharq Al-Awsat", region: "MENA" },
   { url: "https://www.hurriyet.com.tr/rss/anasayfa", outlet: "Hürriyet", region: "MENA" },
+
+  // ── Global expansion 2026-08-16 ──────────────────────────────────────────
+  // Every feed below was fetched and verified live: HTTP 200, >=5 items, an
+  // item timestamped within days. Chosen for the regions the paper barely
+  // covered (Africa, South/Southeast Asia, Latin America beyond Brazil and
+  // Argentina, Eastern Europe) and for FREE article pages — a paywalled feed
+  // resolves a source the scraper then loses at the content floor.
+  //
+  // Deliberately EXCLUDED despite being live: feeds carrying no item dates
+  // (Kathmandu Post, Ada Derana, Nikkei Asia, NDTV emits empty <pubDate/>) —
+  // undated items are a freshness-gating trap. Known-dead or bot-walled hosts
+  // are recorded in examples/probe-feeds.ts rather than retried here.
+
+  // Africa — the paper's largest blind spot
+  { url: "https://www.dailymaverick.co.za/dmrss/", outlet: "Daily Maverick", region: "Africa" },
+  { url: "https://www.sabcnews.com/sabcnews/feed/", outlet: "SABC News", region: "Africa" },
+  { url: "https://www.premiumtimesng.com/feed", outlet: "Premium Times", region: "Africa" },
+  { url: "https://punchng.com/feed/", outlet: "The Punch", region: "Africa" },
+  { url: "https://www.myjoyonline.com/feed/", outlet: "MyJoyOnline", region: "Africa" },
+  { url: "https://www.graphic.com.gh/news.feed", outlet: "Graphic Online", region: "Africa" },
+  { url: "https://www.standardmedia.co.ke/rss/headlines.php", outlet: "The Standard", region: "Africa" },
+  { url: "https://www.namibian.com.na/feed/", outlet: "The Namibian", region: "Africa" },
+  { url: "https://www.africanews.com/feed/rss", outlet: "Africanews", region: "Africa" },
+  { url: "https://www.egyptindependent.com/feed/", outlet: "Egypt Independent", region: "MENA" },
+
+  // South & Southeast Asia
+  { url: "https://www.dawn.com/feeds/home", outlet: "Dawn", region: "Asia" },
+  { url: "https://www.thedailystar.net/frontpage/rss.xml", outlet: "The Daily Star", region: "Asia" },
+  { url: "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", outlet: "CNA", region: "Asia" },
+  { url: "https://www.rappler.com/feed/", outlet: "Rappler", region: "Asia" },
+  { url: "https://www.inquirer.net/fullfeed", outlet: "Philippine Daily Inquirer", region: "Asia" },
+  { url: "https://e.vnexpress.net/rss/news.rss", outlet: "VnExpress", region: "Asia" },
+  { url: "https://en.antaranews.com/rss/news.xml", outlet: "Antara News", region: "Asia" },
+  { url: "https://www.freemalaysiatoday.com/feed/", outlet: "Free Malaysia Today", region: "Asia" },
+  { url: "https://www.koreaherald.com/rss/newsAll", outlet: "The Korea Herald", region: "Asia" },
+
+  // Latin America & the Caribbean
+  { url: "https://www.infobae.com/arc/outboundfeeds/rss/?outputType=xml", outlet: "Infobae", region: "LatAm" },
+  { url: "https://www.jornada.com.mx/rss/edicion.xml", outlet: "La Jornada", region: "LatAm" },
+  { url: "https://www.excelsior.com.mx/rss/nacional", outlet: "Excélsior", region: "LatAm" },
+  { url: "https://www.abc.com.py/arc/outboundfeeds/rss/?outputType=xml", outlet: "ABC Color", region: "LatAm" },
+  { url: "https://en.mercopress.com/rss/", outlet: "MercoPress", region: "LatAm" },
+  { url: "https://jamaica-gleaner.com/feed/rss.xml", outlet: "Jamaica Gleaner", region: "LatAm" },
+
+  // Eastern Europe, Russia & the Balkans
+  { url: "https://kyivindependent.com/news-archive/rss/", outlet: "Kyiv Independent", region: "EU" },
+  { url: "https://www.ukrinform.net/rss/block-lastnews", outlet: "Ukrinform", region: "EU" },
+  { url: "https://balkaninsight.com/feed/", outlet: "Balkan Insight", region: "EU" },
+  { url: "https://www.themoscowtimes.com/rss/news", outlet: "The Moscow Times", region: "EU" },
+  { url: "https://news.err.ee/rss", outlet: "ERR News", region: "EU" },
+
+  // Western Europe & Ireland
+  { url: "https://www.rte.ie/feeds/rss/?index=/news/", outlet: "RTÉ", region: "EU" },
+  { url: "https://feeds.nos.nl/nosnieuwsalgemeen", outlet: "NOS", region: "EU" },
+  { url: "https://www.francetvinfo.fr/titres.rss", outlet: "franceinfo", region: "EU" },
+  { url: "https://www.rfi.fr/en/rss", outlet: "RFI English", region: "EU" },
+  { url: "https://www.svt.se/nyheter/rss.xml", outlet: "SVT Nyheter", region: "EU" },
+  { url: "https://www.nrk.no/toppsaker.rss", outlet: "NRK", region: "EU" },
+
+  // Middle East
+  { url: "https://www.khaleejtimes.com/api/v1/collections/top-section.rss", outlet: "Khaleej Times", region: "MENA" },
+  { url: "https://www.timesofisrael.com/feed/", outlet: "The Times of Israel", region: "MENA" },
+  { url: "https://www.middleeasteye.net/rss", outlet: "Middle East Eye", region: "MENA" },
+  { url: "https://www.aa.com.tr/en/rss/default?cat=guncel", outlet: "Anadolu Agency", region: "MENA" },
+
+  // North America & Oceania
+  { url: "https://www.cbc.ca/webfeed/rss/rss-topstories", outlet: "CBC News", region: "US" },
+  { url: "https://globalnews.ca/feed/", outlet: "Global News", region: "US" },
+  { url: "https://www.abc.net.au/news/feed/2942460/rss.xml", outlet: "ABC Australia", region: "Asia" },
+  { url: "https://www.sbs.com.au/news/topic/latest/feed", outlet: "SBS News", region: "Asia" },
+  { url: "https://www.rnz.co.nz/rss/national.xml", outlet: "RNZ", region: "Asia" },
 ];
 
 /** Per-paper trending: GN search-RSS site: feeds, each ranked by the paper's

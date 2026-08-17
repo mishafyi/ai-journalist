@@ -51,6 +51,29 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  // ── Vector cache: the index is embedded ONCE per matcher, not per story.
+  {
+    let textsEmbedded = 0;
+    const counting = {
+      async embed(texts: string[]): Promise<number[][]> {
+        textsEmbedded += texts.length;
+        return texts.map((t) => [t.length % 7, (t.length * 3) % 5, t.charCodeAt(0) % 11]);
+      },
+    };
+    const m = createHeadlineMatcher({ embedder: counting });
+    const idx = Array.from({ length: 50 }, (_, i) => `Index headline number ${i}`);
+    await m.matchAny(["probe one"], idx, 0.99);
+    const afterFirst = textsEmbedded;
+    await m.matchAny(["probe two"], idx, 0.99);
+    await m.matchAny(["probe three"], idx, 0.99);
+    ok("the index is embedded once, not once per story",
+      afterFirst === 51 && textsEmbedded === 53,
+      `first=${afterFirst} total=${textsEmbedded}`);
+    await m.matchAny(["probe two"], idx, 0.99);
+    ok("a repeated probe costs nothing", textsEmbedded === 53, String(textsEmbedded));
+  }
+
   process.stdout.write("matching checks: all green\n");
 }
 
