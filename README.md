@@ -33,6 +33,20 @@ people — including the unnamed composite, the *"a 26-year-old researcher at…
 who never existed — and invented scenes narrated with convincing specifics. Not
 "please don't hallucinate" in a system prompt. A pass that cuts.
 
+**The numbers can come from the Federal Reserve, not from the model.** Point it
+at a [DataGod](https://github.com/mishafyi/datagod) instance — one keyed gateway
+over 22 primary sources — and per story it decides whether hard data would
+actually sharpen this piece, then goes and gets it. Ten plays ship: a FRED
+series (CPI, unemployment, fed funds, the 10-year), who received federal money
+on USAspending, SEC EDGAR filings, a live Nasdaq price, Treasury debt, World
+Bank and IMF indicators, USGS earthquakes, NASA EONET events. Those figures join
+the evidence as primary data the article is written *against*.
+
+Two details make it work rather than backfire. Series IDs are **whitelisted**,
+so the model picks from a menu and cannot invent `CPIAUCSL2`. And it is told to
+be selective — *"most stories need NONE"* — because a macro chart bolted onto a
+story that doesn't need one is noise, not authority.
+
 **The guardrails are deterministic.** Repetition budgets, figure-grounding
 checks, attribution budgets, length-ratio guards. Models drift. The gates don't.
 
