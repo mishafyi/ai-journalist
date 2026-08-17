@@ -432,6 +432,9 @@ async function orchestrationChecks(): Promise<void> {
     searched4.some((q) => q === "site:hunt-a.example Central bank hikes to 20-year high") &&
       !searched4.includes(STORY2),
     JSON.stringify(searched4));
+  ok("hunt: the site-search fan-out is budgeted, not one call per outlet",
+    searched4.filter((q) => q.startsWith("site:")).length <= 4,
+    `${searched4.filter((q) => q.startsWith("site:")).length} site searches`);
   ok("hunt: a deny-tier outlet in the cluster is never searched or cited",
     !searched4.some((q) => q.includes("telegraph.com")) &&
       !((published4 as GeneratedPost | null)?.sources ?? []).some((c) => c.url.includes("telegraph.com")),

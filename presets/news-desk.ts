@@ -803,14 +803,40 @@ export function createNewsDesk(opts: {
             // is a URL-LOCATOR inside one named host here, never a discoverer
             // of hosts: the query is site-restricted and any result off that
             // host is discarded.
+            //
+            // BUDGETED, because the first version was not: it searched every
+            // outlet in the cluster, so a twelve-outlet story cost twelve
+            // search calls — and when the backend degraded and each returned
+            // nothing, the loop hammered it hardest at exactly the wrong
+            // moment and resolved zero (live, 2026-08-17). Now it stops as
+            // soon as it has enough, and gives up early when the backend is
+            // plainly not answering.
+            const SEARCH_BUDGET = 4;
+            const EMPTY_STREAK_LIMIT = 2;
+            let spent = 0;
+            let emptyStreak = 0;
             for (const c of fresh) {
+              if (unblocked.length + hunted.length >= knobs.minSources) break;
               if (unblocked.length + hunted.length >= knobs.pagesMax) break;
+              if (spent >= SEARCH_BUDGET) {
+                log?.(`news-desk: hunt hit its ${SEARCH_BUDGET}-search budget for "${story.headline}"`);
+                break;
+              }
+              if (emptyStreak >= EMPTY_STREAK_LIMIT) {
+                log?.(`news-desk: hunt stopping — ${emptyStreak} site searches in a row returned nothing (backend degraded?)`);
+                break;
+              }
               if (held.has(c.host)) continue;
+              spent += 1;
               const found = await search.search(`site:${c.host} ${c.headline}`, { limit: 3 });
               const onHost = found.find(
                 (r) => r.url.startsWith("http") && hostOf(r.url).endsWith(c.host),
               );
-              if (onHost === undefined) continue;
+              if (onHost === undefined) {
+                emptyStreak += 1;
+                continue;
+              }
+              emptyStreak = 0;
               held.add(c.host);
               hunted.push({
                 item: { outlet: c.outlet, region: "", title: c.headline, url: onHost.url },
