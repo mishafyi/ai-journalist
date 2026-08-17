@@ -78,7 +78,13 @@
     "CLAUDE.md",
     "CUSTOMIZING.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "!examples/desk-config.ts",
+    "!examples/run-news-desk.ts",
+    "!examples/run-politics.ts",
+    "!examples/poll-trending.ts",
+    "!examples/probe-feeds.ts",
+    "!examples/rewrite-article.ts"
   ],
   "scripts": {
     "build": "tsc --noEmit",
@@ -90,6 +96,7 @@
   "dependencies": {
     "@google/genai": "^2.17.1",
     "@openrouter/sdk": "^0.13.21",
+    "ai-journalist": "^0.8.2",
     "cheerio": "^1.2.0",
     "date-fns": "^4.1.0",
     "firecrawl": "^4.25.2",
