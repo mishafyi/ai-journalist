@@ -96,7 +96,6 @@
   "dependencies": {
     "@google/genai": "^2.17.1",
     "@openrouter/sdk": "^0.13.21",
-    "ai-journalist": "^0.8.2",
     "cheerio": "^1.2.0",
     "date-fns": "^4.1.0",
     "firecrawl": "^4.25.2",
