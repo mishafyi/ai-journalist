@@ -35,6 +35,9 @@
 export const DENY_HOSTS: readonly string[] = [
   // Impersonators / lookalikes of real papers (the real ones are in ALLOW).
   "telegraph.com", // WordPress "Telegraph Online"; The Telegraph is telegraph.co.uk
+  "telegraph247.com", "thedailyguardian.com", "israel-chronicle.com", "swedenherald.com",
+  "aidailypost.com", "trueobserver.com", "dispatchtimes.com", "techflowpost.com",
+  "stvincenttimes.com", "btimesonline.com", "conservativenewsdaily.net", "dailypolitical.com",
   // Scrapers and re-publishers of other outlets' copy.
   "dnyuz.com", "aivanet.com", "europesays.com", "biztoc.com", "inkl.com", "newsdive.net",
   "savedelete.com", "capwolf.com", "winzheng.com", "memesita.com", "prismnews.com", "dbriefme.com",
