@@ -33,6 +33,8 @@ import {
   type GateDeps,
 } from "./gates";
 import { trigramSimilarity } from "./primitives";
+import { createRunContext } from "./run-context";
+import type { GateCore } from "./gates";
 
 // Stub global fetch so runTitle's gatherSearchTerms (live Google autocomplete)
 // is deterministic + network-free — returns the empty [query, []] shape, so the
@@ -721,3 +723,34 @@ main()
     process.stdout.write(`\nCHECK THREW: ${String(err)}\n`);
     process.exit(1);
   });
+
+// ── interface segregation: one gate must be adoptable on its own ────────────
+// runFactGuard reads llm/model/withRetry and nothing else, but GateDeps used to
+// force SEVEN title-gate fields on any caller — the engine's own news-desk
+// preset stubbed `gatherExemplars: () => []`, `embedDedupSurvivors: async () =>
+// null` and five more just to call the audit. GateCore removes that coupling,
+// and this pins it: if these calls stop compiling, the fat interface is back.
+{
+  const core: GateCore = {
+    llm: { complete: async () => "x", completeStructured: async () => ({}) as never },
+    model: "m",
+    withRetry: async (_label, fn) => fn(),
+  };
+  ok("GateCore is satisfiable with llm/model/withRetry alone", typeof core.llm.complete === "function");
+  ok("GateCore needs no title machinery",
+    !("gatherExemplars" in core) && !("embedDedupSurvivors" in core) && !("titleExemplarCount" in core));
+  ok("ctx is optional in GateCore (only the title gate writes flags there)", core.ctx === undefined);
+  // GateDeps stays the full shape, so every existing caller keeps working.
+  const full: GateDeps = {
+    ...core,
+    ctx: createRunContext("check"),
+    gatherExemplars: () => [],
+    fetchPriorTitles: async () => [],
+    embedDedupSurvivors: async () => null,
+    titleExemplarCount: 0,
+    titleCollisionSim: 0,
+    titleEmbedSim: 0,
+    searchTermsCount: 0,
+  };
+  ok("GateDeps still satisfies GateCore (back-compatible)", (full satisfies GateCore) !== undefined);
+}

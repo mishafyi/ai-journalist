@@ -31,7 +31,6 @@ import {
   isTeaserContent,
   DEFAULT_BLOCKED_HOSTS,
 } from "../research";
-import { createRunContext } from "../run-context";
 import { z } from "zod";
 import type { DatagodClient } from "../clients/datagod";
 import { fetchCoverage, fetchTrendingStories, GN_US } from "../sources/google-news";
@@ -1189,18 +1188,13 @@ export function createNewsDesk(opts: {
           const content = `${body}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           try {
+            // GateCore, not GateDeps: the audit reads llm/model/withRetry and
+            // nothing else. This used to stub seven title-gate fields it never
+            // touched, which is exactly the coupling GateCore removes.
             const audit = await runFactCheckAudit(content, evidence, {
               llm,
               model: "",
               withRetry: async (_label, fn) => fn(),
-              ctx: createRunContext("news-desk-audit"),
-              gatherExemplars: () => [],
-              fetchPriorTitles: async () => [],
-              embedDedupSurvivors: async () => null,
-              titleExemplarCount: 0,
-              titleCollisionSim: 0,
-              titleEmbedSim: 0,
-              searchTermsCount: 0,
             });
             recordArtifact?.(`fact-check-audit: ${columnist.name}`, audit);
           } catch (err: unknown) {
