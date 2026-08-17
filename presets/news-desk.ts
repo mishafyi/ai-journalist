@@ -5,6 +5,7 @@
  * verified parallel → ONE columnist's fused column → publish.
  */
 import { mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
+import { checkClaims } from "../claim-check";
 import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
 import type { ImageSearchConfig } from "../sources/lead-image";
@@ -33,7 +34,8 @@ import {
 import { createRunContext } from "../run-context";
 import { z } from "zod";
 import type { DatagodClient } from "../clients/datagod";
-import { fetchTrendingStories, GN_US } from "../sources/google-news";
+import { fetchCoverage, fetchTrendingStories, GN_US } from "../sources/google-news";
+import type { Coverage } from "../sources/google-news";
 import type { TrendingStory } from "../sources/google-news";
 import { createNewswire } from "../sources/newswire";
 import { provenanceOf } from "../sources/provenance";
@@ -611,6 +613,10 @@ export function pickHeadline(story: TrendingStory, maxChars: number): string | n
   )[0];
 }
 
+/** The shipped coverage channel: Google News, US edition, last week. */
+const defaultCoverage = (headline: string): Promise<Coverage[]> =>
+  fetchCoverage({ headline, edition: GN_US, limit: 12 });
+
 export function createNewsDesk(opts: {
   llm: LlmClient;
   search: SearchClient;
@@ -628,6 +634,10 @@ export function createNewsDesk(opts: {
    *  source og:image only; a story with no usable source photo runs imageless. */
   imageSearch?: ImageSearchConfig;
   knobs: NewsDeskKnobs;
+  /** Who is covering a story, for the source hunt. Defaults to Google News
+   *  (sources/google-news.ts fetchCoverage). Injected in checks, and the seam
+   *  for swapping in another vetted-publisher index later. */
+  coverageImpl?: (headline: string) => Promise<Coverage[]>;
   coveredTopics?: () => Promise<CoveredTopic[]>;
   /** Called when a trending story matches one the paper has already run.
    *
@@ -754,42 +764,58 @@ export function createNewsDesk(opts: {
         const hunted: { item: OutletItem; score: number }[] = [];
         if (unblocked.length < knobs.minSources) {
           try {
-            const found = await search.search(story.headline, { limit: 8 });
+            // ── Discovery: Google News, not an open web search ──────────────
+            // GN only indexes publishers admitted to its news index, so its
+            // coverage cluster is a vetted outlet list by construction. The old
+            // hunt asked a web search engine and admitted whatever hosts came
+            // back — that is how a WordPress site calling itself "Telegraph
+            // Online" got cited (operator, 2026-08-16). GN item links are JS
+            // stubs, so what we take is the HOST and that outlet's own
+            // HEADLINE; the URL is resolved below.
+            const coverage = await (opts.coverageImpl ?? defaultCoverage)(story.headline);
+            const fresh = coverage.filter(
+              (c) => provenanceOf(c.host) !== "deny" && !isBlockedHost(c.host, blockedHosts),
+            );
+
+            // Pass 1 — free: the outlets' own headlines are extra probes into
+            // the index we already hold. Most clusters resolve here with no
+            // search call at all.
             const held = new Set(unblocked.map(({ item }) => hostOf(item.url)));
-            // Provenance gate (2026-08-16). The hunt is the ONE door through
-            // which an unvetted host reaches the paper, and until now the only
-            // filter on it was the paywall list. Deny-tier hosts (impersonators
-            // like telegraph.com, scrapers, aggregators, social) never enter.
-            // Unknown-tier hosts may only CORROBORATE: admitted once the story
-            // already holds an allow-tier source, never as its backbone — an
-            // unknown site can second a real newsroom, not stand in for one.
-            // Two passes so an allow-tier hit later in the results still
-            // unlocks the unknowns before it.
-            // An anchor is a curated FEED hit (the operator vetted that outlet
-            // when adding its feed — region !== "" marks index items) or an
-            // allow-tier hunted host.
-            const hasAnchor = (): boolean =>
-              unblocked.length > 0 ||
-              hunted.some(({ item }) => provenanceOf(hostOf(item.url)) === "allow");
-            const admit = (tier: "allow" | "unknown"): void => {
-              for (const r of found) {
-                if (unblocked.length + hunted.length >= knobs.pagesMax) break;
-                if (!r.url.startsWith("http")) continue;
-                const host = hostOf(r.url);
-                if (held.has(host) || isBlockedHost(host, blockedHosts)) continue;
-                const tierOf = provenanceOf(host);
-                if (tierOf !== tier) continue;
-                if (tier === "unknown" && !hasAnchor()) continue;
-                held.add(host);
-                hunted.push({ item: { outlet: host, region: "", title: r.title, url: r.url }, score: 0 });
-              }
-            };
-            admit("allow");
-            admit("unknown");
-            const denied = found.filter((r) => provenanceOf(hostOf(r.url)) === "deny").map((r) => hostOf(r.url));
-            if (denied.length > 0) log?.(`news-desk: hunt refused deny-tier host(s): ${[...new Set(denied)].join(", ")}`);
+            const extraHits = await matcher.matchAny(
+              fresh.map((c) => c.headline),
+              indexTitles,
+              knobs.matchThreshold,
+            );
+            for (const hit of extraHits) {
+              if (unblocked.length + hunted.length >= knobs.pagesMax) break;
+              const item = index[hit.index];
+              const host = hostOf(item.url);
+              if (held.has(host) || isBlockedHost(host, blockedHosts)) continue;
+              if (provenanceOf(host) === "deny") continue;
+              held.add(host);
+              hunted.push({ item, score: hit.score });
+            }
+
+            // Pass 2 — locate a URL on an outlet GN already vetted. Web search
+            // is a URL-LOCATOR inside one named host here, never a discoverer
+            // of hosts: the query is site-restricted and any result off that
+            // host is discarded.
+            for (const c of fresh) {
+              if (unblocked.length + hunted.length >= knobs.pagesMax) break;
+              if (held.has(c.host)) continue;
+              const found = await search.search(`site:${c.host} ${c.headline}`, { limit: 3 });
+              const onHost = found.find(
+                (r) => r.url.startsWith("http") && hostOf(r.url).endsWith(c.host),
+              );
+              if (onHost === undefined) continue;
+              held.add(c.host);
+              hunted.push({
+                item: { outlet: c.outlet, region: "", title: c.headline, url: onHost.url },
+                score: 0,
+              });
+            }
             log?.(
-              `news-desk: "${story.headline}" index gave ${unblocked.length}/${knobs.minSources} — search hunt added ${hunted.length} candidate page(s)`,
+              `news-desk: "${story.headline}" index gave ${unblocked.length}/${knobs.minSources} — GN coverage named ${coverage.length} outlet(s) (${fresh.length} admissible), resolved ${hunted.length}`,
             );
           } catch (err: unknown) {
             log?.(`news-desk: source hunt failed (best-effort, continuing with the index alone): ${String(err)}`);
@@ -1136,6 +1162,30 @@ export function createNewsDesk(opts: {
             recordArtifact?.(`fact-check-audit: ${columnist.name}`, audit);
           } catch (err: unknown) {
             log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
+          }
+          // Claim check — the second job for an open web search now that it no
+          // longer discovers sources: does anyone INDEPENDENT report this?
+          // Informational like the audit; search silence is not falsehood, and
+          // blocking on it would gut the paper on legitimate scoops.
+          try {
+            const checked = await checkClaims({
+              column: content,
+              llm,
+              search,
+              citedHosts: contributing.map((c) => hostOf(c.url)),
+              max: 4,
+              log,
+            });
+            if (checked.length > 0) {
+              recordArtifact?.(
+                `claim-check: ${columnist.name}`,
+                checked
+                  .map((c) => `${c.corroborated ? "OK  " : "WEAK"} ${c.claim}\n     ${c.corroborating.join(", ") || "(no independent corroboration found)"}`)
+                  .join("\n"),
+              );
+            }
+          } catch (err: unknown) {
+            log?.(`news-desk: claim check failed (informational, non-blocking): ${String(err)}`);
           }
           // One take per story → the headline alone is the slug, capped at a
           // WORD boundary (a raw 70-char slice shipped ".../criminal-co").

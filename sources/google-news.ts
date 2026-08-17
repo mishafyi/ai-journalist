@@ -36,6 +36,10 @@ export interface TrendingStory {
    *  examples/run-news-desk.ts), not by any feed — Google News publishes a
    *  ranking, never a rate of climb. */
   breaking?: boolean;
+  /** Publisher home page from the item's `<source url="…">` attribute. The
+   *  only real host GN gives us — the item <link> is a JS stub. "" when the
+   *  feed shape carries no source tag (top-stories items often don't). */
+  sourceUrl?: string;
 }
 
 export function googleNewsTopUrl(edition: GnEdition): string {
@@ -122,6 +126,18 @@ function sourceOutlet(source: unknown): string {
   return "";
 }
 
+/** The `url` attribute of `<source url="https://www.reuters.com">Reuters</source>`.
+ *  xml2js yields {_: text, $: attrs} for an attributed tag; a bare string means
+ *  the feed sent no attribute. This host is the provenance key for coverage
+ *  lookups — GN item links are JS stubs and carry no host. */
+function sourceHomeUrl(source: unknown): string {
+  if (typeof source === "object" && source !== null) {
+    const attrs = (source as { $?: { url?: unknown } }).$;
+    if (attrs !== undefined && typeof attrs.url === "string") return attrs.url.trim();
+  }
+  return "";
+}
+
 /** GN topic titles usually end " - Outlet"; strip the suffix ONLY when it
  *  matches the item's <source> outlet — a bare last-" - " split would eat
  *  real headline text ("Dow up 300 - a record"). */
@@ -147,6 +163,7 @@ export async function parseTopicStories(xml: string): Promise<TrendingStory[]> {
         rank: i + 1,
         headline,
         leadOutlet: outlet,
+        sourceUrl: sourceHomeUrl(item.source),
         coverage: parsed.length > 0 ? parsed : [{ headline, outlet }],
       };
     })
@@ -267,4 +284,85 @@ export async function fetchSiteStories(args: {
     }),
   );
   return dedupeTrending(interleave(perSite), args.dedupeThreshold).slice(0, args.limit);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Coverage lookup — WHO is covering one story, from Google News rather than
+// from an open web search.
+//
+// This is the source-discovery channel (operator, 2026-08-16: "for search hunt
+// we either need to use datagod or google news rss"). The old hunt asked a web
+// search engine for the story and admitted whatever hosts came back, which is
+// how a WordPress site calling itself "Telegraph Online" ended up cited. Google
+// News only indexes publishers it has admitted to its news index, so its
+// coverage cluster is a vetted list of outlets by construction — and each item
+// carries the outlet's OWN headline, which is what the desk needs to resolve a
+// scrapable URL.
+//
+// What this deliberately does NOT do: follow the <link>. GN item links are
+// JS-redirect stubs that stay on news.google.com when fetched (verified again
+// 2026-08-16), so they are never decoded and never scraped. The host and the
+// headline are the payload.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface Coverage {
+  /** Publisher display name, e.g. "Reuters". */
+  outlet: string;
+  /** Publisher host without www., e.g. "reuters.com" — the provenance key. */
+  host: string;
+  /** That outlet's own headline for the story. */
+  headline: string;
+}
+
+/** Host of a URL without www./m., or "" when unparseable. */
+function bareHost(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^(www|m|amp|edition|mobile)\./, "");
+  } catch {
+    return "";
+  }
+}
+
+export function googleNewsQueryUrl(query: string, edition: GnEdition, freshness: string): string {
+  const q = encodeURIComponent(`${query} ${freshness}`.trim());
+  return `https://news.google.com/rss/search?q=${q}&hl=${edition.hl}&gl=${edition.gl}&ceid=${encodeURIComponent(edition.ceid)}`;
+}
+
+/**
+ * Which outlets are covering this story, per Google News. Best-effort: a failed
+ * or empty lookup returns [] and the caller falls back to the outlet index
+ * alone — discovery must never be able to kill a run.
+ */
+export async function fetchCoverage(args: {
+  headline: string;
+  edition: GnEdition;
+  /** GN freshness operator, e.g. "when:2d". "" searches all time. */
+  freshness?: string;
+  limit: number;
+  fetchImpl?: typeof fetch;
+  log?: (line: string) => void;
+}): Promise<Coverage[]> {
+  const fetchImpl = args.fetchImpl ?? fetch;
+  const url = googleNewsQueryUrl(args.headline, args.edition, args.freshness ?? "when:7d");
+  try {
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const stories = await parseTopicStories(await res.text());
+    const out: Coverage[] = [];
+    const seenHost = new Set<string>();
+    for (const s of stories) {
+      // parseTopicStories fills leadOutlet from <source>, and its `sourceUrl`
+      // is the publisher home page — the only host GN hands us.
+      const host = bareHost(s.sourceUrl ?? "");
+      if (host === "" || s.headline === "") continue;
+      if (seenHost.has(host)) continue; // one page per outlet, like the index
+      seenHost.add(host);
+      out.push({ outlet: s.leadOutlet || host, host, headline: s.headline });
+      if (out.length >= args.limit) break;
+    }
+    return out;
+  } catch (err: unknown) {
+    args.log?.(`google-news: coverage lookup failed for "${args.headline}" (best-effort): ${String(err)}`);
+    return [];
+  }
 }

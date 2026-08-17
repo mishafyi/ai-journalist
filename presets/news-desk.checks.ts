@@ -55,8 +55,8 @@ async function orchestrationChecks(): Promise<void> {
     "https://beacon.example/rates": REAL("Beacon"),
     "https://teaser.example/rates": "Subscribe to continue reading. Create a free account to unlock this article and get unlimited access.",
     "https://www.bloomberg.com/rates": REAL("Blocked Times"),
-    "https://hunt-a.example/story": REAL("hunt-a.example"),
-    "https://hunt-b.example/story": REAL("hunt-b.example"),
+    "https://hunt-a.example/story": REAL("Hunt A"),
+    "https://hunt-b.example/story": REAL("Hunt B"),
   };
   const scraped: string[] = [];
   const search: SearchClient = {
@@ -99,7 +99,7 @@ async function orchestrationChecks(): Promise<void> {
   // Scenario-4 fixture: same column, but the second attribution names a HUNTED
   // host — the contract's two-outlet floor must hold when sources come from
   // the search hunt rather than the RSS index.
-  const HUNT_COLUMN = COLUMN.replace("Beacon reports", "hunt-a.example reports");
+  const HUNT_COLUMN = COLUMN.replace("Beacon reports", "Hunt A reports");
   const NO_PARALLEL_COLUMN = [
     "## A squeeze with no honest precedent",
     "",
@@ -127,7 +127,7 @@ async function orchestrationChecks(): Promise<void> {
       // Route on prompt content (the TOPIC: trick): a compose prompt built on
       // the no-parallel path instructs the phrase verbatim — answer with the
       // no-parallel column so the contract's NO_PARALLEL_PHRASE branch holds.
-      if (args.prompt.includes("hunt-a.example")) return HUNT_COLUMN;
+      if (args.prompt.includes("Hunt A")) return HUNT_COLUMN;
       if (args.prompt.includes(NO_PARALLEL_PHRASE)) return NO_PARALLEL_COLUMN;
       return COLUMN;
     },
@@ -370,10 +370,12 @@ async function orchestrationChecks(): Promise<void> {
     post3.telemetry !== undefined && !("parallel" in post3.telemetry) && String(post3.telemetry.topic) === STORY2,
     JSON.stringify(post3.telemetry));
 
-  // Scenario 4 — the source hunt (operator, 2026-07-25: "write news for every
-  // trending news"). The index holds ONE outlet for the story; the search
-  // backend knows two more (plus a google.com redirect that must be filtered).
-  // Resolution tops up via the hunt and the story publishes with 3 sources.
+  // Scenario 4 — the source hunt, Google-News-first (operator, 2026-08-16).
+  // The index holds ONE outlet. GN coverage names two more real outlets plus a
+  // deny-tier impersonator; the impersonator must never be admitted, and the
+  // two real ones are resolved by a SITE-RESTRICTED search, so the web search
+  // only ever locates a URL on a host GN already vetted. A result that comes
+  // back off-host must be discarded.
   const logs4: string[] = [];
   let published4: GeneratedPost | null = null;
   const searched4: string[] = [];
@@ -382,11 +384,20 @@ async function orchestrationChecks(): Promise<void> {
     search: {
       async search(q: string) {
         searched4.push(q);
-        return [
-          { title: "Rates story", url: "https://news.google.com/rss/articles/xyz", snippet: "" },
-          { title: "Central bank hikes to 20-year high", url: "https://hunt-a.example/story", snippet: "" },
-          { title: "Rate rise rocks markets", url: "https://hunt-b.example/story", snippet: "" },
-        ];
+        // Parallel research still asks plain questions; only the hunt is
+        // site-restricted, and it gets back that host's page plus a decoy on
+        // another host that the host check must reject.
+        if (q.startsWith("site:hunt-a.example")) {
+          return [
+            { title: "Decoy on the wrong host", url: "https://scraper.example/copy", snippet: "" },
+            { title: "Central bank hikes to 20-year high", url: "https://hunt-a.example/story", snippet: "" },
+          ];
+        }
+        if (q.startsWith("site:hunt-b.example")) {
+          return [{ title: "Rate rise rocks markets", url: "https://hunt-b.example/story", snippet: "" }];
+        }
+        if (q.startsWith("site:")) return [];
+        return [{ title: "Rates story", url: "https://news.google.com/rss/articles/xyz", snippet: "" }];
       },
       async scrape(url: string): Promise<string> {
         const body = PAGES[url];
@@ -408,21 +419,34 @@ async function orchestrationChecks(): Promise<void> {
     log: (line) => logs4.push(line),
     trendingImpl: async () => trending,
     indexImpl: async () => [index[0]],
+    coverageImpl: async () => [
+      { outlet: "Hunt A", host: "hunt-a.example", headline: "Central bank hikes to 20-year high" },
+      { outlet: "Hunt B", host: "hunt-b.example", headline: "Rate rise rocks markets" },
+      { outlet: "Telegraph Online", host: "telegraph.com", headline: "Rates explained" },
+    ],
     internalsFactory,
     parallelFetchImpl,
   }).run();
   const md4 = (published4 as GeneratedPost | null)?.markdown ?? "";
-  ok("hunt: searched the story headline once the index came up short",
-    searched4.filter((q) => q === STORY2).length === 1, JSON.stringify(searched4));
+  ok("hunt: web search is SITE-RESTRICTED to hosts Google News named",
+    searched4.some((q) => q === "site:hunt-a.example Central bank hikes to 20-year high") &&
+      !searched4.includes(STORY2),
+    JSON.stringify(searched4));
+  ok("hunt: a deny-tier outlet in the cluster is never searched or cited",
+    !searched4.some((q) => q.includes("telegraph.com")) &&
+      !((published4 as GeneratedPost | null)?.sources ?? []).some((c) => c.url.includes("telegraph.com")),
+    JSON.stringify(searched4));
   ok("parallel research: the tournament web-researched the verified candidate",
     searched4.some((q) => q.includes("Panic of 1907")), JSON.stringify(searched4));
-  ok("hunt: log names the shortfall and the pages added",
-    logs4.some((l) => l.includes(`index gave 1/3 — search hunt added 2 candidate page(s)`)), logs4.join(" | "));
+  ok("hunt: log names the shortfall, the cluster and what resolved",
+    logs4.some((l) => l.includes("index gave 1/3") && l.includes("GN coverage named 3 outlet(s) (2 admissible), resolved 2")),
+    logs4.join(" | "));
   const cited4 = (published4 as GeneratedPost | null)?.sources ?? [];
-  ok("hunt: published with index + hunted sources, google.com redirect filtered",
+  ok("hunt: published with index + GN-vetted hosts; off-host decoy discarded",
     cited4.some((c) => c.title.startsWith("Wire: ")) &&
-      cited4.some((c) => c.title.startsWith("hunt-a.example: ")) &&
-      cited4.some((c) => c.title.startsWith("hunt-b.example: ")) &&
+      cited4.some((c) => c.title.startsWith("Hunt A: ")) &&
+      cited4.some((c) => c.title.startsWith("Hunt B: ")) &&
+      !cited4.some((c) => c.url.includes("scraper.example")) &&
       !cited4.some((c) => c.url.includes("news.google.com")),
     JSON.stringify(cited4));
   ok("hunt: the run returns the published post",
