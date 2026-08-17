@@ -342,28 +342,50 @@ function feedText(raw: string): string {
     .trim();
 }
 
-/**
- * Coverage straight out of the search-RSS XML.
+/** A `<source>` element as rss-parser hands it back with `keepArray: true`:
+ *  the text in `_`, the attributes in `$`. */
+interface RssSourceNode {
+  _?: string;
+  $?: { url?: string };
+}
+
+/** Parser that KEEPS `<source>` as a node instead of flattening it.
  *
- * Deliberately NOT via rss-parser: it flattens `<source url="…">Reuters</source>`
- * to the string "Reuters" and drops the url attribute — which is the ONLY host
- * Google News gives us, since item links are JS stubs. Reading it through the
- * parser returned an empty cluster for every story and the desk silently fell
- * back to the index alone (caught on the first live rewrite, 2026-08-16). The
- * shape is small and fixed, so it is parsed here and pinned by a check.
+ *  The url attribute is the only host Google News gives us — item links are JS
+ *  stubs — and `customFields: { item: ["source"] }` (what the topic parser
+ *  above uses) collapses the element to its text, "Reuters", losing it. That
+ *  cost a day: coverage came back empty for every story and the desk silently
+ *  fell back to the outlet index (2026-08-16). `keepArray` returns
+ *  `[{ _: "Reuters", $: { url: "https://www.reuters.com" } }]`, attribute
+ *  intact — so this is a stock rss-parser feature, not a library limitation,
+ *  and there is no reason to hand-roll XML for it. */
+const coverageParser: Parser<Record<string, unknown>, { source?: RssSourceNode[] }> = new Parser({
+  timeout: 15_000,
+  customFields: { item: [["source", "source", { keepArray: true }]] },
+});
+
+/**
+ * Coverage straight out of the search-RSS XML. rss-parser handles CDATA,
+ * entity decoding and attribute quoting, so none of that is re-implemented
+ * here. A malformed feed yields [] rather than throwing — discovery must never
+ * be able to kill a run.
  */
-export function parseCoverageFeed(xml: string): Coverage[] {
+export async function parseCoverageFeed(xml: string): Promise<Coverage[]> {
   const out: Coverage[] = [];
   const seen = new Set<string>();
-  for (const block of xml.match(/<item>[\s\S]*?<\/item>/g) ?? []) {
-    const src = /<source\s+url="([^"]+)"[^>]*>([\s\S]*?)<\/source>/.exec(block);
-    const title = /<title>([\s\S]*?)<\/title>/.exec(block);
-    if (src === null || title === null) continue;
-    const host = bareHost(src[1]);
-    const outlet = feedText(src[2]);
+  let items: { title?: string; source?: RssSourceNode[] }[];
+  try {
+    items = (await coverageParser.parseString(xml)).items ?? [];
+  } catch {
+    return out;
+  }
+  for (const item of items) {
+    const node = Array.isArray(item.source) ? item.source[0] : undefined;
+    const host = bareHost(String(node?.$?.url ?? ""));
+    const outlet = String(node?._ ?? "").trim();
     // GN titles end " - Outlet"; strip only when it IS this item's outlet, so
     // real headline text containing " - " survives.
-    let headline = feedText(title[1]);
+    let headline = String(item.title ?? "").trim();
     const suffix = ` - ${outlet}`;
     if (outlet !== "" && headline.endsWith(suffix)) headline = headline.slice(0, -suffix.length).trim();
     if (host === "" || headline === "" || seen.has(host)) continue;
@@ -392,7 +414,7 @@ export async function fetchCoverage(args: {
   try {
     const res = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return parseCoverageFeed(await res.text()).slice(0, args.limit);
+    return (await parseCoverageFeed(await res.text())).slice(0, args.limit);
   } catch (err: unknown) {
     args.log?.(`google-news: coverage lookup failed for "${args.headline}" (best-effort): ${String(err)}`);
     return [];

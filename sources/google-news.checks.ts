@@ -216,8 +216,8 @@ async function main(): Promise<void> {
 <source url="https://www.nbcnews.com">NBC News</source></item>
 <item><title>No source tag here</title></item>
 </channel></rss>`;
-  const cov = parseCoverageFeed(COVERAGE_XML);
-  ok("the source url attribute survives (rss-parser drops it)",
+  const cov = await parseCoverageFeed(COVERAGE_XML);
+  ok("the source url attribute survives (via rss-parser keepArray)",
     cov.length === 3 && cov[0].host === "kentucky.com" && cov[0].outlet === "Lexington Herald Leader",
     JSON.stringify(cov));
   ok("the ' - Outlet' suffix is stripped from the headline",
@@ -228,7 +228,8 @@ async function main(): Promise<void> {
     cov[2].headline === "Dow up 300 - a record", cov[2].headline);
   ok("one page per outlet, and an item with no source tag is skipped",
     cov.filter((c) => c.host === "nbcnews.com").length === 1 && cov.length === 3, JSON.stringify(cov.map((c) => c.host)));
-  ok("empty xml yields no coverage rather than throwing", parseCoverageFeed("").length === 0, "");
+  ok("empty xml yields no coverage rather than throwing", (await parseCoverageFeed("")).length === 0, "");
+  ok("malformed xml yields no coverage rather than throwing", (await parseCoverageFeed("<rss><chan")).length === 0, "");
 
   process.stdout.write("google-news checks: all green\n");
 }
