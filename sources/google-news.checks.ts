@@ -1,5 +1,6 @@
 import {
   dedupeTrending,
+  parseCoverageFeed,
   fetchSiteStories,
   fetchTopicStories,
   googleNewsSiteUrl,
@@ -199,6 +200,36 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  // ── Coverage lookup: the <source url> attribute is the whole point ────────
+  // rss-parser flattens <source url="…">Reuters</source> to "Reuters" and
+  // drops the url, which silently returned an empty cluster for every story.
+  const COVERAGE_XML = `<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>5 shot, 1 killed at a Lexington park, police say - Lexington Herald Leader</title>
+<link>https://news.google.com/rss/articles/CBMiSTUB?oc=5</link>
+<source url="https://www.kentucky.com">Lexington Herald Leader</source></item>
+<item><title><![CDATA[Arrest made in shooting that killed 1 - NBC News]]></title>
+<source url="https://www.nbcnews.com">NBC News</source></item>
+<item><title>Dow up 300 - a record - CNBC</title>
+<source url="https://www.cnbc.com">CNBC</source></item>
+<item><title>Duplicate outlet, second story - NBC News</title>
+<source url="https://www.nbcnews.com">NBC News</source></item>
+<item><title>No source tag here</title></item>
+</channel></rss>`;
+  const cov = parseCoverageFeed(COVERAGE_XML);
+  ok("the source url attribute survives (rss-parser drops it)",
+    cov.length === 3 && cov[0].host === "kentucky.com" && cov[0].outlet === "Lexington Herald Leader",
+    JSON.stringify(cov));
+  ok("the ' - Outlet' suffix is stripped from the headline",
+    cov[0].headline === "5 shot, 1 killed at a Lexington park, police say", cov[0].headline);
+  ok("CDATA titles are decoded",
+    cov[1].headline === "Arrest made in shooting that killed 1", cov[1].headline);
+  ok("a hyphen inside real headline text survives",
+    cov[2].headline === "Dow up 300 - a record", cov[2].headline);
+  ok("one page per outlet, and an item with no source tag is skipped",
+    cov.filter((c) => c.host === "nbcnews.com").length === 1 && cov.length === 3, JSON.stringify(cov.map((c) => c.host)));
+  ok("empty xml yields no coverage rather than throwing", parseCoverageFeed("").length === 0, "");
+
   process.stdout.write("google-news checks: all green\n");
 }
 

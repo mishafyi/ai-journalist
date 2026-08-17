@@ -328,6 +328,51 @@ export function googleNewsQueryUrl(query: string, edition: GnEdition, freshness:
   return `https://news.google.com/rss/search?q=${q}&hl=${edition.hl}&gl=${edition.gl}&ceid=${encodeURIComponent(edition.ceid)}`;
 }
 
+/** Strip CDATA and decode the handful of entities a feed title can carry. */
+function feedText(raw: string): string {
+  return raw
+    .replace(/^\s*<!\[CDATA\[/, "")
+    .replace(/\]\]>\s*$/, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .trim();
+}
+
+/**
+ * Coverage straight out of the search-RSS XML.
+ *
+ * Deliberately NOT via rss-parser: it flattens `<source url="…">Reuters</source>`
+ * to the string "Reuters" and drops the url attribute — which is the ONLY host
+ * Google News gives us, since item links are JS stubs. Reading it through the
+ * parser returned an empty cluster for every story and the desk silently fell
+ * back to the index alone (caught on the first live rewrite, 2026-08-16). The
+ * shape is small and fixed, so it is parsed here and pinned by a check.
+ */
+export function parseCoverageFeed(xml: string): Coverage[] {
+  const out: Coverage[] = [];
+  const seen = new Set<string>();
+  for (const block of xml.match(/<item>[\s\S]*?<\/item>/g) ?? []) {
+    const src = /<source\s+url="([^"]+)"[^>]*>([\s\S]*?)<\/source>/.exec(block);
+    const title = /<title>([\s\S]*?)<\/title>/.exec(block);
+    if (src === null || title === null) continue;
+    const host = bareHost(src[1]);
+    const outlet = feedText(src[2]);
+    // GN titles end " - Outlet"; strip only when it IS this item's outlet, so
+    // real headline text containing " - " survives.
+    let headline = feedText(title[1]);
+    const suffix = ` - ${outlet}`;
+    if (outlet !== "" && headline.endsWith(suffix)) headline = headline.slice(0, -suffix.length).trim();
+    if (host === "" || headline === "" || seen.has(host)) continue;
+    seen.add(host);
+    out.push({ outlet: outlet === "" ? host : outlet, host, headline });
+  }
+  return out;
+}
+
 /**
  * Which outlets are covering this story, per Google News. Best-effort: a failed
  * or empty lookup returns [] and the caller falls back to the outlet index
@@ -347,20 +392,7 @@ export async function fetchCoverage(args: {
   try {
     const res = await fetchImpl(url, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const stories = await parseTopicStories(await res.text());
-    const out: Coverage[] = [];
-    const seenHost = new Set<string>();
-    for (const s of stories) {
-      // parseTopicStories fills leadOutlet from <source>, and its `sourceUrl`
-      // is the publisher home page — the only host GN hands us.
-      const host = bareHost(s.sourceUrl ?? "");
-      if (host === "" || s.headline === "") continue;
-      if (seenHost.has(host)) continue; // one page per outlet, like the index
-      seenHost.add(host);
-      out.push({ outlet: s.leadOutlet || host, host, headline: s.headline });
-      if (out.length >= args.limit) break;
-    }
-    return out;
+    return parseCoverageFeed(await res.text()).slice(0, args.limit);
   } catch (err: unknown) {
     args.log?.(`google-news: coverage lookup failed for "${args.headline}" (best-effort): ${String(err)}`);
     return [];

@@ -64,7 +64,7 @@ const FEEDS: OutletFeed[] = [
 
   // South & Southeast Asia
   { url: "https://www.dawn.com/feeds/home", outlet: "Dawn", region: "Asia" },
-  { url: "https://www.thedailystar.net/frontpage/rss.xml", outlet: "The Daily Star", region: "Asia" },
+  { url: "https://www.thedailystar.net/taxonomy/term/107/rss.xml", outlet: "The Daily Star", region: "Asia" },
   { url: "https://www.channelnewsasia.com/api/v1/rss-outbound-feed?_format=xml", outlet: "CNA", region: "Asia" },
   { url: "https://www.rappler.com/feed/", outlet: "Rappler", region: "Asia" },
   { url: "https://www.inquirer.net/fullfeed", outlet: "Philippine Daily Inquirer", region: "Asia" },
