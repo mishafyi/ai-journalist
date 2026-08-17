@@ -12,13 +12,14 @@ page is the guided tour.
 | ------------------------------------ | ------------------------------------------------- | ------------------------------------------- |
 | WHERE content comes from             | a `Source` (config or a custom impl)              | `sources/` · `ports.ts`                     |
 | WHERE finished posts land            | `Sink.publish`                                     | your code · `ports.ts`                      |
-| WHAT model writes                    | `createOpenRouterLlm({ defaultModel })` / `LlmClient` | `clients/openrouter-llm.ts`             |
+| WHAT model writes                    | any `LlmClient` — OpenRouter, Ollama or Google AI  | `clients/*-llm.ts`                          |
 | HOW research happens                 | a `SearchClient` (Firecrawl / SearXNG / custom)   | `clients/` · `ports.ts`                     |
 | WHAT the writing sounds like         | `systemPrompt` + `BrandProfile`                   | `presets/default.ts` · `ports.ts`           |
 | HOW MUCH it writes                   | `knobs`                                            | `presets/default.ts` (`DefaultKnobs`)       |
 | PARAPHRASE-grade dedup               | pass `embedder` (any `Embedder`; e.g. an HTTP wrapper over your embedding service) | `presets/default.ts` · `ports.ts`           |
 | DOMAIN data woven in                 | `PipelineEnrichment`                              | `pipeline.ts`                               |
 | OBSERVABILITY                        | `onEvent` / `onError` / `RunContext`              | `presets/default.ts` · `run-context.ts`     |
+| WHICH PHOTOS a story gets            | `lead-image` / `image` / `gallery`                | `sources/`                                  |
 
 Each row below carries a runnable snippet. They all assume the preset:
 `createDefaultInternals({ llm, search, brand, source })` returns the
@@ -104,6 +105,24 @@ const llm = createOpenRouterLlm({
 
 // Dynamic (omit defaultModel):
 const auto = createOpenRouterLlm({ apiKey: process.env.OPENROUTER_API_KEY });
+```
+
+Two other clients ship, same port, drop-in:
+
+```ts
+// A local model — no key, no per-token cost.
+import { createOllamaLlm } from "ai-journalist/clients/ollama-llm";
+const local = createOllamaLlm({ baseUrl: "http://localhost:11434", model: "gemma3:12b" });
+
+// Google AI. Pass EVERY key you have: AI Studio counts quota per Google Cloud
+// project, so a key from a second project is a whole extra budget rather than a
+// share of the first. Each key gets its own pacing and its own model fallback
+// chain, and a 429 that names a wait is obeyed literally.
+import { createGeminiLlm } from "ai-journalist/clients/gemini-llm";
+const google = createGeminiLlm({
+  apiKeys: [process.env.GEMINI_API_KEY_1, process.env.GEMINI_API_KEY_2].filter(Boolean) as string[],
+  log: (line) => console.log(line),
+});
 ```
 
 Any provider works — implement the `LlmClient` port (`complete` +
@@ -434,6 +453,57 @@ mid-run failure still leaves the completed stages' trail under
 `out/runs/<runId>/` — add the usual cron-failure analogs on top at adoption
 time, e.g. an `osascript` desktop notification on a nonzero exit plus a
 blockers summarizer over the run's log.
+
+## WHICH PHOTOS a story gets → `lead-image` / `image` / `gallery`
+
+The engine decides whether a photo is *usable*. It never stores one — that is
+your `Sink`'s job, so nothing here writes to disk or to a bucket.
+
+```ts
+import { pickLeadImage } from "ai-journalist/sources/lead-image";
+import { downloadLeadImage, keepImage, DeadImageError } from "ai-journalist/sources/image";
+import { collectSourcePages, harvestPages, pickGallery } from "ai-journalist/sources/gallery";
+
+// 1. The hero: the outlet's own og:image from a page you already cited,
+//    else an image search. null when neither yields anything usable.
+const lead = await pickLeadImage({ sourceUrls, query: post.title, fetchImpl: fetch });
+
+// 2. Fetch it, refusing anything under the 800px floor. Two failure kinds:
+//    DeadImageError = a browser would fail too, so DROP the url;
+//    any other Error = transient, worth another go.
+if (lead !== null) {
+  try {
+    const img = await downloadLeadImage(lead.url, fetch);
+    await store(img.blob, img.filename);       // your Sink, not the engine
+  } catch (err) {
+    if (err instanceof DeadImageError) dropTheUrl(lead.url);
+  }
+}
+
+// 3. Everything else on the pages the story cites.
+const pages = collectSourcePages({
+  sourceUrls,
+  markdown: post.body,          // inline links count as cited sources too
+  ownHosts: ["myoutlet.com"],   // so a story never harvests itself
+  limit: 6,
+});
+const photos = pickGallery(
+  await harvestPages(pages, { fetchImpl: fetch, exclude: lead?.url }),
+  6,
+);
+```
+
+`keepImage(url)` is the cheap standalone verdict — no network — if you only want
+to filter a list of URLs you already have.
+
+`harvestPages` returns `meta` and `body` separately rather than one list. A
+page's `og:image` is the outlet's chosen photo *of this story*; its `<img>` tags
+are real photos too but include the "more stories" sidebar. `pickGallery` prefers
+meta and only tops up from body, which is what stops a crime story illustrating
+itself with a source page's politics thumbnails. Take the two lists yourself if
+you want a different rule.
+
+---
 
 ## Escalation path
 

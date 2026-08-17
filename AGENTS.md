@@ -36,8 +36,11 @@ build-headline-corpus.ts / headlines.json   NYT/WSJ headline corpus for the titl
 presets/          createDefaultInternals — a working EngineInternals from 4 inputs
 presets/news-desk.ts        the opinion-desk preset (see below) — trending story → one columnist's op-ed
 sources/          Http / Rss / File / compose — the reference Source library
-sources/lead-image.ts       lead image: source og:image first, Openverse CC fallback
-clients/          OpenRouter LlmClient + Firecrawl/SearXNG SearchClient (the reference clients)
+sources/lead-image.ts       which photo leads: source og:image first, then image search
+sources/image.ts            is a photo real and big enough (URL → content-type → pixels)
+sources/gallery.ts          every usable photo on the pages a story cites
+sources/provenance.ts       is this host a real outlet, an impersonator, or unknown
+clients/          LlmClient: OpenRouter / Ollama / Google AI · SearchClient: Firecrawl / SearXNG
 testing/replay.ts record/replay harness (sha256-keyed) for deterministic tests
 *.checks.ts       per-module byte-lock + behavioral checks (run by `npm run test:checks`)
 examples/         runnable demos — basic.ts (offline) + live-minimal.ts (operator-run)
@@ -145,9 +148,10 @@ Both exist because exact matching produced false negatives that failed valid
 drafts ("Smoot–Hawley" vs `Smoot-Hawley`, "the Dust Bowl" vs "The Dust Bowl").
 Compare names through them, never with `includes` on raw text.
 
-**Openverse AND-matches every term**, so `imageKeywords` caps a query at three
-significant words and falls back 3 → 2 → 1. A full headline returns zero
-results; verified live ("Ukraine general" = 240 hits, the full headline = 0).
+**The lead photo comes from a cited page first.** An outlet's own `og:image` is
+its photo OF THIS STORY; an image search is the fallback, not the default. The
+Openverse path this section used to describe was replaced in 2026-07 — there is
+no `imageKeywords` any more.
 
 ## Verifying a change here
 

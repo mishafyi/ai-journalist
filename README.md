@@ -48,8 +48,13 @@ npm i ai-journalist
 ```
 
 Node 20+ (CI tests 20 and 22), ESM, ships as TypeScript source — consume it via
-`tsx` or your own bundler. Dependencies are small and boring: `zod`, `p-limit`,
-`@openrouter/sdk`, `firecrawl`, `rss-parser`, `date-fns`, `remark`.
+`tsx` or your own bundler.
+
+Dependencies are small and boring: `zod` and `p-limit` for the core; `remark`,
+`remark-gfm` and `unist-util-visit` to parse markdown; `rss-parser`, `cheerio`
+and `date-fns` to read feeds and pages. The rest are optional provider SDKs,
+loaded only if you use that client — `@openrouter/sdk`, `ollama`,
+`@google/genai`, `firecrawl`.
 
 ## Quickstart
 
@@ -108,22 +113,42 @@ Search is fully swappable (`SearchClient` port): reference clients ship for
 Three ship, all satisfying the same `LlmClient` port — free-text `complete`
 plus schema-constrained `completeStructured`:
 
-| Client | For |
+| Client | Use it for |
 | --- | --- |
 | [`ollama-llm`](./clients/ollama-llm.ts) | A local model. No key, no per-token cost. |
-| [`openrouter-llm`](./clients/openrouter-llm.ts) | Any hosted model behind one key. |
-| [`gemini-llm`](./clients/gemini-llm.ts) | Google AI. Rotates across several API keys — AI Studio quota is **per project**, so a key from a second project is an independent pool, not a share of the same one — with a per-key pacing clock and a model fallback chain per key. Honors the `retryDelay` Google sends on a 429 instead of guessing backoff. |
+| [`openrouter-llm`](./clients/openrouter-llm.ts) | Any hosted model, behind one key. |
+| [`gemini-llm`](./clients/gemini-llm.ts) | Google AI, built to survive the free tier. |
+
+`gemini-llm` takes a **list** of API keys and treats each as its own lane, with
+its own request pacing and its own fallback chain of models. That matters
+because AI Studio quota is counted per Google Cloud *project* — so a key from a
+second project is a whole extra budget, not a share of the first one. When
+Google answers a 429 it usually says how long to wait; the client waits exactly
+that long instead of guessing.
 
 ### Photos
 
 The engine decides whether a photo is *usable*; a `Sink` decides where it
 lives. Nothing here writes to storage.
 
-| Module | What it does |
+| Module | What it answers |
 | --- | --- |
-| [`sources/lead-image`](./sources/lead-image.ts) | One hero per story: the outlet's own `og:image` from a page you already cited, else an image search. |
-| [`sources/image`](./sources/image.ts) | Is this a real editorial photo, and is it big enough? URL verdict (`keepImage`), content-type and byte gates (`downloadImage`), and the true pixel size read from the file header (`imageDims`) — because URL heuristics let a 200x200 graphic reach a splash. `DeadImageError` vs `Error` tells a caller to DROP a URL rather than retry it. |
-| [`sources/gallery`](./sources/gallery.ts) | Every usable photo across the pages a story cites, split by trust: a page's `og:image` is the outlet's photo *of this story*, its `<img>` tags include the off-topic recirculation rail. |
+| [`sources/lead-image`](./sources/lead-image.ts) | *Which photo leads this story?* The outlet's own `og:image` from a page you already cited, else an image search. |
+| [`sources/image`](./sources/image.ts) | *Is this a real photo, and is it big enough?* |
+| [`sources/gallery`](./sources/gallery.ts) | *What else is there?* Every usable photo across the pages the story cites. |
+
+`sources/image` checks in three widening steps, so the cheap test runs first:
+the URL (`keepImage` — no network), then the response's content type and size
+(`downloadImage`), then the **actual pixels** read out of the file header
+(`imageDims`). The last step earns its keep: a URL can look perfectly clean and
+still deliver a 200x200 graphic. A failure is either a `DeadImageError`, meaning
+a browser would fail too so drop the URL, or a plain `Error`, meaning try again.
+
+`sources/gallery` sorts what it finds by how much it trusts it. A page's
+`og:image` is the outlet's chosen photo *of this story*; the `<img>` tags on the
+same page are real photos too, but they include the "more stories" sidebar. It
+returns the two groups separately and prefers the first, so a crime story never
+illustrates itself with a source page's unrelated politics thumbnails.
 
 ## Guarantees, enforced in CI
 
