@@ -6,8 +6,8 @@
  * engine core re-acquires either of:
  *
  *   1. a `process.env` read — the core must be env-free; the host adapter
- *      supplies config via `EngineConfig.knobs`. (`clients/**` may read
- *      env for SDK API keys, so it is excluded.)
+ *      supplies config via `EngineConfig.knobs`. (`clients/**` may read env
+ *      for SDK API keys and `cli/**` for user settings, so both are excluded.)
  *   2. an `owl-alpha` MODEL-ID LITERAL — a quoted string such as
  *      `"openrouter/owl-alpha"`. owl-alpha is an unstable alias that returns
  *      empty completions; the core must default to a stable model id supplied
@@ -29,7 +29,9 @@
  * comment) that a manual scanner is prone to. `typescript` is already a project
  * dependency, so the guard stays dependency-light.
  *
- * Scope: the engine CORE only. `clients/**` (SDK adapters), `testing/**` (test
+ * Scope: the engine CORE only. `clients/**` (SDK adapters), `cli/**` (the
+ * command-line front end — it reads the environment and prints example data by
+ * definition, which is exactly what the core must not do), `testing/**` (test
  * infra), `examples/**` (demo code), and `*.checks.ts` (these guards) are
  * excluded, as are vendored/build dirs (`node_modules`, `dist`).
  */
@@ -57,11 +59,12 @@ const collectTs = (dir: string): string[] => {
   return out;
 };
 
-/** Core = every engine `.ts` EXCEPT clients/, testing/, examples/, and *.checks.ts. */
+/** Core = every engine `.ts` EXCEPT clients/, cli/, testing/, examples/, and *.checks.ts. */
 const isCoreFile = (path: string): boolean => {
   const rel = path.slice(ENGINE_DIR.length + 1);
   if (
     rel.startsWith("clients/") ||
+    rel.startsWith("cli/") ||
     rel.startsWith("testing/") ||
     rel.startsWith("examples/")
   ) {

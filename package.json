@@ -1,6 +1,9 @@
 {
   "name": "ai-journalist",
   "version": "0.8.2",
+  "bin": {
+    "ai-journalist": "./cli/bin.mjs"
+  },
   "description": "A domain-agnostic AI journalist / blog-generation engine behind hexagonal ports.",
   "type": "module",
   "license": "MIT",
@@ -34,6 +37,7 @@
   "exports": {
     ".": "./index.ts",
     "./assembly": "./assembly.ts",
+    "./cli": "./cli/main.ts",
     "./clients/auto": "./clients/auto.ts",
     "./clients/datagod": "./clients/datagod.ts",
     "./clients/firecrawl-search": "./clients/firecrawl-search.ts",
@@ -67,7 +71,8 @@
     "./write-article": "./write-article.ts"
   },
   "files": [
-    "*.ts",
+    
+    "cli","*.ts",
     "*.json",
     "presets",
     "sources",
@@ -89,9 +94,12 @@
     "test": "npm run test:checks && npm run test:example"
   },
   "dependencies": {
+    "@clack/prompts": "^1.7.0",
     "@openrouter/sdk": "^0.13.21",
     "cheerio": "^1.2.0",
+    "commander": "^15.0.0",
     "date-fns": "^4.1.0",
+    "dotenv": "^17.4.2",
     "firecrawl": "^4.25.2",
     "ollama": "^0.6.3",
     "p-limit": "^7.3.0",
@@ -101,10 +109,12 @@
     "unist-util-visit": "^5.1.0",
     "zod": "^4.4.3"
   },
+  "optionalDependencies": {
+    "tsx": "^4.22.4"
+  },
   "devDependencies": {
     "@types/mdast": "^4.0.4",
     "@types/node": "^25.5.0",
-    "tsx": "latest",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
   }
