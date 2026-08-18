@@ -36,6 +36,22 @@ import { buildDigest, recastTheme } from "./digest";
 import { themeOf, type Plan } from "./planning";
 import { type GeneratedPost, type RunInput } from "./ports";
 
+/**
+ * The one-call entry (also importable via the "./write-article" subpath).
+ * `write-article.ts` imports `runPipeline` from here, so this is a deliberate
+ * ESM cycle: both bindings are hoisted function declarations resolved before
+ * either is called, and `examples/basic.ts` + the checks exercise the path.
+ */
+export {
+  writeArticle,
+  resolveSource,
+  completeBrand,
+  looksLikeFeed,
+  type ArticleInput,
+  type WriteArticleOptions,
+  type WrittenArticle,
+} from "./write-article";
+
 // Re-exported module surface (also importable via the "./digest" subpath).
 export {
   buildDigest,

@@ -34,6 +34,7 @@
   "exports": {
     ".": "./index.ts",
     "./assembly": "./assembly.ts",
+    "./clients/auto": "./clients/auto.ts",
     "./clients/datagod": "./clients/datagod.ts",
     "./clients/firecrawl-search": "./clients/firecrawl-search.ts",
     "./clients/ollama-embedder": "./clients/ollama-embedder.ts",
@@ -62,7 +63,8 @@
     "./sources/newswire": "./sources/newswire.ts",
     "./sources/rss": "./sources/rss.ts",
     "./testing/replay": "./testing/replay.ts",
-    "./text": "./text.ts"
+    "./text": "./text.ts",
+    "./write-article": "./write-article.ts"
   },
   "files": [
     "*.ts",
