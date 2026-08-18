@@ -4,7 +4,7 @@
   "bin": {
     "ai-journalist": "./cli/bin.mjs"
   },
-  "description": "A domain-agnostic AI journalist / blog-generation engine behind hexagonal ports.",
+  "description": "Turn your data into a researched, fact-checked article. Point it at a JSON file, a feed, or an API and it writes the story.",
   "type": "module",
   "license": "MIT",
   "author": "Zero G Talent",
