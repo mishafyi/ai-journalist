@@ -40,7 +40,11 @@ sources/lead-image.ts       lead image: source og:image first, Openverse CC fall
 clients/          OpenRouter LlmClient + Firecrawl/SearXNG SearchClient (the reference clients)
 testing/replay.ts record/replay harness (sha256-keyed) for deterministic tests
 *.checks.ts       per-module byte-lock + behavioral checks (run by `npm run test:checks`)
-examples/         runnable demos — basic.ts (offline) + live-minimal.ts (operator-run)
+examples/         runnable demos, all safe to run with no keys (they print SKIP):
+                    basic.ts       the generic pipeline, fully offline
+                    live-minimal.ts the same against a real model + search
+                    news-desk.ts   the trending → resolve → write news desk
+                    probe-feeds.ts vet a candidate feed before trusting it
 ```
 
 ## Mechanical invariants — enforced, never loosen to make a change pass
@@ -117,9 +121,10 @@ three times, once per columnist, off a neutral retell plus a labeled `Analysis`
 section. It now publishes exactly one column: the caller passes a single
 `persona`, and the columnist's own text *is* the article body. There is no
 neutral retell any more. Do not reintroduce one — a reader seeing the same
-headline three times was the bug this replaced. The random draw lives in
-`examples/run-news-desk.ts` (`ROSTER` → `pickOne`), not in the preset, so the
-preset stays deterministic and testable.
+headline three times was the bug this replaced. Which columnist writes is the
+CALLER's choice — a roster and a draw live in the adopter, not in the preset,
+so the preset stays deterministic and testable. See `examples/news-desk.ts`
+for the minimal wiring.
 
 **The author-version contract** (`checkAuthorVersionContract`) is a hard gate,
 not advice. A draft is rejected and re-attempted unless it:
