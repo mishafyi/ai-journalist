@@ -577,6 +577,10 @@ async function orchestrationChecks(): Promise<void> {
       f === "names the columnist"),
     vh("Opinion | Brussels blinked and Beijing collected the winnings").join("; "));
 
+  ok("a possessive is not a fabricated name — apostrophes are ignored on both sides",
+    vh("Brussels blinked at the Commission's tariff climbdown").length === 0,
+    vh("Brussels blinked at the Commission's tariff climbdown").join("; "));
+
   ok("a terse headline with no function words is accepted — the English gate is for FEED headlines",
     vh("Brussels blinked, Beijing collected winnings").length === 0,
     vh("Brussels blinked, Beijing collected winnings").join("; "));

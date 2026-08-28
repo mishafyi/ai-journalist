@@ -620,6 +620,12 @@ export function validateHeadline(
   const h = candidate.trim();
   const hay = norm(`${args.body} ${args.sourceHeadline}`);
   const hayDigits = hay.replace(/[^0-9]/g, " ");
+  // Names are matched with apostrophes removed on BOTH sides. Without it a
+  // correctly written possessive fails its own column: "the Commission's
+  // climbdown" normalises to "commission s", while the headline token
+  // "Commission's" reduces to "Commissions" — a good headline rejected for
+  // punctuation, which costs a fallback to the wire headline.
+  const hayNames = norm(`${args.body} ${args.sourceHeadline}`.replace(/['’]/g, ""));
 
   if (h.length < 25) failures.push(`too short: ${h.length} chars (floor 25)`);
   if (h.length > args.maxChars) failures.push(`too long: ${h.length} chars (cap ${args.maxChars})`);
@@ -645,7 +651,7 @@ export function validateHeadline(
     const bare = w.replace(/[^A-Za-z]/g, "");
     if (bare.length < 3 || !/^[A-Z]/.test(bare)) return;
     if (HEADLINE_STOPWORDS.has(bare.toLowerCase())) return;
-    if (!hay.includes(norm(bare))) failures.push(`name not in the column: ${bare}`);
+    if (!hayNames.includes(norm(bare))) failures.push(`name not in the column: ${bare}`);
   });
 
   // A quotation is the one thing a reader takes as verbatim.
