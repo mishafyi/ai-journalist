@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, pickHeadline, stripFurniture } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, pickHeadline, stripFurniture, validateHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -532,6 +532,64 @@ async function orchestrationChecks(): Promise<void> {
   ok("when nothing fits, takes the shortest so it truncates least",
     pickHeadline(story(LONG, [LONG + " and more besides"]), 20) === LONG,
     String(pickHeadline(story(LONG, [LONG + " and more besides"]), 20)));
+
+  // ── validateHeadline: the column may judge, but it may not assert ────────
+  const HL_COLUMN =
+    "Brussels blinked. The European Commission's tariff climbdown on Tuesday handed Beijing " +
+    "exactly what it wanted, and Ursula von der Leyen called it 'a pragmatic settlement'. " +
+    "The deal covers 12 categories of goods.";
+  const WIRE = "EU strikes tariff deal with China after months of talks";
+  const vh = (h: string): string[] =>
+    validateHeadline(h, { body: HL_COLUMN, sourceHeadline: WIRE, personaName: "Elena Rossi", maxChars: 70 });
+
+  ok("accepts a headline that argues the column's thesis in its own words",
+    vh("Brussels blinked, and Beijing collected the winnings").length === 0,
+    vh("Brussels blinked, and Beijing collected the winnings").join("; "));
+
+  ok("judgement words the column never used are FREE — that is what makes it ours",
+    vh("Brussels blinked, and the folly of it will be paid for later").length === 0,
+    vh("Brussels blinked, and the folly of it will be paid for later").join("; "));
+
+  ok("a number the column does not contain is rejected",
+    vh("Brussels blinked on 47 categories of imported goods").some((f) => f.startsWith("number not in")),
+    vh("Brussels blinked on 47 categories of imported goods").join("; "));
+
+  ok("a number the column DOES contain is fine",
+    vh("Brussels blinked on all 12 categories, and Beijing collected").length === 0,
+    vh("Brussels blinked on all 12 categories, and Beijing collected").join("; "));
+
+  ok("a name the column never mentions is rejected",
+    vh("Brussels blinked, and Macron collected the winnings").some((f) => f.startsWith("name not in")),
+    vh("Brussels blinked, and Macron collected the winnings").join("; "));
+
+  ok("a quotation the column never printed is rejected",
+    vh('Von der Leyen calls her climbdown "a total triumph" for Europe').some((f) =>
+      f.startsWith("quotation not in")),
+    vh('Von der Leyen calls her climbdown "a total triumph" for Europe').join("; "));
+
+  ok("echoing the wire headline defeats the point and is rejected",
+    vh(WIRE).some((f) => f === "echoes the wire headline"), vh(WIRE).join("; "));
+
+  ok("borrowed furniture and the columnist's own name are rejected",
+    vh("Opinion | Brussels blinked and Beijing collected the winnings").some((f) =>
+      f.includes("editorial furniture"))
+    && vh("Elena Rossi on how Brussels blinked and Beijing collected").some((f) =>
+      f === "names the columnist"),
+    vh("Opinion | Brussels blinked and Beijing collected the winnings").join("; "));
+
+  ok("a floating verdict that names nobody is rejected — the reader must know which story it is",
+    vh("Trade policy should not ever reward economic coercion").some((f) =>
+      f === "names nobody and nothing from the column"),
+    vh("Trade policy should not ever reward economic coercion").join("; "));
+
+  ok("a headline ending in a full stop is rejected",
+    vh("Brussels blinked and Beijing collected the winnings.").some((f) => f === "ends in a full stop"),
+    vh("Brussels blinked and Beijing collected the winnings.").join("; "));
+
+  ok("a headline past the SERP limit is rejected",
+    vh("Brussels blinked, Beijing collected the winnings, and the whole continent will pay for it")
+      .some((f) => f.startsWith("too long")),
+    "len ok");
 
   // ── stripFurniture: their editorial furniture is a lie about our page ────
   ok("strips an exclusivity claim we never earned",

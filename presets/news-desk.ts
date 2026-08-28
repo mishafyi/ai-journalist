@@ -565,6 +565,110 @@ export function evidenceWordCap(sourceCount: number, evidenceChars: number, maxC
  *  mid-phrase in the one place most readers meet this paper. */
 export const SERP_TITLE_CHARS = 70;
 
+/** Title case capitalises these, but they name nothing — so a capitalised
+ *  token here is not a claim about the world. Every OTHER capitalised word in
+ *  a proposed headline has to already be in the column. */
+const HEADLINE_STOPWORDS = new Set(
+  ("a an the and but or nor for yet so of in on at to from with without by as is are was were be been " +
+    "has have had do does did will would can could should may might must not no now new still just even " +
+    "this that these those it its his her their our your my what why how when where who whom which whose " +
+    "after before over under against about into out up down off between during through than then there here " +
+    "more most less least all any some each every both few many much other another same such only own too very " +
+    "if because while although though unless until since despite amid across beyond within toward towards")
+    .split(" "),
+);
+
+const norm = (s: string): string =>
+  s.toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[^a-z0-9]+/g, " ").trim();
+
+/** The column's people, places and institutions — every capitalised word that
+ *  isn't a stopword.
+ *
+ *  Deliberately permissive about sentence-initial words: skipping them looks
+ *  tidier but loses a name the column only ever opens a sentence with
+ *  ("Brussels blinked."), and the two failure modes are not symmetrical. A
+ *  false positive here waves through a slightly weaker headline; a false
+ *  negative rejects a good one and reinstates another paper's headline, which
+ *  is the thing this whole mechanism exists to stop. */
+function properNounsOf(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const t of String(text).split(/[^A-Za-z0-9'’-]+/)) {
+    const bare = t.replace(/[^A-Za-z]/g, "");
+    if (bare.length >= 3 && /^[A-Z]/.test(bare) && !HEADLINE_STOPWORDS.has(bare.toLowerCase())) {
+      out.add(bare.toLowerCase());
+    }
+  }
+  return out;
+}
+
+/** Everything a headline must satisfy before it may replace the verbatim one.
+ *
+ *  The old guarantee was structural: copy an outlet's headline and it cannot
+ *  assert anything the reporting didn't. The guarantee here is the same, made
+ *  by inspection instead — a headline may only use names, numbers and
+ *  quotations that are already in the column (whose own facts the evidence
+ *  contract and fact-check audit already govern). Judgement, verbs and framing
+ *  are the columnist's and are deliberately unconstrained; that is the part
+ *  that makes the headline ours.
+ *
+ *  Returns the list of failures — empty means the headline is publishable. */
+export function validateHeadline(
+  candidate: string,
+  args: { body: string; sourceHeadline: string; personaName: string; maxChars: number },
+): string[] {
+  const failures: string[] = [];
+  const h = candidate.trim();
+  const hay = norm(`${args.body} ${args.sourceHeadline}`);
+  const hayDigits = hay.replace(/[^0-9]/g, " ");
+
+  if (h.length < 25) failures.push(`too short: ${h.length} chars (floor 25)`);
+  if (h.length > args.maxChars) failures.push(`too long: ${h.length} chars (cap ${args.maxChars})`);
+  if (!isEnglishHeadline(h)) failures.push("not an English headline");
+  if (stripFurniture(h) !== h) failures.push("opens with editorial furniture we have not earned");
+  if (norm(h).includes(norm(args.personaName))) failures.push("names the columnist");
+
+  // A number in a headline is always a claim.
+  for (const m of h.match(/\d[\d,.]*/g) ?? []) {
+    const digits = m.replace(/[^0-9]/g, "");
+    if (digits !== "" && !hayDigits.includes(digits)) failures.push(`number not in the column: ${m}`);
+  }
+
+  // A capitalised word that is not a stopword is a name, place or institution.
+  const words = h.split(/[^A-Za-z0-9'’.-]+/).filter((w) => w !== "");
+  words.slice(1).forEach((w) => {
+    const bare = w.replace(/[^A-Za-z]/g, "");
+    if (bare.length < 3 || !/^[A-Z]/.test(bare)) return;
+    if (HEADLINE_STOPWORDS.has(bare.toLowerCase())) return;
+    if (!hay.includes(norm(bare))) failures.push(`name not in the column: ${bare}`);
+  });
+
+  // A quotation is the one thing a reader takes as verbatim.
+  for (const m of h.matchAll(/["“']([^"”']{4,})["”']/g)) {
+    if (!hay.includes(norm(m[1] ?? ""))) failures.push(`quotation not in the column: "${m[1]}"`);
+  }
+
+  // If it merely echoes the wire headline, nothing was gained by writing it.
+  const nh = norm(h);
+  const ns = norm(args.sourceHeadline);
+  if (nh === ns || nh.includes(ns) || ns.includes(nh)) failures.push("echoes the wire headline");
+
+  // A headline has to say WHAT HAPPENED, not only what the columnist thinks of
+  // it. Asked for "the column's argument", the model returns floating verdicts
+  // — "Private power needs the state to manage systemic digital risk" — that
+  // name nobody and could sit on any story (first live sample, 2026-08-28).
+  // Requiring one of the column's own proper nouns is the mechanical form of
+  // "a reader must be able to tell which story this is".
+  const named = properNounsOf(args.body);
+  const carries = h
+    .split(/[^A-Za-z0-9'’-]+/)
+    .some((w) => named.has(w.replace(/[^A-Za-z]/g, "").toLowerCase()));
+  if (named.size > 0 && !carries) failures.push("names nobody and nothing from the column");
+
+  if (/\.$/.test(h)) failures.push("ends in a full stop");
+
+  return failures;
+}
+
 // English function words that appear in essentially every English headline vs
 // markers of the languages the site: feeds actually supply (es/pt/fr/de/it/tr).
 // "a"/"en"/"no" are deliberately in NEITHER set — they are words in both camps.
@@ -596,6 +700,14 @@ export function isEnglishHeadline(headline: string): boolean {
 }
 
 /** Longest headline in the SERP limit, chosen from what real outlets printed.
+ *
+ *  Since 2026-08-28 this is the FALLBACK, not the title: `composeHeadline`
+ *  writes the column's own headline and falls back here when the result cannot
+ *  be verified against the column. The rule below was written for a desk that
+ *  retold the news; the desk now files signed op-eds, and printing someone
+ *  else's headline over an original argument was both a duplicate-content
+ *  signal and a misattribution. The property it protected — the title asserts
+ *  nothing the reporting didn't — is now enforced by `validateHeadline`.
  *
  *  The desk never invents a headline — it prints the trending one verbatim, so
  *  the title matches what the sources actually said. But a story arrives with
@@ -649,6 +761,79 @@ export function pickHeadline(story: TrendingStory, maxChars: number): string | n
       ? b.length - a.length || (a < b ? -1 : 1)
       : a.length - b.length || (a < b ? -1 : 1),
   )[0];
+}
+
+/** The column's own headline, written from the column.
+ *
+ *  The desk already demands that every CHAPTER heading inside a column be
+ *  original and drawn from what that chapter says; this applies the same rule
+ *  to the one heading readers actually see. The wire headline is passed in as
+ *  context to argue against, never to copy — `validateHeadline` rejects an
+ *  echo of it, and rejects any name, number or quotation the column does not
+ *  contain.
+ *
+ *  Returns null when nothing survived validation, and the caller keeps the
+ *  verbatim headline: the worst case of this whole mechanism is the behaviour
+ *  the paper had before it. */
+export async function composeHeadline(args: {
+  llm: LlmClient;
+  persona: PersonaProfile;
+  body: string;
+  sourceHeadline: string;
+  maxChars: number;
+  maxAttempts: number;
+  log?: (line: string) => void;
+}): Promise<string | null> {
+  const system =
+    `You write the headline for a signed opinion column in a daily paper.\n\n` +
+    `It must do TWO things at once: say what happened, and land the column's judgement of it. A headline that carries only the judgement ("Private power needs the state to manage risk") is useless — the reader cannot tell which story it is. Name the people, institutions or places at the centre of it.\n\nHARD RULES:\n` +
+    `- At most ${args.maxChars} characters. Shorter is better.\n` +
+    `- Name at least one person, institution or place that the column names, spelled and capitalised exactly as the column spells it.\n` +
+    `- Use ONLY names, places, organisations, numbers and quotations that appear in the column. Introduce nothing new — no figure, no name, no statistic.\n` +
+    `- Do not reuse or lightly reword the wire headline you are shown. It is what other outlets called the news; your headline is what this columnist says about it.\n` +
+    `- No label prefixes ("Opinion:", "Analysis:", "Exclusive:", "Watch:"), no colon-prefixed section tags, and never the columnist's name.\n` +
+    `- No clickbait ("You won't believe", "Here's why"), and no full stop at the end.\n\n` +
+    `GOOD (names the actors, and takes a side): "Brussels blinked, and Beijing collected the winnings"\n` +
+    `BAD (a verdict about nothing in particular): "Trade policy should not reward coercion"`;
+
+  const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+    { role: "system", content: system },
+    {
+      role: "user",
+      content:
+        `COLUMNIST: ${args.persona.name}\n\nWHAT THE WIRES CALLED IT (context only — do NOT reuse):\n${args.sourceHeadline}\n\n` +
+        `THE COLUMN:\n${args.body.slice(0, 6000)}\n\nWrite the headline.`,
+    },
+  ];
+
+  for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {
+    try {
+      const out = await args.llm.completeStructured({
+        messages,
+        schema: z.object({ headline: z.string().min(20).max(160) }),
+        schemaName: "column_headline",
+        temperature: 0.4,
+      });
+      const candidate = stripFurniture(out.headline);
+      const failures = validateHeadline(candidate, {
+        body: args.body,
+        sourceHeadline: args.sourceHeadline,
+        personaName: args.persona.name,
+        maxChars: args.maxChars,
+      });
+      if (failures.length === 0) return candidate;
+      args.log?.(`news-desk: headline attempt ${attempt} rejected — ${failures.join("; ")}`);
+      // Revise, don't regenerate — same shape as the column's contract retry.
+      messages.push({ role: "assistant", content: out.headline });
+      messages.push({
+        role: "user",
+        content: `That headline fails: ${failures.join("; ")}. Fix every point and write one headline.`,
+      });
+    } catch (err: unknown) {
+      args.log?.(`news-desk: headline attempt ${attempt} failed: ${String(err)}`);
+    }
+  }
+  return null;
 }
 
 /** The shipped coverage channel: Google News, US edition, last week. */
@@ -1259,13 +1444,26 @@ export function createNewsDesk(opts: {
           // `title` is the chosen verbatim headline; `telemetry.topic` below
           // stays the GN headline, because the covered-story ledger is keyed
           // to what the feed said and must keep matching next run.
-          const title = pickHeadline(story, SERP_TITLE_CHARS);
-          if (title === null) {
+          const sourceHeadline = pickHeadline(story, SERP_TITLE_CHARS);
+          if (sourceHeadline === null) {
             log?.(
               `news-desk: "${story.headline}" has no English headline in its cluster — next story`,
             );
             continue;
           }
+          // The column argues its own thesis, so it gets its own headline; the
+          // wire headline stays as the fallback when nothing validates.
+          const composed = await composeHeadline({
+            llm,
+            persona: columnist,
+            body,
+            sourceHeadline,
+            maxChars: SERP_TITLE_CHARS,
+            maxAttempts: 2,
+            log,
+          });
+          if (composed === null) log?.(`news-desk: headline unverified — keeping the wire headline`);
+          const title = composed ?? sourceHeadline;
           const rawSlug = internals.slugify(title);
           const slug =
             rawSlug.length <= 70 ? rawSlug : rawSlug.slice(0, 70).replace(/-[^-]*$/, "").replace(/-+$/, "");
