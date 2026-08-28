@@ -577,6 +577,10 @@ async function orchestrationChecks(): Promise<void> {
       f === "names the columnist"),
     vh("Opinion | Brussels blinked and Beijing collected the winnings").join("; "));
 
+  ok("a terse headline with no function words is accepted — the English gate is for FEED headlines",
+    vh("Brussels blinked, Beijing collected winnings").length === 0,
+    vh("Brussels blinked, Beijing collected winnings").join("; "));
+
   ok("a floating verdict that names nobody is rejected — the reader must know which story it is",
     vh("Trade policy should not ever reward economic coercion").some((f) =>
       f === "names nobody and nothing from the column"),

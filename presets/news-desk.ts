@@ -623,7 +623,13 @@ export function validateHeadline(
 
   if (h.length < 25) failures.push(`too short: ${h.length} chars (floor 25)`);
   if (h.length > args.maxChars) failures.push(`too long: ${h.length} chars (cap ${args.maxChars})`);
-  if (!isEnglishHeadline(h)) failures.push("not an English headline");
+  // No English gate here on purpose. isEnglishHeadline exists to keep a
+  // Spanish or Portuguese FEED headline off an English front page, and it
+  // decides by counting function words — so it reads a punchy headline with
+  // none ("Brussels blinked, Beijing collected winnings") as foreign. This
+  // headline was written from an English column by an English-language
+  // columnist, so the risk it guards cannot arise, and applying it here would
+  // reject exactly the terse headlines worth having.
   if (stripFurniture(h) !== h) failures.push("opens with editorial furniture we have not earned");
   if (norm(h).includes(norm(args.personaName))) failures.push("names the columnist");
 
