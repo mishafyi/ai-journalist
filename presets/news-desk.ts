@@ -608,16 +608,38 @@ export function isEnglishHeadline(headline: string): boolean {
  *  shortest of the rest and let it truncate as little as possible. Candidates
  *  that were themselves cut off by the feed ("…") are never titles.
  */
+/** Another outlet's editorial furniture, which is a claim about THEIR product
+ *  and false about ours: "Exclusive:" says we broke a story we did not,
+ *  "Live updates:" and "Watch:"/"Photos:" promise a live page, a video or a
+ *  gallery that this column is not (AdSense spam policy calls that misleading
+ *  functionality), and a trailing "— Reuters" brands our page as theirs.
+ *
+ *  Deliberately NOT stripped: attributive qualifiers — "Report:", "Sources:",
+ *  "Study:", "Poll:", "Official:". Those describe the CLAIM's provenance, and
+ *  dropping one turns "Report: Iran enriched uranium" into an assertion the
+ *  reporting never made. Format furniture goes; epistemics stay. */
+const LEADING_FURNITURE =
+  /^\s*(?:exclusive|breaking(?:\s+news)?|just\s+in|live(?:\s+updates?)?|updated?|developing|watch|video|photos?|in\s+pictures|listen|podcast|analysis|opinion|editorial|explainer|explained|first\s+on\s+\w+)\s*[:|—–-]\s*/i;
+const TRAILING_OUTLET = /\s*[|—–-]\s*(?:reuters|ap|the\s+ap|afp|bbc(?:\s+news)?|cnn|cnbc|the\s+guardian|npr|axios|politico|the\s+hill)\s*$/i;
+
+/** Strip borrowed furniture, repeatedly — feeds stack it ("Exclusive: Watch: …"). */
+export function stripFurniture(headline: string): string {
+  let h = headline.trim();
+  for (let i = 0; i < 3 && LEADING_FURNITURE.test(h); i += 1) h = h.replace(LEADING_FURNITURE, "");
+  return h.replace(TRAILING_OUTLET, "").trim();
+}
+
 export function pickHeadline(story: TrendingStory, maxChars: number): string | null {
   const candidates = [story.headline, ...story.coverage.map((c) => c.headline)]
-    .map((h) => h.trim())
+    .map((h) => stripFurniture(h))
     .filter((h) => h.length >= 25 && !/[…]|\.\.\.$/.test(h))
     // The paper prints in English, so the title must be an ENGLISH verbatim
     // headline. A story whose entire cluster is non-English returns null and
     // the desk moves on — see isEnglishHeadline for why that is safe.
     .filter(isEnglishHeadline);
   if (candidates.length === 0) {
-    return isEnglishHeadline(story.headline) ? story.headline : null;
+    const fallback = stripFurniture(story.headline);
+    return isEnglishHeadline(fallback) ? fallback : null;
   }
   const fits = candidates.filter((h) => h.length <= maxChars);
   const pool = fits.length > 0 ? fits : candidates;

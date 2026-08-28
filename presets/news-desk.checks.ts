@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, pickHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, pickHeadline, stripFurniture } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -532,6 +532,37 @@ async function orchestrationChecks(): Promise<void> {
   ok("when nothing fits, takes the shortest so it truncates least",
     pickHeadline(story(LONG, [LONG + " and more besides"]), 20) === LONG,
     String(pickHeadline(story(LONG, [LONG + " and more besides"]), 20)));
+
+  // ── stripFurniture: their editorial furniture is a lie about our page ────
+  ok("strips an exclusivity claim we never earned",
+    stripFurniture("Exclusive: Swedish EU letter reopens the frozen-assets debate")
+      === "Swedish EU letter reopens the frozen-assets debate",
+    stripFurniture("Exclusive: Swedish EU letter reopens the frozen-assets debate"));
+
+  ok("strips promises of a format this column is not",
+    stripFurniture("Live updates: Suspect heads to trial") === "Suspect heads to trial"
+    && stripFurniture("Photos: Flood waters close roads") === "Flood waters close roads"
+    && stripFurniture("Opinion | The real bonds between the US and Canada")
+      === "The real bonds between the US and Canada",
+    stripFurniture("Live updates: Suspect heads to trial"));
+
+  ok("strips stacked furniture and a trailing outlet brand",
+    stripFurniture("Breaking: Watch: Volcano erupts on Reunion — Reuters") === "Volcano erupts on Reunion",
+    stripFurniture("Breaking: Watch: Volcano erupts on Reunion — Reuters"));
+
+  ok("KEEPS attributive qualifiers — stripping one would assert what reporting only reported",
+    stripFurniture("Report: Iran enriched uranium past the cap")
+      === "Report: Iran enriched uranium past the cap"
+    && stripFurniture("Study: Sleep loss tracks with dementia risk")
+      === "Study: Sleep loss tracks with dementia risk",
+    stripFurniture("Report: Iran enriched uranium past the cap"));
+
+  ok("a headline with no furniture is returned untouched",
+    stripFurniture(FITS_LONG) === FITS_LONG, stripFurniture(FITS_LONG));
+
+  ok("pickHeadline cleans the candidates it chooses among",
+    pickHeadline(story("x", ["Exclusive: " + FITS_LONG]), SERP_TITLE_CHARS) === FITS_LONG,
+    String(pickHeadline(story("x", ["Exclusive: " + FITS_LONG]), SERP_TITLE_CHARS)));
 
   ok("a feed-truncated candidate is never a title",
     pickHeadline(story(LONG, ["Senate passes sweeping tariff bill after a marathon…"]), SERP_TITLE_CHARS) === LONG,
