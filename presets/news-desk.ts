@@ -620,12 +620,14 @@ export function validateHeadline(
   const h = candidate.trim();
   const hay = norm(`${args.body} ${args.sourceHeadline}`);
   const hayDigits = hay.replace(/[^0-9]/g, " ");
-  // Names are matched with apostrophes removed on BOTH sides. Without it a
-  // correctly written possessive fails its own column: "the Commission's
-  // climbdown" normalises to "commission s", while the headline token
-  // "Commission's" reduces to "Commissions" — a good headline rejected for
-  // punctuation, which costs a fallback to the wire headline.
-  const hayNames = norm(`${args.body} ${args.sourceHeadline}`.replace(/['’]/g, ""));
+  // Names are matched with apostrophes and hyphens removed on BOTH sides,
+  // because a name token is compared letters-only. Without it "the
+  // Commission's climbdown" normalises to "commission s" and "Mette-Marit"
+  // to "mette marit", while the headline tokens reduce to "Commissions" and
+  // "MetteMarits" — good headlines rejected for punctuation, each costing a
+  // fallback to the wire headline. (The live desk did exactly this to
+  // Mette-Marit on 2026-08-28.)
+  const hayNames = norm(`${args.body} ${args.sourceHeadline}`.replace(/['’-]/g, ""));
 
   if (h.length < 25) failures.push(`too short: ${h.length} chars (floor 25)`);
   if (h.length > args.maxChars) failures.push(`too long: ${h.length} chars (cap ${args.maxChars})`);
@@ -799,7 +801,7 @@ export async function composeHeadline(args: {
   const system =
     `You write the headline for a signed opinion column in a daily paper.\n\n` +
     `It must do TWO things at once: say what happened, and land the column's judgement of it. A headline that carries only the judgement ("Private power needs the state to manage risk") is useless — the reader cannot tell which story it is. Name the people, institutions or places at the centre of it.\n\nHARD RULES:\n` +
-    `- At most ${args.maxChars} characters. Shorter is better.\n` +
+    `- Aim for 55-65 characters and never exceed ${args.maxChars}.\n` +
     `- Name at least one person, institution or place that the column names, spelled and capitalised exactly as the column spells it.\n` +
     `- Use ONLY names, places, organisations, numbers and quotations that appear in the column. Introduce nothing new — no figure, no name, no statistic.\n` +
     `- Do not reuse or lightly reword the wire headline you are shown. It is what other outlets called the news; your headline is what this columnist says about it.\n` +

@@ -577,6 +577,20 @@ async function orchestrationChecks(): Promise<void> {
       f === "names the columnist"),
     vh("Opinion | Brussels blinked and Beijing collected the winnings").join("; "));
 
+  ok("a hyphenated name is not a fabricated name — the live desk rejected Mette-Marit for this",
+    validateHeadline("Mette-Marit's silence says more than the palace will", {
+      body: "The palace insists all is well. Mette-Marit's office declined to comment on the ruling.",
+      sourceHeadline: "Norway palace declines to comment on ruling",
+      personaName: "Elena Rossi",
+      maxChars: 70,
+    }).length === 0,
+    validateHeadline("Mette-Marit's silence says more than the palace will", {
+      body: "The palace insists all is well. Mette-Marit's office declined to comment on the ruling.",
+      sourceHeadline: "Norway palace declines to comment on ruling",
+      personaName: "Elena Rossi",
+      maxChars: 70,
+    }).join("; "));
+
   ok("a possessive is not a fabricated name — apostrophes are ignored on both sides",
     vh("Brussels blinked at the Commission's tariff climbdown").length === 0,
     vh("Brussels blinked at the Commission's tariff climbdown").join("; "));
