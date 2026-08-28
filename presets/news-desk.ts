@@ -548,15 +548,17 @@ export async function gatherPrimaryData(args: {
 }
 
 /** Article length should track how much was actually reported, not a flat cap
- *  (operator, 2026-07-28). Base target 500 words for a floored story (the
- *  3-source minimum); +100 per surviving source beyond that; a bonus for a
- *  genuinely large evidence corpus. Clamped to `maxCap` so a padding model
- *  can't run away. This is the ONE governor on length — the 300-word floor in
- *  the contract stays. */
+ *  (operator, 2026-07-28). Base target 700 words for a floored story (the
+ *  3-source minimum — raised from 500 on 2026-08-27: the archive's median ran
+ *  533 words, thin against the depth ad reviewers and the 2026 spam updates
+ *  reward); +100 per surviving source beyond that; a bonus for a genuinely
+ *  large evidence corpus. Clamped to `maxCap` so a padding model can't run
+ *  away. This is the ONE governor on length — the 300-word floor in the
+ *  contract stays. */
 export function evidenceWordCap(sourceCount: number, evidenceChars: number, maxCap: number): number {
-  const bySources = 500 + 100 * Math.max(0, sourceCount - 3);
+  const bySources = 700 + 100 * Math.max(0, sourceCount - 3);
   const byEvidence = Math.min(350, Math.max(0, Math.round((evidenceChars - 7000) / 45)));
-  return Math.max(500, Math.min(maxCap, bySources + byEvidence));
+  return Math.max(700, Math.min(maxCap, bySources + byEvidence));
 }
 
 /** Google truncates a result title around here; a headline past it is cut

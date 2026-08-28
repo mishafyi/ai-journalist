@@ -463,12 +463,12 @@ async function orchestrationChecks(): Promise<void> {
   const chart = fredChartUrl("UNRATE", obs);
   // Dynamic word cap (operator, 2026-07-28): length tracks evidence richness,
   // floored at 500, clamped to the max ceiling.
-  ok("evidenceWordCap: a thin 3-source story stays near the 500 floor",
-    evidenceWordCap(3, 5000, 1100) === 500, String(evidenceWordCap(3, 5000, 1100)));
+  ok("evidenceWordCap: a thin 3-source story stays near the 700 floor",
+    evidenceWordCap(3, 5000, 1100) === 700, String(evidenceWordCap(3, 5000, 1100)));
   ok("evidenceWordCap: more sources raise the cap",
-    evidenceWordCap(5, 5000, 1100) === 700, String(evidenceWordCap(5, 5000, 1100)));
+    evidenceWordCap(5, 5000, 1100) === 900, String(evidenceWordCap(5, 5000, 1100)));
   ok("evidenceWordCap: a large evidence corpus adds a bonus",
-    evidenceWordCap(4, 20000, 1100) === 600 + Math.round((20000 - 7000) / 45), String(evidenceWordCap(4, 20000, 1100)));
+    evidenceWordCap(4, 20000, 1100) === 800 + Math.round((20000 - 7000) / 45), String(evidenceWordCap(4, 20000, 1100)));
   ok("evidenceWordCap: never exceeds the max ceiling",
     evidenceWordCap(9, 60000, 1100) === 1100, String(evidenceWordCap(9, 60000, 1100)));
 
