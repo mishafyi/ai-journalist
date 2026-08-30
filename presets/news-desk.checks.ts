@@ -613,6 +613,14 @@ async function orchestrationChecks(): Promise<void> {
     pickHeadline(story(LONG, [LONG + " and more besides"]), 20) === LONG,
     String(pickHeadline(story(LONG, [LONG + " and more besides"]), 20)));
 
+  // Length floor removed (operator, 2026-08-30: "remove the ≥25 chars
+  // requirement") — a short real English headline beats no headline at all.
+  // Before: this cluster's only English wire was filtered for being 23 chars
+  // and the desk fell through to the translation path.
+  ok("a short English coverage headline is a real candidate — no length floor",
+    pickHeadline(story("Los mercados esperan la decisión del banco central", ["Fed holds rates for now"]), SERP_TITLE_CHARS) === "Fed holds rates for now",
+    String(pickHeadline(story("Los mercados esperan la decisión del banco central", ["Fed holds rates for now"]), SERP_TITLE_CHARS)));
+
   // ── validateHeadline: the column may judge, but it may not assert ────────
   const HL_COLUMN =
     "Brussels blinked. The European Commission's tariff climbdown on Tuesday handed Beijing " +
@@ -637,6 +645,22 @@ async function orchestrationChecks(): Promise<void> {
   ok("a number the column DOES contain is fine",
     vh("Brussels blinked on all 12 categories, and Beijing collected").length === 0,
     vh("Brussels blinked on all 12 categories, and Beijing collected").join("; "));
+
+  // The compose context is now the WHOLE cluster (operator, 2026-08-30: "feed
+  // all headlines from qualified sources"), so validateHeadline accepts the
+  // wire list: a name any qualified wire printed is admissible, and echoing
+  // ANY wire — not just the chosen one — gains nothing and fails.
+  const WIRES = [WIRE, "Von der Leyen defends the settlement in Strasbourg"] as const;
+  const vhAll = (h: string): string[] =>
+    validateHeadline(h, { body: HL_COLUMN, sourceHeadline: WIRES, personaName: "Elena Rossi", maxChars: 70 });
+
+  ok("a name carried only by another wire in the cluster is admissible",
+    vhAll("Brussels blinked in Strasbourg, and Beijing collected").length === 0,
+    vhAll("Brussels blinked in Strasbourg, and Beijing collected").join("; "));
+
+  ok("echoing ANY wire in the cluster is rejected, not just the chosen one",
+    vhAll("Von der Leyen defends the settlement in Strasbourg").some((f) => f.includes("echoes")),
+    vhAll("Von der Leyen defends the settlement in Strasbourg").join("; "));
 
   ok("a name the column never mentions is rejected",
     vh("Brussels blinked, and Macron collected the winnings").some((f) => f.startsWith("name not in")),

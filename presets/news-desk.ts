@@ -661,14 +661,20 @@ function properNounsOf(text: string): Set<string> {
  *  are the columnist's and are deliberately unconstrained; that is the part
  *  that makes the headline ours.
  *
+ *  `sourceHeadline` is one wire headline or the cluster's whole list: a name
+ *  or number ANY qualified wire printed is admissible, and echoing any of
+ *  them fails.
+ *
  *  Returns the list of failures — empty means the headline is publishable. */
 export function validateHeadline(
   candidate: string,
-  args: { body: string; sourceHeadline: string; personaName: string; maxChars: number },
+  args: { body: string; sourceHeadline: string | readonly string[]; personaName: string; maxChars: number },
 ): string[] {
   const failures: string[] = [];
   const h = candidate.trim();
-  const hay = norm(`${args.body} ${args.sourceHeadline}`);
+  const sources = typeof args.sourceHeadline === "string" ? [args.sourceHeadline] : args.sourceHeadline;
+  const sourceText = sources.join(" ");
+  const hay = norm(`${args.body} ${sourceText}`);
   const hayDigits = hay.replace(/[^0-9]/g, " ");
   // Names are matched with apostrophes and hyphens removed on BOTH sides,
   // because a name token is compared letters-only. Without it "the
@@ -677,7 +683,7 @@ export function validateHeadline(
   // "MetteMarits" — good headlines rejected for punctuation, each costing a
   // fallback to the wire headline. (The live desk did exactly this to
   // Mette-Marit on 2026-08-28.)
-  const hayNames = norm(`${args.body} ${args.sourceHeadline}`.replace(/['’-]/g, ""));
+  const hayNames = norm(`${args.body} ${sourceText}`.replace(/['’-]/g, ""));
 
   if (h.length < 25) failures.push(`too short: ${h.length} chars (floor 25)`);
   if (h.length > args.maxChars) failures.push(`too long: ${h.length} chars (cap ${args.maxChars})`);
@@ -711,10 +717,15 @@ export function validateHeadline(
     if (!hay.includes(norm(m[1] ?? ""))) failures.push(`quotation not in the column: "${m[1]}"`);
   }
 
-  // If it merely echoes the wire headline, nothing was gained by writing it.
+  // If it merely echoes ANY wire headline, nothing was gained by writing it.
   const nh = norm(h);
-  const ns = norm(args.sourceHeadline);
-  if (nh === ns || nh.includes(ns) || ns.includes(nh)) failures.push("echoes the wire headline");
+  for (const s of sources) {
+    const ns = norm(s);
+    if (ns !== "" && (nh === ns || nh.includes(ns) || ns.includes(nh))) {
+      failures.push("echoes the wire headline");
+      break;
+    }
+  }
 
   // A headline has to say WHAT HAPPENED, not only what the columnist thinks of
   // it. Asked for "the column's argument", the model returns floating verdicts
@@ -808,7 +819,9 @@ export function stripFurniture(headline: string): string {
 export function pickHeadline(story: TrendingStory, maxChars: number): string | null {
   const candidates = [story.headline, ...story.coverage.map((c) => c.headline)]
     .map((h) => stripFurniture(h))
-    .filter((h) => h.length >= 25 && !/[…]|\.\.\.$/.test(h))
+    // No length floor (operator, 2026-08-30) — a short real headline is still
+    // a verbatim title; only feed-truncated candidates are never titles.
+    .filter((h) => !/[…]|\.\.\.$/.test(h))
     // The paper prints in English, so the VERBATIM title must be an English
     // headline. A story whose entire cluster is non-English returns null and
     // the desk falls back to translateHeadline — a validated translation of
@@ -832,10 +845,11 @@ export function pickHeadline(story: TrendingStory, maxChars: number): string | n
  *
  *  The desk already demands that every CHAPTER heading inside a column be
  *  original and drawn from what that chapter says; this applies the same rule
- *  to the one heading readers actually see. The wire headline is passed in as
- *  context to argue against, never to copy — `validateHeadline` rejects an
- *  echo of it, and rejects any name, number or quotation the column does not
- *  contain.
+ *  to the one heading readers actually see. EVERY headline the cluster
+ *  printed is passed in as context to argue against, never to copy (operator,
+ *  2026-08-30: all qualified outlets' headlines, not just the chosen one) —
+ *  `validateHeadline` rejects an echo of any of them, and rejects any name,
+ *  number or quotation that neither the column nor a wire carries.
  *
  *  Returns null when nothing survived validation, and the caller keeps the
  *  verbatim headline: the worst case of this whole mechanism is the behaviour
@@ -844,7 +858,7 @@ export async function composeHeadline(args: {
   llm: LlmClient;
   persona: PersonaProfile;
   body: string;
-  sourceHeadline: string;
+  sourceHeadlines: readonly string[];
   maxChars: number;
   maxAttempts: number;
   log?: (line: string) => void;
@@ -855,7 +869,7 @@ export async function composeHeadline(args: {
     `- Aim for 55-65 characters and never exceed ${args.maxChars}.\n` +
     `- Name at least one person, institution or place that the column names, spelled and capitalised exactly as the column spells it.\n` +
     `- Use ONLY names, places, organisations, numbers and quotations that appear in the column. Introduce nothing new — no figure, no name, no statistic.\n` +
-    `- Do not reuse or lightly reword the wire headline you are shown. It is what other outlets called the news; your headline is what this columnist says about it.\n` +
+    `- Do not reuse or lightly reword any of the wire headlines you are shown. They are what other outlets called the news; your headline is what this columnist says about it.\n` +
     `- No label prefixes ("Opinion:", "Analysis:", "Exclusive:", "Watch:"), no colon-prefixed section tags, and never the columnist's name.\n` +
     `- No clickbait ("You won't believe", "Here's why"), and no full stop at the end.\n\n` +
     `GOOD (names the actors, and takes a side): "Brussels blinked, and Beijing collected the winnings"\n` +
@@ -866,7 +880,7 @@ export async function composeHeadline(args: {
     {
       role: "user",
       content:
-        `COLUMNIST: ${args.persona.name}\n\nWHAT THE WIRES CALLED IT (context only — do NOT reuse):\n${args.sourceHeadline}\n\n` +
+        `COLUMNIST: ${args.persona.name}\n\nWHAT THE WIRES CALLED IT (context only — do NOT reuse any of them):\n${args.sourceHeadlines.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
         `THE COLUMN:\n${args.body.slice(0, 6000)}\n\nWrite the headline.`,
     },
   ];
@@ -882,7 +896,7 @@ export async function composeHeadline(args: {
       const candidate = stripFurniture(out.headline);
       const failures = validateHeadline(candidate, {
         body: args.body,
-        sourceHeadline: args.sourceHeadline,
+        sourceHeadline: args.sourceHeadlines,
         personaName: args.persona.name,
         maxChars: args.maxChars,
       });
@@ -1630,12 +1644,23 @@ export function createNewsDesk(opts: {
             log?.(`news-desk: no English wire headline — using validated translation: "${sourceHeadline}"`);
           }
           // The column argues its own thesis, so it gets its own headline; the
-          // wire headline stays as the fallback when nothing validates.
+          // wire headline stays as the fallback when nothing validates. The
+          // compose context is EVERY headline the cluster printed (operator,
+          // 2026-08-30: "feed all headlines from qualified sources") — Google
+          // News only clusters publishers it has admitted, the same doctrine
+          // translateHeadline trusts — with the chosen wire/translation first.
+          const wires = [
+            ...new Set(
+              [sourceHeadline, story.headline, ...story.coverage.map((c) => c.headline)]
+                .map((h) => stripFurniture(h))
+                .filter((h) => h.length >= 10),
+            ),
+          ];
           const composed = await composeHeadline({
             llm,
             persona: columnist,
             body,
-            sourceHeadline,
+            sourceHeadlines: wires,
             maxChars: SERP_TITLE_CHARS,
             maxAttempts: 2,
             log,
