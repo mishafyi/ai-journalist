@@ -32,7 +32,7 @@ const GOOD_BODY = [
 ].join("\n\n");
 
 function contractChecks(): void {
-  const args = { outletNames: ["Wire", "Beacon", "Teaser Daily"], parallelEvent: "Panic of 1907", wordCap: 600, writerName: "The Historian" };
+  const args = { outletNames: ["Wire", "Beacon", "Teaser Daily"], parallelEvent: "Panic of 1907", echoEvents: [] as readonly string[], wordCap: 600, writerName: "The Historian" };
   ok("contract: the good fixture passes", checkAuthorVersionContract(GOOD_BODY, args).ok,
     checkAuthorVersionContract(GOOD_BODY, args).failures.join(" | "));
 
@@ -134,7 +134,7 @@ async function composeChecks(): Promise<void> {
     llm, persona: PERSONAS.historian, storyHeadline: "h", evidenceBlock: "…",
     outletNames: ["Wire", "Beacon"],
     parallel: { event: "Panic of 1907", era: "1907", actors: ["J.P. Morgan"], claimedSimilarity: "s", wikipediaTitle: "t", wikipediaUrl: "u", extract: "e", score: 1 },
-    wordCap: 600, maxAttempts: 3,
+    echoes: [], wordCap: 600, maxAttempts: 3,
   });
   ok("compose: contract failure retries once then returns the passing column",
     out === GOOD_BODY && prompts.length === 2 && (prompts[1] ?? "").includes("at least 2 outlets"),
@@ -149,7 +149,7 @@ async function composeChecks(): Promise<void> {
     await composeAuthorVersion({
       llm: { async complete(): Promise<string> { return "too short"; } } as unknown as LlmClient,
       persona: PERSONAS.historian, storyHeadline: "h", evidenceBlock: "…",
-      outletNames: ["Wire", "Beacon"], parallel: null, wordCap: 600, maxAttempts: 2,
+      outletNames: ["Wire", "Beacon"], parallel: null, echoes: [], wordCap: 600, maxAttempts: 2,
     });
   } catch (err: unknown) {
     threw = String(err);

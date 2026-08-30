@@ -419,4 +419,9 @@ export interface PersonaProfile {
    *  presented with an explicit AI-persona marker — invented bios must never
    *  read as real humans. */
   bio?: string;
+  /** Standing editorial lens for a FEW personas (news-desk
+   *  applyEditorialLens): judged per story after the line edit and applied
+   *  as the final read only when the story genuinely carries it — most
+   *  stories, and most personas, pass through untouched. */
+  lens?: string;
 }

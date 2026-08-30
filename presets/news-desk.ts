@@ -112,7 +112,7 @@ export function dekFrom(markdown: string): string {
  *  and argues the author's take (bottom line + verified-parallel rules). */
 export function checkAuthorVersionContract(
   version: string,
-  args: { outletNames: readonly string[]; parallelEvent: string | null; wordCap: number; writerName: string },
+  args: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[]; wordCap: number; writerName: string },
 ): { ok: boolean; failures: string[] } {
   const failures: string[] = [];
   const words = version.trim().split(/\s+/).length;
@@ -137,6 +137,14 @@ export function checkAuthorVersionContract(
       failures.push(`must name the verified parallel ("${args.parallelEvent}")`);
   } else if (!version.includes(NO_PARALLEL_PHRASE)) {
     failures.push(`no verified parallel: must include "${NO_PARALLEL_PHRASE}" verbatim`);
+  }
+  // Recent echoes are seasoning, not the spine — but when the desk verified
+  // two or more, a column that names none of them wasted the research
+  // (operator, 2026-08-30). One named echo satisfies it; with a single
+  // survivor the prompt alone decides, so "leave out what doesn't serve"
+  // stays winnable.
+  if (args.echoEvents.length >= 2 && !args.echoEvents.some((e) => namesEvent(version, e))) {
+    failures.push(`must weave in at least one verified recent echo (any of: ${args.echoEvents.join("; ")})`);
   }
   if (/wikipedia|encyclopedia/i.test(version)) failures.push("must not mention Wikipedia/encyclopedias (verification is internal)");
   // Chapters are required, and each title must be ORIGINAL — written from what
@@ -169,6 +177,9 @@ export async function composeAuthorVersion(args: {
   evidenceBlock: string;
   outletNames: readonly string[];
   parallel: VerifiedParallel | null;
+  /** Verified recent echoes (≤20y) threaded through as color — see the
+   *  echo round in createNewsDesk. Empty = the column runs without them. */
+  echoes: readonly VerifiedParallel[];
   wordCap: number;
   maxAttempts: number;
   model?: string;
@@ -180,6 +191,17 @@ export async function composeAuthorVersion(args: {
     parallel === null
       ? `NO parallel survived verification. You MUST include this sentence verbatim: "${NO_PARALLEL_PHRASE}" — then argue on the evidence alone.`
       : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument (by its name as given above) and COMMIT to it: argue why this precedent supports your judgment completely — the shared mechanism, not surface resemblance. Never hedge the parallel or list where it fails; if you find yourself needing disclaimers, you are arguing it wrong (operator, 2026-07-26: one side, supported by the precedent, argued all the way).`;
+
+  // Recent echoes ride as SEASONING (operator, 2026-08-30: "pepper 5-10
+  // sentences, 1-2 sparingly in different parts of the text, comparisons up
+  // to 20 years back"): verified like the central parallel, threaded through
+  // as color, never the spine.
+  const echoBlock =
+    args.echoes.length === 0
+      ? ""
+      : `\n\nVERIFIED RECENT ECHOES (the last twenty years — same internal fact-check rules as the background above: the record wins over your memory, and no encyclopedia is ever mentioned in the column):\n${args.echoes
+          .map((e, i) => `${i + 1}. ${e.event} (${e.era}) — ${e.claimedSimilarity}\n   Record: ${e.extract.slice(0, 400)}`)
+          .join("\n")}\nPepper these through the column as COLOR: five to ten sentences across the whole piece, never more than one or two in any single spot, spread across different chapters — each drawing the line between then and now (what this same person did before, the earlier chapter of this same relationship, the comparable event and how it ended). They season the argument; your central parallel above, when you have one, remains the spine. Name each echo you use by the name given above, and leave out any echo that does not serve your argument.`;
 
   // The desk's standing editorial tests live in the SYSTEM prompt, with who
   // the columnist is — they are how this paper writes, not instructions about
@@ -198,7 +220,7 @@ export async function composeAuthorVersion(args: {
   const system = `You are ${persona.name}, an opinion columnist with a decided worldview, writing your COMPLETE column on today's story: you retell what happened AND argue what it means, fused in one voice — yours. The facts belong to the reporting; the framing, emphasis, and verdict belong to you.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean; live it, never recite it): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}\n\n${standards}`;
 
   const target = `${Math.round(args.wordCap * 0.7)}-${Math.round(args.wordCap * 0.85)}`;
-  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position with force; no both-sides hedging, no "time will tell"\n- End on ONE committed verdict — a final paragraph that lands your position hard, no hedging. Do NOT label it ("The bottom line", "In sum", "The upshot", "In conclusion"): a columnist doesn't announce the verdict, they just deliver it\n- Break the piece into 2-4 chapters, each opening with a markdown heading ("## ..."). EVERY chapter title must be ORIGINAL and written from what THAT chapter actually says — a specific line a reader could only have written after reading it. NEVER use a generic label ("Analysis", "Context", "Background", "Conclusion", "What happened", "The numbers") and NEVER put your own name in a heading
+  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}${echoBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position with force; no both-sides hedging, no "time will tell"\n- End on ONE committed verdict — a final paragraph that lands your position hard, no hedging. Do NOT label it ("The bottom line", "In sum", "The upshot", "In conclusion"): a columnist doesn't announce the verdict, they just deliver it\n- Break the piece into 2-4 chapters, each opening with a markdown heading ("## ..."). EVERY chapter title must be ORIGINAL and written from what THAT chapter actually says — a specific line a reader could only have written after reading it. NEVER use a generic label ("Analysis", "Context", "Background", "Conclusion", "What happened", "The numbers") and NEVER put your own name in a heading
 - This is an OP-ED, not a briefing: be very opinionated. Take a side in the first paragraph and press it all the way through — name who is wrong and say why, make the judgment call the reporting won't, and let your convictions show in the verbs. No neutrality, no "on the other hand", no hedging\n- ${target} words, hard cap ${args.wordCap} — unmistakably in your voice.`;
 
   // Retry = REVISE the previous draft, never regenerate: full rewrites under
@@ -221,6 +243,7 @@ export async function composeAuthorVersion(args: {
     const verdict = checkAuthorVersionContract(version, {
       outletNames: args.outletNames,
       parallelEvent: parallel === null ? null : parallel.event,
+      echoEvents: args.echoes.map((e) => e.event),
       wordCap: args.wordCap,
       writerName: persona.name,
     });
@@ -244,7 +267,7 @@ export async function composeAuthorVersion(args: {
 export async function lineEditAuthorVersion(args: {
   llm: LlmClient;
   body: string;
-  contract: { outletNames: readonly string[]; parallelEvent: string | null; wordCap: number; writerName: string };
+  contract: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[]; wordCap: number; writerName: string };
   log?: (line: string) => void;
 }): Promise<string> {
   const words = args.body.trim().split(/\s+/).length;
@@ -281,6 +304,66 @@ export async function lineEditAuthorVersion(args: {
   }
 }
 
+/** The persona's standing editorial lens — the FINAL read, after the line
+ *  edit (operator, 2026-08-30: "some articles should evoke a sense of
+ *  justice … select a few authors … the whole voice of the article pushed
+ *  through this lens as final editorial"). Two honest steps, the
+ *  append-update shape: a structured judgment of whether THIS story carries
+ *  the lens — "no" is the expected answer and changes nothing — then a
+ *  full-voice rewrite only on a yes. The rewrite ships only inside
+ *  lengthSafe's 70-130% band AND still passing checkAuthorVersionContract;
+ *  any rejection or throw keeps the edited body, so the desk's hot path
+ *  grows no new failure mode. Personas without a lens pass through free. */
+export async function applyEditorialLens(args: {
+  llm: LlmClient;
+  body: string;
+  persona: PersonaProfile;
+  contract: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[]; wordCap: number; writerName: string };
+  log?: (line: string) => void;
+}): Promise<string> {
+  const lens = args.persona.lens;
+  if (lens === undefined || lens.trim() === "") return args.body;
+  try {
+    const judgment = await args.llm.completeStructured({
+      messages: [
+        {
+          role: "system",
+          content: `You are ${args.persona.name}, deciding whether your standing editorial lens applies to a finished column. THE LENS:\n${lens}\n\nMost columns do NOT carry it. Judge honestly — "no" is the expected answer, and a forced yes cheapens the columns that genuinely qualify.`,
+        },
+        { role: "user", content: `THE COLUMN:\n${args.body}\n\nDoes this story genuinely carry the lens?` },
+      ],
+      schema: z.object({ applies: z.boolean(), why: z.string().min(8) }),
+      schemaName: "editorial_lens_judgment",
+      temperature: 0.2,
+    });
+    if (!judgment.applies) {
+      args.log?.(`news-desk: lens (${args.persona.name}) not applied — ${judgment.why}`);
+      return args.body;
+    }
+    args.log?.(`news-desk: lens (${args.persona.name}) applies — ${judgment.why}`);
+    const rewritten = await args.llm.complete({
+      system: `You are ${args.persona.name}. Your standing editorial lens, and THIS story carries it:\n${lens}`,
+      prompt: `Rewrite your column so its WHOLE VOICE presses through the lens — the charge lives in the verbs, the emphasis, and the verdict, not in labels pasted on top.\nRules:\n- Same facts: every name, number, quote, outlet attribution, markdown link and heading stays; you may not add or alter a factual claim\n- Keep the structure and roughly the length — this is a re-voicing, not a new column\n- No moralising announcements ("This is an outrage"); the reader must FEEL the charge from how the sentences are built\nOutput ONLY the rewritten markdown column.\n\nYOUR COLUMN:\n${args.body}`,
+      temperature: 0.5,
+    });
+    const cleaned = stripPreambleAndFence(rewritten).trim();
+    if (lengthSafe("lens-edit", args.body, cleaned) !== cleaned) {
+      args.log?.("news-desk: lens rewrite rejected (outside the 70-130% length band) — keeping the edited body");
+      return args.body;
+    }
+    const verdict = checkAuthorVersionContract(cleaned, args.contract);
+    if (!verdict.ok) {
+      args.log?.(`news-desk: lens rewrite rejected (broke the contract: ${verdict.failures.join(" | ")}) — keeping the edited body`);
+      return args.body;
+    }
+    args.log?.(`news-desk: lens applied (${args.persona.name})`);
+    return cleaned;
+  } catch (err: unknown) {
+    args.log?.(`news-desk: lens failed (best-effort, keeping the edited body): ${String(err)}`);
+    return args.body;
+  }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Part 2: createNewsDesk — the orchestration. Trending (Google News) →
 // resolution against ALL outlet indexes (newswire + matching, ≥minSources
@@ -304,6 +387,7 @@ export interface NewsDeskKnobs {
   coveredThreshold: number; // same semantics, for covered-story skip
   parallelCount: number; // 4
   parallelMinScore: number; // 0.3
+  echoCount: number; // 4 — recent-echo (≤20y) candidates per column; 0 disables the round
   analysisAttempts: number; // 3
 }
 
@@ -1361,9 +1445,10 @@ export function createNewsDesk(opts: {
           });
         const researchField = async (
           cs: ParallelCandidate[],
+          cap: number,
         ): Promise<{ v: VerifiedParallel; webNotes: string }[]> => {
           const out: { v: VerifiedParallel; webNotes: string }[] = [];
-          for (const c of cs.slice(0, knobs.parallelCount)) {
+          for (const c of cs.slice(0, cap)) {
             try {
               const v = await verifyParallel({
                 candidate: c,
@@ -1439,7 +1524,7 @@ export function createNewsDesk(opts: {
           storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
           count: knobs.parallelCount,
         });
-        let field = await researchField(dropRecent(candidates));
+        let field = await researchField(dropRecent(candidates), knobs.parallelCount);
         let judgedBest = await judgeField(field);
         if (judgedBest === null || judgedBest.score < knobs.parallelMinScore * 100) {
           log?.(
@@ -1452,7 +1537,7 @@ export function createNewsDesk(opts: {
             count: knobs.parallelCount,
             correctiveContext: `Prior candidates scored poorly or failed verification: ${avoid}. Propose DIFFERENT precedents whose causal mechanism matches the story — other eras, other domains.`.slice(0, 1200),
           });
-          const field2 = await researchField(dropRecent(retryCandidates));
+          const field2 = await researchField(dropRecent(retryCandidates), knobs.parallelCount);
           field = [...field, ...field2];
           const rejudged = await judgeField(field);
           if (rejudged !== null && (judgedBest === null || rejudged.score >= judgedBest.score)) judgedBest = rejudged;
@@ -1469,6 +1554,42 @@ export function createNewsDesk(opts: {
               : `selected: ${parallel.event} → ${parallel.wikipediaUrl} (judged ${judgedBest === null ? "n/a" : judgedBest.score.toFixed(0)}/100) — ${parallel.claimedSimilarity}`,
           ].join("\n"),
         );
+
+        // Recent echoes (operator, 2026-08-30: "pepper 5-10 sentences …
+        // comparisons to events, people, relationships or what the person
+        // did, up to 20 years in the past — research the news for those
+        // connections"): a SECOND field, proposed inside a twenty-year window
+        // and verified against the record exactly like the central parallel —
+        // the desk never seasons a column with unchecked memory. No judge
+        // tournament: echoes don't compete for the spine, every verified
+        // survivor rides along and the column threads in the ones that serve.
+        // None verifying is normal, never an error.
+        let echoes: VerifiedParallel[] = [];
+        if (knobs.echoCount > 0) {
+          try {
+            const echoCandidates = await proposeParallels({
+              llm,
+              storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
+              count: knobs.echoCount,
+              windowYears: 20,
+            });
+            const echoField = await researchField(
+              dropRecent(echoCandidates).filter(
+                (c) => parallel === null || !namesEvent(c.event, parallel.event),
+              ),
+              knobs.echoCount,
+            );
+            echoes = echoField.map((f) => f.v);
+          } catch (err: unknown) {
+            log?.(`echoes: research failed (column runs without them): ${String(err)}`);
+          }
+          recordArtifact?.(
+            "echoes",
+            echoes.length === 0
+              ? "none verified"
+              : echoes.map((e) => `${e.event} (${e.era}) → ${e.wikipediaUrl} — ${e.claimedSimilarity}`).join("\n"),
+          );
+        }
 
         const outletNames = contributing.map((c) => c.outlet);
         // Structured, not a "## Sources" chapter in the body. The site renders
@@ -1541,6 +1662,7 @@ export function createNewsDesk(opts: {
             evidenceBlock: evidence,
             outletNames,
             parallel,
+            echoes,
             wordCap: authorWordCap,
             maxAttempts: knobs.analysisAttempts,
             log,
@@ -1556,18 +1678,32 @@ export function createNewsDesk(opts: {
           const body = stripVerdictLabel(rawBody);
           // Pass 6, reintroduced 2026-08-30: the desk shipped columns
           // un-line-edited since the 07-21 cutover, and it read like it.
+          const authorContract = {
+            outletNames,
+            parallelEvent: parallel === null ? null : parallel.event,
+            echoEvents: echoes.map((e) => e.event),
+            wordCap: authorWordCap,
+            writerName: columnist.name,
+          };
           const editedBody = await lineEditAuthorVersion({
             llm,
             body,
-            contract: {
-              outletNames,
-              parallelEvent: parallel === null ? null : parallel.event,
-              wordCap: authorWordCap,
-              writerName: columnist.name,
-            },
+            contract: authorContract,
             log,
           });
-          const content = `${stripVerdictLabel(editedBody)}${chartMarkdown}`;
+          // Final editorial (operator, 2026-08-30): a persona with a standing
+          // lens gives the piece one last read through it — judged per story,
+          // most stories pass untouched — under the same band + contract
+          // guard as the line edit, so a lens can color the paper but never
+          // break it.
+          const finalBody = await applyEditorialLens({
+            llm,
+            body: editedBody,
+            persona: columnist,
+            contract: authorContract,
+            log,
+          });
+          const content = `${stripVerdictLabel(finalBody)}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           try {
             const audit = await runFactCheckAudit(content, evidence, {

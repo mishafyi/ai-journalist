@@ -32,13 +32,17 @@ export async function proposeParallels(args: {
   /** Verified encyclopedia text from a failed round — the re-propose prompt
    *  tells the model its memory conflicted and THIS record wins. */
   correctiveContext?: string;
+  /** Bound proposals to recent history: subjects from roughly the past N
+   *  years — an earlier act by a person at the centre of the story, an
+   *  earlier chapter of the same relationship, a comparable recent event
+   *  (the news-desk echo round passes 20). Omitted = any era. */
+  windowYears?: number;
 }): Promise<ParallelCandidate[]> {
   const result = await args.llm.completeStructured({
     messages: [
       {
         role: "system",
-        content:
-          "You are a careful historian. Propose historical parallels for a current news story: real, well-documented events from any era whose DYNAMICS resemble the story. Use only widely known events with standard Wikipedia articles, and name each by its common encyclopedic title (\"Rwandan genocide\", \"Suez Crisis\") — never a description (\"Industrial Labor Disputes (General)\" is not an event). Never invent events.",
+        content: `You are a careful historian. Propose historical parallels for a current news story: real, well-documented ${args.windowYears === undefined ? "events from any era" : `subjects from the past ${args.windowYears} years ONLY — an earlier action by a person at the centre of today's story, an earlier chapter of the same relationship between the same parties, or a closely comparable recent event`} whose DYNAMICS resemble the story. Use only widely known subjects with standard Wikipedia articles, and name each by its common encyclopedic title ("Rwandan genocide", "Suez Crisis") — never a description ("Industrial Labor Disputes (General)" is not an event). Never invent events.`,
       },
       {
         role: "user",

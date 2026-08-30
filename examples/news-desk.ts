@@ -96,6 +96,7 @@ async function main(): Promise<void> {
       coveredThreshold: 0.35,
       parallelCount: 4,
       parallelMinScore: 0.3,
+      echoCount: 4,
       analysisAttempts: 3,
     },
     log: (line: string) => process.stdout.write(`${line}\n`),

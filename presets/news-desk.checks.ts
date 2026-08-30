@@ -1,6 +1,7 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, lineEditAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, applyEditorialLens, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, lineEditAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
+import { proposeParallels } from "../parallels";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
 import type { createDefaultInternals } from "./default";
 import type { TrendingStory } from "../sources/google-news";
@@ -203,6 +204,9 @@ async function orchestrationChecks(): Promise<void> {
     coveredThreshold: 0.5,
     parallelCount: 1,
     parallelMinScore: 0.1,
+    // Hermetic scenarios skip the echo round; the dedicated unit checks in
+    // lensAndEchoChecks() cover it.
+    echoCount: 0,
     analysisAttempts: 2,
   };
 
@@ -817,6 +821,7 @@ async function lineEditChecks(): Promise<void> {
   const CONTRACT = {
     outletNames: ["Wire", "Beacon"] as const,
     parallelEvent: "Panic of 1907",
+    echoEvents: [] as readonly string[],
     wordCap: 700,
     writerName: "Test Writer",
   };
@@ -944,9 +949,85 @@ async function translateHeadlineChecks(): Promise<void> {
   process.stdout.write("news-desk translate-headline checks: all green\n");
 }
 
+/** The 2026-08-30 editorial additions: verified recent echoes (proposal
+ *  window + contract rule) and the persona lens (honest gate → guarded
+ *  rewrite that can never break the contract). */
+async function lensAndEchoChecks(): Promise<void> {
+  let failures = 0;
+  const ok = (name: string, cond: boolean, detail: string): void => {
+    if (cond) {
+      process.stdout.write(`PASS ${name}\n`);
+    } else {
+      failures += 1;
+      process.stdout.write(`FAIL ${name} — ${detail}\n`);
+    }
+  };
+
+  // ── echo rule: 2+ verified echoes require at least one named ─────────────
+  const eCheck = (v: string, echoEvents: readonly string[]): string[] =>
+    checkAuthorVersionContract(v, { outletNames: ["Reuters", "AP"], parallelEvent: null, echoEvents, wordCap: 900, writerName: "X" }).failures;
+  const NO_ECHO = "## A ledger nobody audited\nwords\n## The bill arrives late\nwords";
+  const ONE_ECHO = `${NO_ECHO} — the Paris Agreement chapter of this fight said as much.`;
+  const TWO = ["Paris Agreement", "Volkswagen emissions scandal"];
+  ok("2+ verified echoes and none named → contract failure",
+    eCheck(NO_ECHO, TWO).some((f) => f.includes("recent echo")),
+    eCheck(NO_ECHO, TWO).join("; "));
+  ok("naming ONE of the echoes satisfies the rule",
+    !eCheck(ONE_ECHO, TWO).some((f) => f.includes("recent echo")),
+    eCheck(ONE_ECHO, TWO).join("; "));
+  ok("a SINGLE verified echo never hard-gates — the prompt alone decides",
+    !eCheck(NO_ECHO, ["Paris Agreement"]).some((f) => f.includes("recent echo")),
+    eCheck(NO_ECHO, ["Paris Agreement"]).join("; "));
+
+  // ── windowYears bounds the proposal to recent history ────────────────────
+  let seenPrompt = "";
+  const captureLlm = {
+    complete: async (): Promise<string> => "unused",
+    completeStructured: async (a: { messages: { content: string }[] }): Promise<unknown> => {
+      seenPrompt = a.messages.map((m) => m.content).join("\n");
+      return { candidates: [{ era: "2015", event: "Paris Agreement", actors: ["UN"], claimedSimilarity: "enforcement lags the promise" }] };
+    },
+  } as unknown as LlmClient;
+  await proposeParallels({ llm: captureLlm, storySummary: "s", count: 3, windowYears: 20 });
+  ok("windowYears turns the proposal recent: the prompt names the 20-year window",
+    seenPrompt.includes("past 20 years"), seenPrompt.slice(0, 200));
+
+  // ── applyEditorialLens: honest gate, guarded rewrite ─────────────────────
+  const filler = Array.from({ length: 320 }, (_, i) => `w${i}`).join(" ");
+  const passing = (tail: string): string =>
+    `Reuters reported the fine and AP confirmed the delay. ${NO_PARALLEL_PHRASE}\n\n## The fine that cost less than the crime\n${filler}\n\n## Who is still waiting for the check\nThe county waited ${tail}`;
+  const LENS_CONTRACT = { outletNames: ["Reuters", "AP"] as const, parallelEvent: null, echoEvents: [] as readonly string[], wordCap: 900, writerName: "X" };
+  const lensPersona = { ...PERSONAS.historian, lens: "THE JUSTICE READ: when harm goes unanswered, press it." };
+  const lensLlm = (applies: boolean, rewrite: string): LlmClient =>
+    ({
+      complete: async (): Promise<string> => rewrite,
+      completeStructured: async (): Promise<unknown> => ({ applies, why: "test judgment" }),
+    }) as unknown as LlmClient;
+  const calm = passing("quietly.");
+  const charged = passing("and the waiting is the scandal.");
+  ok("no lens on the persona → body untouched",
+    (await applyEditorialLens({ llm: lensLlm(true, charged), body: calm, persona: PERSONAS.historian, contract: LENS_CONTRACT })) === calm,
+    "body changed without a lens");
+  ok("lens judged NOT to apply → body untouched",
+    (await applyEditorialLens({ llm: lensLlm(false, charged), body: calm, persona: lensPersona, contract: LENS_CONTRACT })) === calm,
+    "body changed on a no");
+  ok("lens applies and the rewrite passes the contract → rewrite ships",
+    (await applyEditorialLens({ llm: lensLlm(true, charged), body: calm, persona: lensPersona, contract: LENS_CONTRACT })) === charged,
+    "valid lens rewrite was not kept");
+  ok("a rewrite that breaks the contract is discarded — the lens never breaks the paper",
+    (await applyEditorialLens({ llm: lensLlm(true, "just words"), body: calm, persona: lensPersona, contract: LENS_CONTRACT })) === calm,
+    "a contract-breaking rewrite shipped");
+
+  if (failures > 0) {
+    throw new Error(`${failures} lens/echo check(s) failed`);
+  }
+  process.stdout.write("news-desk lens+echo checks: all green\n");
+}
+
 orchestrationChecks()
   .then(() => lineEditChecks())
   .then(() => translateHeadlineChecks())
+  .then(() => lensAndEchoChecks())
   .catch((err: unknown) => {
     process.stderr.write(`news-desk.checks failed: ${String(err)}\n`);
     process.exit(1);
