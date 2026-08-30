@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, lineEditAuthorVersion, pickHeadline, stripFurniture, validateHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, lineEditAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -10,6 +10,10 @@ import type { GeneratedArticle } from "../pipeline";
 
 const STORY1 = "Senate passes sweeping tariff bill after marathon vote";
 const STORY2 = "Central bank raises interest rates to twenty-year high";
+/** Scenario 5: a cluster with no English headline anywhere. The fixture
+ *  translation names only what COLUMN carries, so validateHeadline passes. */
+const STORY5 = "La banca centrale alza i tassi al massimo da vent'anni, i mercati crollano";
+const TRANSLATION5 = "Central bank rate hike echoes the Panic of 1907";
 /** pickHeadline takes the LONGEST real headline that fits 70 chars, so STORY2
  *  publishes under Beacon's cluster headline, not the feed's lead. */
 const CHOSEN_SLUG = "central-bank-raises-rates-to-twenty-year-high-markets-react";
@@ -132,6 +136,9 @@ async function orchestrationChecks(): Promise<void> {
       return COLUMN;
     },
     async completeStructured<T>(args: { schemaName?: string }): Promise<T> {
+      // Scenario 5 only — English-cluster scenarios never reach translation.
+      if (args.schemaName === "wire_headline_translation")
+        return { headline: TRANSLATION5 } as unknown as T;
       if (args.schemaName === "parallel_judge")
         return {
           scores: [{
@@ -460,6 +467,76 @@ async function orchestrationChecks(): Promise<void> {
       post4.slug === CHOSEN_SLUG,
     post4.slug);
 
+  // Scenario 5 — a foreign-only cluster publishes under a validated
+  // TRANSLATION (operator, 2026-08-30: "if something happened in a foreign
+  // country we must definitely translate"). pickHeadline yields no verbatim
+  // title; translateHeadline reads the whole cluster and its output is held
+  // to validateHeadline against the column; composeHeadline (whose structured
+  // call the fixture leaves unhandled → null) falls back to that translation.
+  const PAGES5: Record<string, string> = {
+    "https://wire5.example/tassi": REAL("Wire"),
+    "https://beacon5.example/tassi": REAL("Beacon"),
+    "https://canale5.example/tassi": REAL("Canale"),
+  };
+  const logs5: string[] = [];
+  let published5: GeneratedPost | null = null;
+  const post5 = await createNewsDesk({
+    llm,
+    search: {
+      async search(q: string) {
+        if (q.startsWith("site:")) return [];
+        return [{ title: "Rates story", url: "https://news.google.com/rss/articles/xyz", snippet: "" }];
+      },
+      async scrape(url: string): Promise<string> {
+        const body = PAGES5[url];
+        if (body === undefined) throw new Error(`no fixture page for ${url}`);
+        return body;
+      },
+    },
+    feeds: [],
+    persona: PERSONAS.historian,
+    brand,
+    sink: {
+      async publish(post) {
+        published5 = post;
+        return { url: `memory://${post.slug}`, status: "DRAFT" as const };
+      },
+    },
+    knobs,
+    coveredTopics: async () => [],
+    log: (line) => logs5.push(line),
+    trendingImpl: async () => [
+      {
+        rank: 1,
+        headline: STORY5,
+        leadOutlet: "Canale",
+        coverage: [
+          { outlet: "Gazette FR", headline: "Les marchés chutent après la hausse des taux de la banque centrale" },
+          { outlet: "Blatt DE", headline: "Die Zentralbank erhöht die Zinsen auf ein Zwanzigjahreshoch" },
+        ],
+      },
+    ],
+    indexImpl: async () => [
+      { outlet: "Wire", region: "EU", title: STORY5, url: "https://wire5.example/tassi" },
+      { outlet: "Beacon", region: "EU", title: STORY5, url: "https://beacon5.example/tassi" },
+      { outlet: "Canale", region: "EU", title: STORY5, url: "https://canale5.example/tassi" },
+    ],
+    internalsFactory,
+    parallelFetchImpl,
+  }).run();
+  ok("foreign cluster: the story publishes instead of dropping at the title",
+    published5 !== null, logs5.join(" | ").slice(-400));
+  ok("foreign cluster: the printed title is the VALIDATED translation",
+    (published5 as GeneratedPost | null)?.title === TRANSLATION5 &&
+      post5.slug === "central-bank-rate-hike-echoes-the-panic-of-1907",
+    `${(published5 as GeneratedPost | null)?.title} / ${post5.slug}`);
+  ok("foreign cluster: the run logs that a translation carried the title",
+    logs5.some((l) => l.includes(`using validated translation: "${TRANSLATION5}"`)),
+    logs5.filter((l) => l.includes("headline")).join(" | "));
+  ok("foreign cluster: the covered ledger stays keyed to the FEED headline",
+    String((published5 as GeneratedPost | null)?.telemetry?.topic) === STORY5,
+    JSON.stringify((published5 as GeneratedPost | null)?.telemetry));
+
   // Chart helper (operator, 2026-07-25: graphs from DataGod series, rendered
   // by a maintained service — never hand-rolled SVG).
   const obs = Array.from({ length: 12 }, (_, i) => ({ date: `2026-0${(i % 9) + 1}-01`, value: String(100 + i) }));
@@ -674,7 +751,7 @@ async function orchestrationChecks(): Promise<void> {
     isEnglishHeadline(LONG) && isEnglishHeadline("Hawaii records 140 mph wind gust as hurricane nears") &&
       isEnglishHeadline("Tyson Foods will close or sell three US beef facilities"),
     "");
-  ok("an all-foreign cluster yields NO title — the desk skips the story",
+  ok("an all-foreign cluster yields NO verbatim title — translateHeadline is the desk's fallback",
     pickHeadline(story(ES, [PT]), SERP_TITLE_CHARS) === null,
     String(pickHeadline(story(ES, [PT]), SERP_TITLE_CHARS)));
   ok("a foreign lead with one English headline in the cluster uses the English one",
@@ -769,8 +846,83 @@ async function lineEditChecks(): Promise<void> {
   process.stdout.write("news-desk line-edit checks: all green\n");
 }
 
+/** translateHeadline holds a translation to the printed-title standard:
+ *  validateHeadline against the column, English-only output, null on anything
+ *  that never validates — the caller skips rather than print it. */
+async function translateHeadlineChecks(): Promise<void> {
+  let failures = 0;
+  const ok = (name: string, cond: boolean, detail: string): void => {
+    if (cond) process.stdout.write(`PASS ${name}\n`);
+    else {
+      failures += 1;
+      process.stdout.write(`FAIL ${name} — ${detail}\n`);
+    }
+  };
+
+  const BODY =
+    "## The freeze and the flinch\n\nWire reports the policy rate rose fifty basis points to a twenty-year high, and Beacon reports markets fell two percent on the announcement. The Panic of 1907 is the closest rhyme to this squeeze, and the mechanism is identical.\n\n## Where the flinch lands\n\nThe bank has chosen credibility over flexibility, and it will pay for the first with the second.";
+  const STORY = {
+    rank: 1,
+    headline: STORY5,
+    leadOutlet: "Canale",
+    coverage: [{ outlet: "Gazette FR", headline: "Les marchés chutent après la hausse des taux" }],
+  };
+  const stub = (replies: string[]) => {
+    const queue = [...replies];
+    return {
+      complete: async (): Promise<string> => {
+        throw new Error("unused");
+      },
+      completeStructured: async <T,>(): Promise<T> => {
+        const next = queue.shift();
+        if (next === undefined) throw new Error("stub exhausted");
+        return { headline: next } as unknown as T;
+      },
+    } as unknown as LlmClient;
+  };
+  const argsFor = (llm: LlmClient) => ({
+    llm,
+    story: STORY,
+    body: BODY,
+    personaName: "Test Writer",
+    maxChars: SERP_TITLE_CHARS,
+    maxAttempts: 2,
+    log: (_l: string): void => undefined,
+  });
+
+  ok("a faithful translation naming only column facts is returned",
+    (await translateHeadline(argsFor(stub([TRANSLATION5])))) === TRANSLATION5,
+    "valid translation was not returned");
+  ok("a translation asserting a name the column lacks is revised, then abandoned",
+    (await translateHeadline(argsFor(stub([
+      "Central bank panics as Zurich markets crash badly",
+      "Central bank panics as Zurich markets crash badly",
+    ])))) === null,
+    "an unvalidated name shipped");
+  ok("non-English output never ships",
+    (await translateHeadline(argsFor(stub([STORY5, STORY5])))) === null,
+    "a non-English title shipped");
+  ok("a throwing model yields null, not a crash",
+    (await translateHeadline(argsFor({
+      complete: async (): Promise<string> => {
+        throw new Error("unused");
+      },
+      completeStructured: async <T,>(): Promise<T> => {
+        throw new Error("model died");
+      },
+    } as unknown as LlmClient))) === null,
+    "throw did not resolve to null");
+
+  if (failures > 0) {
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write("news-desk translate-headline checks: all green\n");
+}
+
 orchestrationChecks()
   .then(() => lineEditChecks())
+  .then(() => translateHeadlineChecks())
   .catch((err: unknown) => {
     process.stderr.write(`news-desk.checks failed: ${String(err)}\n`);
     process.exit(1);

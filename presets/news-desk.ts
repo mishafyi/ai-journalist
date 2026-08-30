@@ -751,8 +751,8 @@ const FOREIGN_WORDS =
  *  ponytail: stopword counting, not language ID. A headline with no function
  *  words in either set reads as not-English, which can drop a rare
  *  all-proper-noun English headline — acceptable, because the gate sees every
- *  headline in the cluster and a story that matters re-trends with English
- *  coverage within a cycle or two. */
+ *  headline in the cluster, and a cluster with no survivor now falls back to
+ *  translateHeadline rather than dropping the story. */
 export function isEnglishHeadline(headline: string): boolean {
   // Non-Latin scripts are never English headlines.
   if (/[Ѐ-ӿ֐-׿؀-ۿ぀-ヿ一-鿿가-힯]/.test(headline)) {
@@ -809,9 +809,10 @@ export function pickHeadline(story: TrendingStory, maxChars: number): string | n
   const candidates = [story.headline, ...story.coverage.map((c) => c.headline)]
     .map((h) => stripFurniture(h))
     .filter((h) => h.length >= 25 && !/[…]|\.\.\.$/.test(h))
-    // The paper prints in English, so the title must be an ENGLISH verbatim
+    // The paper prints in English, so the VERBATIM title must be an English
     // headline. A story whose entire cluster is non-English returns null and
-    // the desk moves on — see isEnglishHeadline for why that is safe.
+    // the desk falls back to translateHeadline — a validated translation of
+    // the whole cluster — before giving up on the story.
     .filter(isEnglishHeadline);
   if (candidates.length === 0) {
     const fallback = stripFurniture(story.headline);
@@ -895,6 +896,83 @@ export async function composeHeadline(args: {
       });
     } catch (err: unknown) {
       args.log?.(`news-desk: headline attempt ${attempt} failed: ${String(err)}`);
+    }
+  }
+  return null;
+}
+
+/** An English headline translated from a foreign-only cluster — the fallback
+ *  `pickHeadline` cannot supply when no outlet wrote one in English.
+ *
+ *  Foreign-covered news is still news (operator, 2026-08-30): the desk used
+ *  to drop a fully composed, audited column at this point — 578 drops in 14
+ *  days of run logs. The WHOLE cluster goes into the prompt (every outlet's
+ *  headline, every language — cross-language corroboration), and the output
+ *  is held to the same standard as a composed headline: `validateHeadline`
+ *  against the column, which is the paper's ground truth for names, numbers
+ *  and spelling. A translation that asserts anything the column does not
+ *  carry is revised once, then abandoned — null, and the caller skips the
+ *  story, so nothing unvalidated ever prints. */
+export async function translateHeadline(args: {
+  llm: LlmClient;
+  story: TrendingStory;
+  body: string;
+  personaName: string;
+  maxChars: number;
+  maxAttempts: number;
+  log?: (line: string) => void;
+}): Promise<string | null> {
+  const wires = [
+    ...new Set(
+      [
+        `${args.story.leadOutlet}: ${stripFurniture(args.story.headline)}`,
+        ...args.story.coverage.map((c) => `${c.outlet}: ${stripFurniture(c.headline)}`),
+      ].filter((l) => l.split(": ").slice(1).join(": ").length >= 10),
+    ),
+  ].slice(0, 8);
+  const system =
+    `You translate news headlines. The world's press covered ONE story; their headlines are listed below in their original languages. Write the single ENGLISH headline this paper prints for that story.\n\nHARD RULES:\n` +
+    `- A faithful, natural English news headline: report what the wires collectively report. No opinion of your own, no additions, no interpretation.\n` +
+    `- Every name, place, organisation and number must appear EXACTLY as THE COLUMN below spells it — the column is this paper's ground truth, and foreign spellings often differ from it. Assert nothing the column does not contain.\n` +
+    `- Aim for 55-65 characters and never exceed ${args.maxChars}.\n` +
+    `- No label prefixes ("Exclusive:", "Watch:", "Live:"), no clickbait, no full stop at the end.`;
+  const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+    { role: "system", content: system },
+    {
+      role: "user",
+      content:
+        `THE WIRES' HEADLINES:\n${wires.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
+        `THE COLUMN (ground truth for names, numbers and spelling):\n${args.body.slice(0, 6000)}\n\nWrite the English headline.`,
+    },
+  ];
+
+  for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {
+    try {
+      const out = await args.llm.completeStructured({
+        messages,
+        schema: z.object({ headline: z.string().min(20).max(160) }),
+        schemaName: "wire_headline_translation",
+        temperature: 0.3,
+      });
+      const candidate = stripFurniture(out.headline);
+      const failures = isEnglishHeadline(candidate)
+        ? validateHeadline(candidate, {
+            body: args.body,
+            sourceHeadline: args.story.headline,
+            personaName: args.personaName,
+            maxChars: args.maxChars,
+          })
+        : ["not written in English"];
+      if (failures.length === 0) return candidate;
+      args.log?.(`news-desk: headline translation attempt ${attempt} rejected — ${failures.join("; ")}`);
+      // Revise, don't regenerate — same shape as composeHeadline's retry.
+      messages.push({ role: "assistant", content: out.headline });
+      messages.push({
+        role: "user",
+        content: `That headline fails: ${failures.join("; ")}. Fix every point and write one headline.`,
+      });
+    } catch (err: unknown) {
+      args.log?.(`news-desk: headline translation attempt ${attempt} failed: ${String(err)}`);
     }
   }
   return null;
@@ -1524,12 +1602,32 @@ export function createNewsDesk(opts: {
           // `title` is the chosen verbatim headline; `telemetry.topic` below
           // stays the GN headline, because the covered-story ledger is keyed
           // to what the feed said and must keep matching next run.
-          const sourceHeadline = pickHeadline(story, SERP_TITLE_CHARS);
+          const englishWire = pickHeadline(story, SERP_TITLE_CHARS);
+          // Foreign-only cluster → translate the wires (operator, 2026-08-30:
+          // "if something happened in a foreign country we must definitely
+          // translate"). The translation is validated against the column like
+          // any printed title; only when THAT also fails does the story drop —
+          // previously an unconditional drop that discarded a fully composed
+          // column, 578 times in 14 days of run logs.
+          const sourceHeadline =
+            englishWire ??
+            (await translateHeadline({
+              llm,
+              story,
+              body,
+              personaName: columnist.name,
+              maxChars: SERP_TITLE_CHARS,
+              maxAttempts: 2,
+              log,
+            }));
           if (sourceHeadline === null) {
             log?.(
-              `news-desk: "${story.headline}" has no English headline in its cluster — next story`,
+              `news-desk: "${story.headline}" — no English headline in the cluster and no translation validated — next story`,
             );
             continue;
+          }
+          if (englishWire === null) {
+            log?.(`news-desk: no English wire headline — using validated translation: "${sourceHeadline}"`);
           }
           // The column argues its own thesis, so it gets its own headline; the
           // wire headline stays as the fallback when nothing validates.

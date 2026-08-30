@@ -144,6 +144,15 @@ not advice. A draft is rejected and re-attempted unless it:
 Retries **revise the previous draft** rather than restarting. Independent
 re-attempts oscillated — each new draft fixed one failure and broke another.
 
+**The printed title:** the columnist's composed headline (`composeHeadline`,
+validated by `validateHeadline` against the column), falling back to the
+verbatim English wire headline (`pickHeadline`). On a foreign-only cluster a
+translation of the WHOLE cluster (`translateHeadline`, held to the same
+validation) stands in for the wire; a story where neither the composed nor the
+translated headline validates is skipped. Nothing unvalidated and non-verbatim
+ever prints; the column body is the ground truth every title is inspected
+against.
+
 **Matching is typography- and case-insensitive** by construction: `namesEvent`
 and `mentionsName` (in `gates.ts`) normalize en dashes and leading articles.
 Both exist because exact matching produced false negatives that failed valid
