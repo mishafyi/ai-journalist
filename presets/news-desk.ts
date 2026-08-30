@@ -4,7 +4,7 @@
  * Part 2 (createNewsDesk) orchestrates: trending → resolution → floors →
  * verified parallel → ONE columnist's fused column → publish.
  */
-import { mentionsName, namesEvent, NO_PARALLEL_PHRASE, runFactCheckAudit } from "../gates";
+import { mentionsName, namesEvent, NO_PARALLEL_PHRASE, runEdit, runFactCheckAudit } from "../gates";
 import { checkClaims } from "../claim-check";
 import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
@@ -41,6 +41,7 @@ import { createNewswire } from "../sources/newswire";
 import { provenanceOf } from "../sources/provenance";
 import type { OutletFeed, OutletItem } from "../sources/newswire";
 import { createDefaultInternals } from "./default";
+import { lengthSafe, stripPreambleAndFence } from "./text-defaults";
 
 
 /** The section taxonomy — modeled on the NYT / WSJ / Washington Post mastheads,
@@ -229,6 +230,55 @@ export async function composeAuthorVersion(args: {
     args.log?.(`author version (${persona.name}) attempt ${attempt}/${args.maxAttempts} failed contract: ${verdict.failures.join(" | ")}`);
   }
   throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
+}
+
+/** Pass 6 for the desk: line-edit a contract-passing author version (the
+ *  newspaper self-edit pass, gates.runEdit) without ever weakening the gate.
+ *  The edited text ships only when it stays inside lengthSafe's 70–130% band
+ *  AND still passes checkAuthorVersionContract; any rejection — or a thrown
+ *  edit call — keeps the draft, so the desk's hot path grows no new failure
+ *  mode. The word floor injected into the prompt is the DRAFT's own size
+ *  (never below the contract's 300), not runEdit's feature default of 1200:
+ *  without a number near the real size the editor shreds a piece (43–54%
+ *  keeps, 2026-07-08), and 1200 would tell a 700-word column to pad. */
+export async function lineEditAuthorVersion(args: {
+  llm: LlmClient;
+  body: string;
+  contract: { outletNames: readonly string[]; parallelEvent: string | null; wordCap: number; writerName: string };
+  log?: (line: string) => void;
+}): Promise<string> {
+  const words = args.body.trim().split(/\s+/).length;
+  try {
+    const raw = await runEdit(args.body, {
+      llm: args.llm,
+      model: "",
+      withRetry: async (_label, fn) => fn(),
+      ctx: createRunContext("news-desk-line-edit"),
+      gatherExemplars: () => [],
+      fetchPriorTitles: async () => [],
+      embedDedupSurvivors: async () => null,
+      titleExemplarCount: 0,
+      titleCollisionSim: 0,
+      titleEmbedSim: 0,
+      searchTermsCount: 0,
+      editWordFloor: Math.max(300, Math.round(words * 0.85)),
+    });
+    const edited = stripPreambleAndFence(raw).trim();
+    if (lengthSafe("author-line-edit", args.body, edited) !== edited) {
+      args.log?.("news-desk: line edit rejected (outside the 70-130% length band) — keeping the draft");
+      return args.body;
+    }
+    const verdict = checkAuthorVersionContract(edited, args.contract);
+    if (!verdict.ok) {
+      args.log?.(`news-desk: line edit rejected (broke the contract: ${verdict.failures.join(" | ")}) — keeping the draft`);
+      return args.body;
+    }
+    args.log?.(`news-desk: line edit kept (${words} → ${edited.split(/\s+/).length} words)`);
+    return edited;
+  } catch (err: unknown) {
+    args.log?.(`news-desk: line edit failed (best-effort, keeping the draft): ${String(err)}`);
+    return args.body;
+  }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1391,6 +1441,7 @@ export function createNewsDesk(opts: {
           }
 
           const columnist = persona;
+          const authorWordCap = evidenceWordCap(contributing.length, evidence.length, opts.authorVersions?.wordCap ?? 1100);
           const rawBody = await composeAuthorVersion({
             llm,
             persona: columnist,
@@ -1398,18 +1449,33 @@ export function createNewsDesk(opts: {
             evidenceBlock: evidence,
             outletNames,
             parallel,
-            wordCap: evidenceWordCap(contributing.length, evidence.length, opts.authorVersions?.wordCap ?? 1100),
+            wordCap: authorWordCap,
             maxAttempts: knobs.analysisAttempts,
             log,
           });
           // The verdict lands without a label. Strip "**The bottom line:**" and
           // its formulaic kin if the model reaches for the tag anyway — the
           // verdict prose after it stays (operator, 2026-07-28: reads canned).
-          const body = rawBody.replace(
-            /\*\*\s*(?:the\s+)?(?:bottom line|in sum|the upshot|in conclusion|the takeaway)\s*:?\s*\*\*\s*[—–-]?\s*/gi,
-            "",
-          );
-          const content = `${body}${chartMarkdown}`;
+          const stripVerdictLabel = (s: string): string =>
+            s.replace(
+              /\*\*\s*(?:the\s+)?(?:bottom line|in sum|the upshot|in conclusion|the takeaway)\s*:?\s*\*\*\s*[—–-]?\s*/gi,
+              "",
+            );
+          const body = stripVerdictLabel(rawBody);
+          // Pass 6, reintroduced 2026-08-30: the desk shipped columns
+          // un-line-edited since the 07-21 cutover, and it read like it.
+          const editedBody = await lineEditAuthorVersion({
+            llm,
+            body,
+            contract: {
+              outletNames,
+              parallelEvent: parallel === null ? null : parallel.event,
+              wordCap: authorWordCap,
+              writerName: columnist.name,
+            },
+            log,
+          });
+          const content = `${stripVerdictLabel(editedBody)}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           try {
             const audit = await runFactCheckAudit(content, evidence, {

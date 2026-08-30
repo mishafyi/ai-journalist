@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, pickHeadline, stripFurniture, validateHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, lineEditAuthorVersion, pickHeadline, stripFurniture, validateHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
@@ -287,6 +287,9 @@ async function orchestrationChecks(): Promise<void> {
   ok("fact-check audit read the assembled markdown INCLUDING the Analysis",
     prompts.some((p) => p.includes("fact-checker reviewing") && p.includes("## A liquidity halt wearing a modern suit")),
     "no audit prompt carried the Analysis");
+  ok("the author version is line-edited (Pass 6 wired into the desk)",
+    prompts.some((p) => p.startsWith("Line-edit this draft")),
+    "no Line-edit prompt was sent");
   ok("stage artifacts recorded under the stable labels",
     ["trending", "evidence", "parallels", "lead-image", "published"].every((l) => artifacts.some((a) => a.label === l)) &&
       artifacts.some((a) => a.label === `resolution: ${STORY2}`) &&
@@ -686,7 +689,88 @@ async function orchestrationChecks(): Promise<void> {
   process.stdout.write("news-desk (part 2) checks: all green\n");
 }
 
+/** lineEditAuthorVersion never weakens the gate: the edit ships only inside
+ *  the 70–130% band AND still passing the contract; anything else — including
+ *  a thrown edit call — keeps the draft. */
+async function lineEditChecks(): Promise<void> {
+  let failures = 0;
+  const ok = (name: string, cond: boolean, detail: string): void => {
+    if (cond) process.stdout.write(`PASS ${name}\n`);
+    else {
+      failures += 1;
+      process.stdout.write(`FAIL ${name} — ${detail}\n`);
+    }
+  };
+
+  const FILLER =
+    "The evidence in front of us is plain, and the argument follows from it directly enough that a careful reader can retrace every step without leaning on trust. ";
+  const DRAFT = [
+    "## A rate decision that answers the wrong question",
+    "",
+    `Wire reports the policy rate rose fifty basis points to a twenty-year high, and Beacon reports markets fell two percent on the announcement. ${FILLER.repeat(8)}The Panic of 1907 is the closest rhyme here, and it argues the freeze ends only when the lender acts like it means it.`,
+    "",
+    "## Where the chair's promise meets the tape",
+    "",
+    `${FILLER.repeat(8)}The bank has chosen credibility over flexibility, and it will pay for the first with the second.`,
+  ].join("\n");
+  const CONTRACT = {
+    outletNames: ["Wire", "Beacon"] as const,
+    parallelEvent: "Panic of 1907",
+    wordCap: 700,
+    writerName: "Test Writer",
+  };
+  const stubLlm = (reply: () => Promise<string>) => ({
+    complete: async (): Promise<string> => reply(),
+    completeStructured: async <T,>(): Promise<T> => {
+      throw new Error("unused");
+    },
+  });
+
+  const POLISHED = DRAFT.replace("plain, and the argument follows", "unmistakable, and the argument follows");
+  ok("a contract-passing, in-band edit ships",
+    (await lineEditAuthorVersion({ llm: stubLlm(async () => POLISHED), body: DRAFT, contract: CONTRACT })) === POLISHED,
+    "the edited version was not kept");
+  ok("a whole-body code fence is stripped before judging",
+    (await lineEditAuthorVersion({ llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``), body: DRAFT, contract: CONTRACT })) === POLISHED,
+    "the fenced edit was not unwrapped and kept");
+  ok("an edit that breaks the contract keeps the draft",
+    (await lineEditAuthorVersion({
+      llm: stubLlm(async () => POLISHED.split("Beacon").join("Bacon")),
+      body: DRAFT,
+      contract: CONTRACT,
+    })) === DRAFT,
+    "a one-outlet edit shipped");
+  const bandLogs: string[] = [];
+  const SHREDDED = DRAFT.split(FILLER.repeat(8)).join(FILLER);
+  ok("a shredded edit is rejected by the length band, draft kept",
+    (await lineEditAuthorVersion({
+      llm: stubLlm(async () => SHREDDED),
+      body: DRAFT,
+      contract: CONTRACT,
+      log: (l) => bandLogs.push(l),
+    })) === DRAFT && bandLogs.some((l) => l.includes("outside the 70-130% length band")),
+    bandLogs.join(" | "));
+  const throwLogs: string[] = [];
+  ok("a thrown edit call keeps the draft (best-effort)",
+    (await lineEditAuthorVersion({
+      llm: stubLlm(async () => {
+        throw new Error("model died");
+      }),
+      body: DRAFT,
+      contract: CONTRACT,
+      log: (l) => throwLogs.push(l),
+    })) === DRAFT && throwLogs.some((l) => l.includes("line edit failed")),
+    throwLogs.join(" | "));
+
+  if (failures > 0) {
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write("news-desk line-edit checks: all green\n");
+}
+
 orchestrationChecks()
+  .then(() => lineEditChecks())
   .catch((err: unknown) => {
     process.stderr.write(`news-desk.checks failed: ${String(err)}\n`);
     process.exit(1);
