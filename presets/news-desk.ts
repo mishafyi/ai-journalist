@@ -1165,9 +1165,25 @@ export function createNewsDesk(opts: {
         ((): Promise<OutletItem[]> => createNewswire({ feeds, concurrency: 8, timeoutMs: 15_000, log }).buildIndex());
 
       const stories = await fetchTrending();
+      // Google News hands over no article URL: the item <link> is a JS stub and
+      // <source url> is the publisher's home page, so real URLs only exist
+      // after resolution. Everything the feed DOES carry is recorded here.
       recordArtifact?.(
         "trending",
-        stories.map((s) => `${s.rank}. ${s.headline} — ${s.leadOutlet} (${s.coverage.length} covering)`).join("\n"),
+        [
+          "Google News gives no article URLs at this stage (its item links are JS stubs).",
+          "The publisher home page below is from <source url>; real article URLs are resolved",
+          "against the outlet indexes and recorded in the resolution artifacts.",
+          "",
+          ...stories.map((s) =>
+            [
+              `${s.rank}. ${s.headline}`,
+              `   lead: ${s.leadOutlet}${s.sourceUrl === undefined || s.sourceUrl === "" ? "" : ` — ${s.sourceUrl}`}`,
+              `   covering: ${s.coverage.length}`,
+              ...s.coverage.map((c) => `     · ${c.outlet}: ${c.headline}`),
+            ].join("\n"),
+          ),
+        ].join("\n"),
       );
       const index = await buildIndex();
       const indexTitles = index.map((i) => i.title);
