@@ -61,6 +61,13 @@ export async function checkClaims(args: {
   /** Hosts the column already cites — corroboration must be INDEPENDENT. */
   citedHosts: readonly string[];
   max: number;
+  /** The story's subject (e.g. its headline), appended to every search query
+   *  as a retrieval anchor — the mechanical belt for the extraction prompt's
+   *  named-subject rule: a claim that still arrives subjectless ("Legal
+   *  proceedings are set for June 2027") would otherwise search blind and
+   *  read as uncorroborated when the fact is front-page news. Scoring is
+   *  unchanged (overlap is measured claim-vs-result, never query-vs-result). */
+  subject?: string;
   log?: (line: string) => void;
 }): Promise<CheckedClaim[]> {
   try {
@@ -69,7 +76,7 @@ export async function checkClaims(args: {
         {
           role: "system",
           content:
-            "You extract checkable factual claims from a news column. A checkable claim is a specific, verifiable statement of fact — a number, a date, a named party doing a named thing. NEVER extract opinion, prediction, analysis or rhetorical questions. Quote each claim as one plain sentence, self-contained enough to search.",
+            "You extract checkable factual claims from a news column. A checkable claim is a specific, verifiable statement of fact — a number, a date, a named party doing a named thing. NEVER extract opinion, prediction, analysis or rhetorical questions. Quote each claim as one plain sentence, self-contained enough to search — which means each claim MUST explicitly name its subject, the person, organization or place it is about (\"Maduro's trial is set for June 2027\", never \"Legal proceedings are set for June 2027\"): a claim without its named subject cannot be searched and is worthless.",
         },
         { role: "user", content: args.column.slice(0, 6000) },
       ],
@@ -80,7 +87,8 @@ export async function checkClaims(args: {
     const held = new Set(args.citedHosts.map((h) => h.toLowerCase().replace(/^www\./, "")));
     const out: CheckedClaim[] = [];
     for (const claim of extracted.claims.slice(0, args.max)) {
-      const results = await args.search.search(claim, { limit: 6 });
+      const query = args.subject === undefined || args.subject.trim() === "" ? claim : `${claim} ${args.subject}`;
+      const results = await args.search.search(query, { limit: 6 });
       const corroborating = [
         ...new Set(
           results
