@@ -1734,10 +1734,6 @@ export function createNewsDesk(opts: {
               search,
               citedHosts: contributing.map((c) => hostOf(c.url)),
               max: 4,
-              // Retrieval anchor: a claim that arrives subjectless still
-              // searches WITH the story's name attached (2026-08-31: "Legal
-              // proceedings are set for June 2027" read as uncorroborated
-              // while the Maduro trial date was front-page news).
               subject: story.headline,
               log,
             });

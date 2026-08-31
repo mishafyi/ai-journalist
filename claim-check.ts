@@ -61,12 +61,9 @@ export async function checkClaims(args: {
   /** Hosts the column already cites — corroboration must be INDEPENDENT. */
   citedHosts: readonly string[];
   max: number;
-  /** The story's subject (e.g. its headline), appended to every search query
-   *  as a retrieval anchor — the mechanical belt for the extraction prompt's
-   *  named-subject rule: a claim that still arrives subjectless ("Legal
-   *  proceedings are set for June 2027") would otherwise search blind and
-   *  read as uncorroborated when the fact is front-page news. Scoring is
-   *  unchanged (overlap is measured claim-vs-result, never query-vs-result). */
+  /** The story's subject (e.g. its headline), appended to every search query —
+   *  a subjectless claim would otherwise search blind. Retrieval only:
+   *  overlap is still scored claim-vs-result, never query-vs-result. */
   subject?: string;
   log?: (line: string) => void;
 }): Promise<CheckedClaim[]> {
