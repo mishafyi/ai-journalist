@@ -39,6 +39,9 @@ export interface LlmTrace {
 export interface SearchTrace {
   query: string;
   op: "search" | "scrape";
+  /** Forces the step file. For raw HTTP a host traces itself (encyclopedia
+   *  verification, the lead-image hunt), where the query shape says nothing. */
+  step?: string;
   options?: Record<string, unknown>;
   results?: { title: string; url: string; snippet: string; contentChars?: number }[];
   /** Full page text for a scrape — the evidence every later step rests on. */
@@ -88,6 +91,7 @@ function stepForLlm(entry: LlmTrace): string {
  *  research carries its fixed suffix, a scrape is a scrape, and what remains
  *  is the claim check's corroboration hunt. */
 function stepForSearch(entry: SearchTrace): string {
+  if (entry.step !== undefined && entry.step !== "") return entry.step;
   if (entry.op === "scrape") return "04-scrape";
   if (/^site:/i.test(entry.query)) return "03-resolution-hunt";
   if (/history mechanism significance$/.test(entry.query)) return "08-parallel-research";

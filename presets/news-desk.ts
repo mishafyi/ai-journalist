@@ -1142,6 +1142,7 @@ export function createNewsDesk(opts: {
   indexImpl?: () => Promise<OutletItem[]>;
   internalsFactory?: typeof createDefaultInternals;
   parallelFetchImpl?: typeof fetch;
+  leadImageFetchImpl?: typeof fetch;
 }): { run(): Promise<GeneratedPost> } {
   const { llm, search, feeds, persona, brand, sink, knobs, log, recordArtifact } = opts;
   const blockedHosts = opts.blockedHosts ?? DEFAULT_BLOCKED_HOSTS;
@@ -1647,6 +1648,7 @@ export function createNewsDesk(opts: {
               query: `${story.headline} ${tags.slice(0, 3).join(" ")}`.trim(),
               usedImages,
               ...(opts.imageSearch === undefined ? {} : { imageSearch: opts.imageSearch }),
+              ...(opts.leadImageFetchImpl === undefined ? {} : { fetchImpl: opts.leadImageFetchImpl }),
             });
             recordArtifact?.("lead-image", lead === null ? "(none found)" : `${lead.source}: ${lead.url}\n${lead.credit}`);
           } catch (err: unknown) {
