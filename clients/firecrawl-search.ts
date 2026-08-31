@@ -24,6 +24,8 @@
  * fails strict tsc against firecrawl's literal-union `Array<"web"|"news"|
  * "images"|…>`.
  */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Firecrawl } from "firecrawl";
 import type { SearchClient, SearchResult } from "../ports";
 
@@ -52,6 +54,11 @@ export function createFirecrawlSearch(opts: {
     tbs?: string;
     scrape?: boolean;
   };
+  /** When set, every search writes one JSON file into `dir` — the query, the
+   *  merged options, and the COMPLETE mapped results (scraped `content`
+   *  elided to its length; titles/urls/snippets in full). Errors recorded
+   *  too. Best-effort: tracing observes, it never fails a search. */
+  trace?: { dir: string };
 }): SearchClient {
   const apiUrl = opts.apiUrl ?? process.env.FIRECRAWL_API_URL;
   if (apiUrl === undefined || apiUrl === "") {
@@ -66,6 +73,45 @@ export function createFirecrawlSearch(opts: {
     apiUrl,
   });
   const searchDefaults = opts.searchDefaults;
+  let traceSeq = 0;
+  function trace(
+    query: string,
+    merged: Record<string, unknown>,
+    results: SearchResult[] | undefined,
+    error?: unknown,
+  ): void {
+    if (opts.trace === undefined) return;
+    try {
+      mkdirSync(opts.trace.dir, { recursive: true });
+      traceSeq += 1;
+      writeFileSync(
+        join(opts.trace.dir, `${String(traceSeq).padStart(3, "0")}-search.json`),
+        JSON.stringify(
+          {
+            seq: traceSeq,
+            ts: new Date().toISOString(),
+            query,
+            options: merged,
+            ...(results === undefined
+              ? {}
+              : {
+                  results: results.map((r) => ({
+                    title: r.title,
+                    url: r.url,
+                    snippet: r.snippet,
+                    ...(r.content === undefined ? {} : { contentChars: r.content.length }),
+                  })),
+                }),
+            ...(error === undefined ? {} : { error: String(error) }),
+          },
+          null,
+          1,
+        ),
+      );
+    } catch {
+      // tracing observes; it never fails a search
+    }
+  }
 
   return {
     async search(
@@ -77,21 +123,29 @@ export function createFirecrawlSearch(opts: {
       // Never add `excludeDomains` — documented regression: SearXNG-backed
       // `/v2/search` returns ZERO results for any query carrying it (verified
       // in production 2026-07-08); host filtering is app-side (`isSkipHost`).
-      const data = await fc.search(query, {
-        limit: merged.limit,
-        sources: merged.sources ?? ["web"],
-        tbs: merged.tbs,
-        scrapeOptions: merged.scrape
-          ? { formats: ["markdown"], onlyMainContent: true }
-          : undefined,
-      });
+      let data;
+      try {
+        data = await fc.search(query, {
+          limit: merged.limit,
+          sources: merged.sources ?? ["web"],
+          tbs: merged.tbs,
+          scrapeOptions: merged.scrape
+            ? { formats: ["markdown"], onlyMainContent: true }
+            : undefined,
+        });
+      } catch (err: unknown) {
+        trace(query, merged, undefined, err);
+        throw err;
+      }
       const web = (data.web ?? []) as FirecrawlWebHit[];
-      return web.map((r) => ({
+      const results = web.map((r) => ({
         title: r.title ?? "",
         url: r.url,
         snippet: r.description ?? "",
         content: r.markdown,
       }));
+      trace(query, merged, results);
+      return results;
     },
     async scrape(url): Promise<string> {
       const doc = await fc.scrape(url, { formats: ["markdown"] });
