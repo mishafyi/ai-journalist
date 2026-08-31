@@ -10,6 +10,8 @@
  * postWithRetry) — a dropped connection is worth re-sending verbatim, and a
  * bad completion is not.
  */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import type { ZodType } from "zod";
 import type { LlmClient } from "../ports";
@@ -31,6 +33,12 @@ export interface OllamaLlmConfig {
     numCtx?: number;
     keepAlive?: string;
   };
+  /** When set, every call writes one JSON file into `dir` — the COMPLETE
+   *  request (system/prompt/messages, model, temperature, schema name) and
+   *  the COMPLETE response, untruncated; errors are recorded too. The host
+   *  owns the directory (the news desk passes its per-run `out/runs/<id>/llm`).
+   *  Writes are best-effort: tracing observes, it never fails a call. */
+  trace?: { dir: string };
 }
 
 interface OllamaChatMessage {
@@ -134,21 +142,68 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
   function resolveModel(candidate: string | undefined): string {
     return candidate === undefined || candidate.trim() === "" ? cfg.model : candidate;
   }
+  // Per-client sequence for trace filenames (no module globals — run-context
+  // doctrine). One desk run constructs one client, so files order the run.
+  let traceSeq = 0;
+  function trace(
+    kind: "complete" | "structured",
+    request: Record<string, unknown>,
+    response: string | undefined,
+    error?: unknown,
+  ): void {
+    if (cfg.trace === undefined) return;
+    try {
+      mkdirSync(cfg.trace.dir, { recursive: true });
+      traceSeq += 1;
+      const file = join(cfg.trace.dir, `${String(traceSeq).padStart(3, "0")}-${kind}.json`);
+      writeFileSync(
+        file,
+        JSON.stringify(
+          {
+            seq: traceSeq,
+            ts: new Date().toISOString(),
+            kind,
+            request,
+            ...(response === undefined ? {} : { response }),
+            ...(error === undefined ? {} : { error: String(error) }),
+          },
+          null,
+          1,
+        ),
+      );
+    } catch {
+      // tracing observes; it never fails a call
+    }
+  }
   return {
     async complete({ system, prompt, model, temperature }) {
       const messages: OllamaChatMessage[] = [
         ...(system === undefined ? [] : [{ role: "system" as const, content: system }]),
         { role: "user" as const, content: prompt },
       ];
-      return chat({
-        baseUrl: cfg.baseUrl,
-        model: resolveModel(model),
-        messages,
-        temperature,
-        format: undefined,
-        numCtx: cfg.options?.numCtx,
-        keepAlive: cfg.options?.keepAlive,
-      });
+      const resolved = resolveModel(model);
+      const request = {
+        model: resolved,
+        ...(temperature === undefined ? {} : { temperature }),
+        ...(system === undefined ? {} : { system }),
+        prompt,
+      };
+      try {
+        const text = await chat({
+          baseUrl: cfg.baseUrl,
+          model: resolved,
+          messages,
+          temperature,
+          format: undefined,
+          numCtx: cfg.options?.numCtx,
+          keepAlive: cfg.options?.keepAlive,
+        });
+        trace("complete", request, text);
+        return text;
+      } catch (err: unknown) {
+        trace("complete", request, undefined, err);
+        throw err;
+      }
     },
 
     async completeStructured<T>(args: {
@@ -158,15 +213,29 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
       model?: string;
       temperature?: number;
     }): Promise<T> {
-      const text = await chat({
-        baseUrl: cfg.baseUrl,
-        model: resolveModel(args.model),
+      const resolved = resolveModel(args.model);
+      const request = {
+        model: resolved,
+        ...(args.temperature === undefined ? {} : { temperature: args.temperature }),
+        schemaName: args.schemaName,
         messages: args.messages,
-        temperature: args.temperature,
-        format: z.toJSONSchema(args.schema) as Record<string, unknown>,
-        numCtx: cfg.options?.numCtx,
-        keepAlive: cfg.options?.keepAlive,
-      });
+      };
+      let text: string;
+      try {
+        text = await chat({
+          baseUrl: cfg.baseUrl,
+          model: resolved,
+          messages: args.messages,
+          temperature: args.temperature,
+          format: z.toJSONSchema(args.schema) as Record<string, unknown>,
+          numCtx: cfg.options?.numCtx,
+          keepAlive: cfg.options?.keepAlive,
+        });
+      } catch (err: unknown) {
+        trace("structured", request, undefined, err);
+        throw err;
+      }
+      trace("structured", request, text);
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
