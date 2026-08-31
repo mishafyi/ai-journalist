@@ -46,6 +46,17 @@ export function googleNewsTopUrl(edition: GnEdition): string {
   return `https://news.google.com/rss?hl=${edition.hl}&gl=${edition.gl}&ceid=${encodeURIComponent(edition.ceid)}`;
 }
 
+/** Google News's own "Top stories" section, which the bare feed is only a
+ *  slice of: measured 2026-08-31, 70 items against the bare feed's 38, sharing
+ *  just 14 headlines — and carrying the same clustered shape (lead outlet,
+ *  <source url>, the coverage <ol> in the description). Any section's id is
+ *  the path segment of its news.google.com/topics/<id> URL. */
+export const GN_TOP_STORIES = "CAAqJggKIiBDQkFTRWdvSUwyMHZNRFZxYUdjU0FtVnVHZ0pWVXlnQVAB";
+
+export function googleNewsTopicIdUrl(topicId: string, edition: GnEdition): string {
+  return `https://news.google.com/rss/topics/${encodeURIComponent(topicId)}?hl=${edition.hl}&gl=${edition.gl}&ceid=${encodeURIComponent(edition.ceid)}`;
+}
+
 const parser = new Parser({ timeout: 15_000 });
 
 function splitLeadTitle(raw: string): { headline: string; leadOutlet: string } {
@@ -82,10 +93,17 @@ export async function parseTrending(xml: string): Promise<TrendingStory[]> {
 export async function fetchTrendingStories(args: {
   edition: GnEdition;
   limit: number;
+  /** A section id (see GN_TOP_STORIES) to read that section's feed instead of
+   *  the bare top-stories one. Same item shape either way. */
+  topicId?: string;
   fetchImpl?: typeof fetch;
 }): Promise<TrendingStory[]> {
   const fetchImpl = args.fetchImpl ?? fetch;
-  const res = await fetchImpl(googleNewsTopUrl(args.edition), {
+  const url =
+    args.topicId === undefined || args.topicId === ""
+      ? googleNewsTopUrl(args.edition)
+      : googleNewsTopicIdUrl(args.topicId, args.edition);
+  const res = await fetchImpl(url, {
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
