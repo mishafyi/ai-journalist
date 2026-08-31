@@ -10,11 +10,10 @@
  * postWithRetry) — a dropped connection is worth re-sending verbatim, and a
  * bad completion is not.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { z } from "zod";
 import type { ZodType } from "zod";
 import type { LlmClient } from "../ports";
+import type { Tracer } from "./trace";
 
 export interface OllamaLlmConfig {
   /** Server base URL, e.g. "http://Mikes-Mac-mini.local:11434". */
@@ -33,12 +32,12 @@ export interface OllamaLlmConfig {
     numCtx?: number;
     keepAlive?: string;
   };
-  /** When set, every call writes one JSON file into `dir` — the COMPLETE
-   *  request (system/prompt/messages, model, temperature, schema name) and
-   *  the COMPLETE response, untruncated; errors are recorded too. The host
-   *  owns the directory (the news desk passes its per-run `out/runs/<id>/llm`).
-   *  Writes are best-effort: tracing observes, it never fails a call. */
-  trace?: { dir: string };
+  /** When set, every call is recorded into its pipeline STEP's file — the
+   *  COMPLETE request (system/prompt/messages, model, temperature, schema
+   *  name) and the COMPLETE response, untruncated; errors too. Share one
+   *  tracer with the search client so a step's model calls and its searches
+   *  land in the same file (`clients/trace.ts`). */
+  trace?: Tracer;
 }
 
 interface OllamaChatMessage {
@@ -142,39 +141,6 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
   function resolveModel(candidate: string | undefined): string {
     return candidate === undefined || candidate.trim() === "" ? cfg.model : candidate;
   }
-  // Per-client sequence for trace filenames (no module globals — run-context
-  // doctrine). One desk run constructs one client, so files order the run.
-  let traceSeq = 0;
-  function trace(
-    kind: "complete" | "structured",
-    request: Record<string, unknown>,
-    response: string | undefined,
-    error?: unknown,
-  ): void {
-    if (cfg.trace === undefined) return;
-    try {
-      mkdirSync(cfg.trace.dir, { recursive: true });
-      traceSeq += 1;
-      const file = join(cfg.trace.dir, `${String(traceSeq).padStart(3, "0")}-${kind}.json`);
-      writeFileSync(
-        file,
-        JSON.stringify(
-          {
-            seq: traceSeq,
-            ts: new Date().toISOString(),
-            kind,
-            request,
-            ...(response === undefined ? {} : { response }),
-            ...(error === undefined ? {} : { error: String(error) }),
-          },
-          null,
-          1,
-        ),
-      );
-    } catch {
-      // tracing observes; it never fails a call
-    }
-  }
   return {
     async complete({ system, prompt, model, temperature }) {
       const messages: OllamaChatMessage[] = [
@@ -198,10 +164,10 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
           numCtx: cfg.options?.numCtx,
           keepAlive: cfg.options?.keepAlive,
         });
-        trace("complete", request, text);
+        cfg.trace?.llm({ ...request, response: text });
         return text;
       } catch (err: unknown) {
-        trace("complete", request, undefined, err);
+        cfg.trace?.llm({ ...request, error: String(err) });
         throw err;
       }
     },
@@ -232,10 +198,10 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
           keepAlive: cfg.options?.keepAlive,
         });
       } catch (err: unknown) {
-        trace("structured", request, undefined, err);
+        cfg.trace?.llm({ ...request, error: String(err) });
         throw err;
       }
-      trace("structured", request, text);
+      cfg.trace?.llm({ ...request, response: text });
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);

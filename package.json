@@ -45,6 +45,7 @@
     "./clients/ollama-llm": "./clients/ollama-llm.ts",
     "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
     "./clients/searxng-search": "./clients/searxng-search.ts",
+    "./clients/trace": "./clients/trace.ts",
     "./digest": "./digest.ts",
     "./discovery": "./discovery.ts",
     "./gate": "./gate.ts",

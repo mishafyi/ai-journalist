@@ -24,10 +24,9 @@
  * fails strict tsc against firecrawl's literal-union `Array<"web"|"news"|
  * "images"|…>`.
  */
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { Firecrawl } from "firecrawl";
 import type { SearchClient, SearchResult } from "../ports";
+import type { Tracer } from "./trace";
 
 /** A union-shaped Firecrawl web hit — `SearchResultWeb` fields plus the
  *  `markdown` a scraped `Document` carries. Both are optional on the union. */
@@ -54,11 +53,11 @@ export function createFirecrawlSearch(opts: {
     tbs?: string;
     scrape?: boolean;
   };
-  /** When set, every search writes one JSON file into `dir` — the query, the
-   *  merged options, and the COMPLETE mapped results (scraped `content`
-   *  elided to its length; titles/urls/snippets in full). Errors recorded
-   *  too. Best-effort: tracing observes, it never fails a search. */
-  trace?: { dir: string };
+  /** When set, every search and scrape is recorded into its pipeline STEP's
+   *  file — query, merged options and the complete results (a scrape keeps
+   *  its full page text). Share one tracer with the LLM client so a step's
+   *  searches and its model calls land together (`clients/trace.ts`). */
+  trace?: Tracer;
 }): SearchClient {
   const apiUrl = opts.apiUrl ?? process.env.FIRECRAWL_API_URL;
   if (apiUrl === undefined || apiUrl === "") {
@@ -73,45 +72,6 @@ export function createFirecrawlSearch(opts: {
     apiUrl,
   });
   const searchDefaults = opts.searchDefaults;
-  let traceSeq = 0;
-  function trace(
-    query: string,
-    merged: Record<string, unknown>,
-    results: SearchResult[] | undefined,
-    error?: unknown,
-  ): void {
-    if (opts.trace === undefined) return;
-    try {
-      mkdirSync(opts.trace.dir, { recursive: true });
-      traceSeq += 1;
-      writeFileSync(
-        join(opts.trace.dir, `${String(traceSeq).padStart(3, "0")}-search.json`),
-        JSON.stringify(
-          {
-            seq: traceSeq,
-            ts: new Date().toISOString(),
-            query,
-            options: merged,
-            ...(results === undefined
-              ? {}
-              : {
-                  results: results.map((r) => ({
-                    title: r.title,
-                    url: r.url,
-                    snippet: r.snippet,
-                    ...(r.content === undefined ? {} : { contentChars: r.content.length }),
-                  })),
-                }),
-            ...(error === undefined ? {} : { error: String(error) }),
-          },
-          null,
-          1,
-        ),
-      );
-    } catch {
-      // tracing observes; it never fails a search
-    }
-  }
 
   return {
     async search(
@@ -134,7 +94,7 @@ export function createFirecrawlSearch(opts: {
             : undefined,
         });
       } catch (err: unknown) {
-        trace(query, merged, undefined, err);
+        opts.trace?.search({ query, op: "search", options: merged, error: String(err) });
         throw err;
       }
       const web = (data.web ?? []) as FirecrawlWebHit[];
@@ -144,12 +104,29 @@ export function createFirecrawlSearch(opts: {
         snippet: r.description ?? "",
         content: r.markdown,
       }));
-      trace(query, merged, results);
+      opts.trace?.search({
+        query,
+        op: "search",
+        options: merged,
+        results: results.map((r) => ({
+          title: r.title,
+          url: r.url,
+          snippet: r.snippet,
+          ...(r.content === undefined ? {} : { contentChars: r.content.length }),
+        })),
+      });
       return results;
     },
     async scrape(url): Promise<string> {
-      const doc = await fc.scrape(url, { formats: ["markdown"] });
-      return doc.markdown ?? "";
+      try {
+        const doc = await fc.scrape(url, { formats: ["markdown"] });
+        const markdown = doc.markdown ?? "";
+        opts.trace?.search({ query: url, op: "scrape", content: markdown });
+        return markdown;
+      } catch (err: unknown) {
+        opts.trace?.search({ query: url, op: "scrape", error: String(err) });
+        throw err;
+      }
     },
   };
 }
