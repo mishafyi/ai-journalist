@@ -76,6 +76,8 @@ function stepForLlm(entry: LlmTrace): string {
       return "20-claim-check";
     case "editorial_lens_judgment":
       return "14-lens-judgment";
+    case "data_play_pick":
+      return "05b-data-plays";
     default:
       break;
   }
