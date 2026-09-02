@@ -251,7 +251,16 @@ export async function runFactCheckAudit(
   article: string,
   groundTruth: string,
   deps: GateDeps,
+  /** Material the audit must not rate: the desk's own researched connections
+   *  and forward-looking hypotheses, which are argued, not reported
+   *  (operator, 2026-09-02: "connections and hypotheses shouldn't be fact
+   *  checked"). */
+  exempt?: string,
 ): Promise<string> {
+  const exemptBlock =
+    exempt === undefined || exempt.trim() === ""
+      ? ""
+      : `\n\nNOT SUBJECT TO THIS AUDIT — the desk's own researched connections between the story's principals and its forward-looking hypotheses. Do NOT rate any claim drawn from this material, and do NOT rate any forward-looking scenario or prediction anywhere in the article; skip them entirely:\n${exempt}`;
   const prompt = `You are a fact-checker reviewing a PUBLISHED article against its RESEARCH. For every factual claim — especially every NUMBER, figure, date, named entity, and quoted span — rate whether the research supports it:
 - FOUND: the claim (in substance) appears in the research.
 - DERIVABLE: not stated verbatim, but it follows from the research by simple reasoning or arithmetic — e.g. a total that is the sum of sourced components. SHOW the derivation.
@@ -259,7 +268,7 @@ export async function runFactCheckAudit(
 Output ONLY a markdown table: | Claim | Rating | Evidence / derivation / note |. One row per checked claim; lead with the load-bearing numbers. Be concise. This is an informational audit for a human reviewer — do NOT rewrite or comment on the article.
 
 RESEARCH:
-${groundTruth.slice(0, deps.auditInputChars ?? 120000)}
+${groundTruth.slice(0, deps.auditInputChars ?? 120000)}${exemptBlock}
 
 ARTICLE:
 ${article}\n\n=== YOUR TASK, RESTATED ===\nRate every claim as instructed above. Then add one final line starting "MISSING: " naming the single most important thing a beat reporter would add to this story that the research could support (or "MISSING: nothing material").`;

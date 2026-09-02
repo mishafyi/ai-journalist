@@ -1939,7 +1939,15 @@ export function createNewsDesk(opts: {
           const content = `${stripVerdictLabel(finalBody)}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           try {
-            const audit = await runFactCheckAudit(content, evidence, {
+            // Everything the desk actually read: the extracted evidence first (so
+            // it always fits the cap), then every scraped source page in full —
+            // a fact the extraction skipped is still in the page (operator,
+            // 2026-09-02: "if not, fact check can't work properly").
+            const research =
+              evidence +
+              "\n\nSOURCE PAGES (verbatim):\n" +
+              pages.map((p) => `=== ${p.outlet}: ${p.title}\n${p.url}\n${p.content}`).join("\n\n");
+            const audit = await runFactCheckAudit(content, research, {
               llm,
               model: "",
               withRetry: async (_label, fn) => fn(),
@@ -1951,7 +1959,7 @@ export function createNewsDesk(opts: {
               titleCollisionSim: 0,
               titleEmbedSim: 0,
               searchTermsCount: 0,
-            });
+            }, dossierText);
             recordArtifact?.(`fact-check-audit: ${columnist.name}`, audit);
           } catch (err: unknown) {
             log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
