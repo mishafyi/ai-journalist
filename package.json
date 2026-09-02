@@ -41,6 +41,7 @@
     "./clients/auto": "./clients/auto.ts",
     "./clients/datagod": "./clients/datagod.ts",
     "./clients/firecrawl-search": "./clients/firecrawl-search.ts",
+    "./clients/gemini-llm": "./clients/gemini-llm.ts",
     "./clients/ollama-embedder": "./clients/ollama-embedder.ts",
     "./clients/ollama-llm": "./clients/ollama-llm.ts",
     "./clients/openrouter-llm": "./clients/openrouter-llm.ts",
@@ -72,8 +73,8 @@
     "./write-article": "./write-article.ts"
   },
   "files": [
-    
-    "cli","*.ts",
+    "cli",
+    "*.ts",
     "*.json",
     "presets",
     "sources",
@@ -96,6 +97,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.7.0",
+    "@google/genai": "^2.21.0",
     "@openrouter/sdk": "^0.13.21",
     "cheerio": "^1.2.0",
     "commander": "^15.0.0",
