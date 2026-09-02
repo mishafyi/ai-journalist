@@ -78,6 +78,12 @@ function stepForLlm(entry: LlmTrace): string {
       return "14-lens-judgment";
     case "data_play_pick":
       return "05b-data-plays";
+    case "story_principals":
+      return "05c-principals";
+    case "story_connections":
+      return "05d-connections";
+    case "story_hypotheses":
+      return "05e-hypotheses";
     default:
       break;
   }

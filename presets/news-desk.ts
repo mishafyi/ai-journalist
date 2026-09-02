@@ -170,6 +170,199 @@ export function checkAuthorVersionContract(
 /** Compose one COMPLETE author version: the story retold through the
  *  persona's lens (facts + attribution from the evidence) fused with their
  *  decided take. Same retry-until-contract shape as composeAnalysis. */
+
+// ── The people dossier (operator, 2026-08-31) ────────────────────────────────
+// "Exporting key players (people / organisations / countries), doing a
+// background search on them, finding a list of connections, then asking what
+// the future holds — and incorporating both in the story." No gates of its
+// own: the stage is best-effort and the column runs without it when it fails.
+
+export const PrincipalsSchema = z.object({
+  principals: z
+    .array(
+      z.object({
+        name: z.string().min(2).max(80),
+        kind: z.enum(["person", "organization", "country"]),
+        role: z.string().min(3).max(200),
+      }),
+    )
+    .min(1)
+    .max(6),
+});
+export type Principal = z.infer<typeof PrincipalsSchema>["principals"][number];
+
+export const ConnectionsSchema = z.object({
+  connections: z
+    .array(
+      z.object({
+        between: z.array(z.string().min(2)).length(2),
+        claim: z.string().min(10).max(400),
+        basis: z.string().min(3).max(200),
+      }),
+    )
+    .max(8),
+});
+export type Connection = z.infer<typeof ConnectionsSchema>["connections"][number];
+
+export const HypothesesSchema = z.object({
+  hypotheses: z
+    .array(z.object({ scenario: z.string().min(10).max(400), restsOn: z.string().min(3).max(200) }))
+    .min(1)
+    .max(5),
+});
+export type Hypothesis = z.infer<typeof HypothesesSchema>["hypotheses"][number];
+
+export interface DossierEntry extends Principal {
+  background: string;
+  /** Where the background came from — provenance for the trace and the prompt. */
+  source: "wikipedia" | "model";
+}
+
+/** The story's principals — the actors it actually turns on, most central first. */
+export async function namePrincipals(args: {
+  llm: LlmClient;
+  headline: string;
+  evidence: string;
+  model?: string;
+}): Promise<Principal[]> {
+  const out = await args.llm.completeStructured({
+    messages: [
+      {
+        role: "system",
+        content:
+          "You identify the principals of a news story — the people, organisations and countries the story actually turns on. Name each exactly as the coverage names them, and say in one clause what role each plays in THIS story. Up to six, most central first.",
+      },
+      { role: "user", content: `STORY: ${args.headline}\n\nEVIDENCE:\n${args.evidence}` },
+    ],
+    schema: PrincipalsSchema,
+    schemaName: "story_principals",
+    temperature: 0,
+    ...(args.model === undefined ? {} : { model: args.model }),
+  });
+  return out.principals;
+}
+
+/** Background per principal: the encyclopedia summary when DataGod has one,
+ *  otherwise nothing on file — the next call then draws on what the model
+ *  itself knows, and the entry says so. */
+export async function researchPrincipals(args: {
+  principals: readonly Principal[];
+  datagod?: DatagodClient;
+  log?: (line: string) => void;
+}): Promise<DossierEntry[]> {
+  const entries: DossierEntry[] = [];
+  for (const principal of args.principals) {
+    let background = "";
+    let source: DossierEntry["source"] = "model";
+    if (args.datagod !== undefined) {
+      try {
+        const data = (await args.datagod.get(`/wikipedia/summary/${encodeURIComponent(principal.name)}`, {})) as {
+          extract?: string;
+          summary?: string;
+          description?: string;
+        };
+        const text = data.extract ?? data.summary ?? data.description ?? "";
+        if (text.trim() !== "") {
+          background = text.trim();
+          source = "wikipedia";
+        }
+      } catch (err: unknown) {
+        args.log?.(`dossier: background lookup for "${principal.name}" failed (continuing on the model's own knowledge): ${String(err)}`);
+      }
+    }
+    entries.push({ ...principal, background, source });
+  }
+  return entries;
+}
+
+function principalsText(entries: readonly DossierEntry[]): string {
+  return entries
+    .map(
+      (e, i) =>
+        `${i + 1}. ${e.name} (${e.kind}; ${e.role})\n   Background${e.source === "wikipedia" ? "" : " (nothing on file — use what you know of them)"}: ${e.background === "" ? "—" : e.background}`,
+    )
+    .join("\n");
+}
+
+/** Connections between the principals worth a columnist's attention. */
+export async function findConnections(args: {
+  llm: LlmClient;
+  headline: string;
+  evidence: string;
+  dossier: readonly DossierEntry[];
+  model?: string;
+}): Promise<Connection[]> {
+  const out = await args.llm.completeStructured({
+    messages: [
+      {
+        role: "system",
+        content:
+          "You research the people behind a news story for a newspaper's desk. Given the story, its principals and their backgrounds, find the connections between them worth a columnist's attention: shared history, prior dealings, allegiances and rivalries, money, family, the earlier chapter of the same relationship. Be specific and concrete — each connection names two principals, says what links them, and says where that comes from (a background, the story itself, or what is widely known about them).",
+      },
+      {
+        role: "user",
+        content: `STORY: ${args.headline}\n\nTHE STORY'S EVIDENCE:\n${args.evidence}\n\nPRINCIPALS AND BACKGROUNDS:\n${principalsText(args.dossier)}`,
+      },
+    ],
+    schema: ConnectionsSchema,
+    schemaName: "story_connections",
+    temperature: 0.3,
+    ...(args.model === undefined ? {} : { model: args.model }),
+  });
+  return out.connections;
+}
+
+/** What the future holds: plausible next chapters, each naming what it rests on. */
+export async function projectHypotheses(args: {
+  llm: LlmClient;
+  headline: string;
+  evidence: string;
+  dossier: readonly DossierEntry[];
+  connections: readonly Connection[];
+  model?: string;
+}): Promise<Hypothesis[]> {
+  const connectionsText =
+    args.connections.length === 0
+      ? "(none found)"
+      : args.connections.map((c) => `- ${c.between[0]} ↔ ${c.between[1]}: ${c.claim} (basis: ${c.basis})`).join("\n");
+  const out = await args.llm.completeStructured({
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are the desk's forecaster. Given a story, the backgrounds of its principals and the connections between them, say what the future holds: the plausible ways this story develops next. Each hypothesis is a concrete scenario and says which connection, background or pattern it rests on. These are hypotheses, not findings — they need no proof, but they grow out of the material rather than floating free of it.",
+      },
+      {
+        role: "user",
+        content: `STORY: ${args.headline}\n\nTHE STORY'S EVIDENCE:\n${args.evidence}\n\nPRINCIPALS AND BACKGROUNDS:\n${principalsText(args.dossier)}\n\nCONNECTIONS BETWEEN THEM:\n${connectionsText}`,
+      },
+    ],
+    schema: HypothesesSchema,
+    schemaName: "story_hypotheses",
+    temperature: 0.5,
+    ...(args.model === undefined ? {} : { model: args.model }),
+  });
+  return out.hypotheses;
+}
+
+/** The block the column prompt carries. Empty when there is nothing to carry. */
+export function dossierBlock(args: {
+  dossier: readonly DossierEntry[];
+  connections: readonly Connection[];
+  hypotheses: readonly Hypothesis[];
+}): string {
+  if (args.dossier.length === 0) return "";
+  const connections =
+    args.connections.length === 0
+      ? ""
+      : `\nCONNECTIONS BETWEEN THEM:\n${args.connections.map((c) => `- ${c.between[0]} ↔ ${c.between[1]}: ${c.claim} (${c.basis})`).join("\n")}`;
+  const hypotheses =
+    args.hypotheses.length === 0
+      ? ""
+      : `\nWHERE THIS GOES NEXT — the desk's hypotheses:\n${args.hypotheses.map((h) => `- ${h.scenario} (rests on: ${h.restsOn})`).join("\n")}`;
+  return `THE DESK'S DOSSIER — the people behind the story, researched:\nPRINCIPALS:\n${principalsText(args.dossier)}${connections}${hypotheses}\nWeave this into the column: the connections where they sharpen the argument — a reader should feel the column knows the players — and the hypotheses shaping your verdict: say where this goes and why, as a columnist does. Name the principals as given above.`;
+}
+
 export async function composeAuthorVersion(args: {
   llm: LlmClient;
   persona: PersonaProfile;
@@ -180,6 +373,9 @@ export async function composeAuthorVersion(args: {
   /** Verified recent echoes (≤20y) threaded through as color — see the
    *  echo round in createNewsDesk. Empty = the column runs without them. */
   echoes: readonly VerifiedParallel[];
+  /** The desk's dossier block (dossierBlock) — the people behind the story,
+   *  their connections and where it goes next, woven through. Empty = none. */
+  dossier?: string;
   wordCap: number;
   maxAttempts: number;
   model?: string;
@@ -219,8 +415,10 @@ export async function composeAuthorVersion(args: {
 
   const system = `You are ${persona.name}, an opinion columnist with a decided worldview, writing your COMPLETE column on today's story: you retell what happened AND argue what it means, fused in one voice — yours. The facts belong to the reporting; the framing, emphasis, and verdict belong to you.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean; live it, never recite it): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}\n\n${standards}`;
 
+  const dossierPart = args.dossier === undefined || args.dossier === "" ? "" : `\n\n${args.dossier}`;
+
   const target = `${Math.round(args.wordCap * 0.7)}-${Math.round(args.wordCap * 0.85)}`;
-  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}${echoBlock}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position with force; no both-sides hedging, no "time will tell"\n- End on ONE committed verdict — a final paragraph that lands your position hard, no hedging. Do NOT label it ("The bottom line", "In sum", "The upshot", "In conclusion"): a columnist doesn't announce the verdict, they just deliver it\n- Break the piece into 2-4 chapters, each opening with a markdown heading ("## ..."). EVERY chapter title must be ORIGINAL and written from what THAT chapter actually says — a specific line a reader could only have written after reading it. NEVER use a generic label ("Analysis", "Context", "Background", "Conclusion", "What happened", "The numbers") and NEVER put your own name in a heading
+  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}${echoBlock}${dossierPart}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position with force; no both-sides hedging, no "time will tell"\n- End on ONE committed verdict — a final paragraph that lands your position hard, no hedging. Do NOT label it ("The bottom line", "In sum", "The upshot", "In conclusion"): a columnist doesn't announce the verdict, they just deliver it\n- Break the piece into 2-4 chapters, each opening with a markdown heading ("## ..."). EVERY chapter title must be ORIGINAL and written from what THAT chapter actually says — a specific line a reader could only have written after reading it. NEVER use a generic label ("Analysis", "Context", "Background", "Conclusion", "What happened", "The numbers") and NEVER put your own name in a heading
 - This is an OP-ED, not a briefing: be very opinionated. Take a side in the first paragraph and press it all the way through — name who is wrong and say why, make the judgment call the reporting won't, and let your convictions show in the verbs. No neutrality, no "on the other hand", no hedging\n- ${target} words, hard cap ${args.wordCap} — unmistakably in your voice.`;
 
   // Retry = REVISE the previous draft, never regenerate: full rewrites under
@@ -1671,6 +1869,22 @@ export function createNewsDesk(opts: {
             log?.(`news-desk: lead-image lookup failed (best-effort, continuing imageless): ${String(err)}`);
           }
 
+          // The people dossier — best-effort, like the lead image: a stage that
+          // fails must not cost the article.
+          let dossierText = "";
+          try {
+            const principals = await namePrincipals({ llm, headline: story.headline, evidence });
+            recordArtifact?.("principals", JSON.stringify(principals, null, 2));
+            const entries = await researchPrincipals({ principals, ...(opts.datagod === undefined ? {} : { datagod: opts.datagod }), log });
+            const connections = await findConnections({ llm, headline: story.headline, evidence, dossier: entries });
+            const hypotheses = await projectHypotheses({ llm, headline: story.headline, evidence, dossier: entries, connections });
+            recordArtifact?.("dossier", JSON.stringify({ principals: entries, connections, hypotheses }, null, 2));
+            dossierText = dossierBlock({ dossier: entries, connections, hypotheses });
+            log?.(`news-desk: dossier — ${entries.length} principals (${entries.filter((e) => e.source === "wikipedia").length} with encyclopedia background), ${connections.length} connections, ${hypotheses.length} hypotheses`);
+          } catch (err: unknown) {
+            log?.(`news-desk: dossier failed (best-effort, the column runs without it): ${String(err)}`);
+          }
+
           const columnist = persona;
           const authorWordCap = evidenceWordCap(contributing.length, evidence.length, opts.authorVersions?.wordCap ?? 1100);
           const rawBody = await composeAuthorVersion({
@@ -1681,6 +1895,7 @@ export function createNewsDesk(opts: {
             outletNames,
             parallel,
             echoes,
+            dossier: dossierText,
             wordCap: authorWordCap,
             maxAttempts: knobs.analysisAttempts,
             log,
