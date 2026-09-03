@@ -34,7 +34,7 @@ import {
 import { createRunContext } from "../run-context";
 import { z } from "zod";
 import type { DatagodClient } from "../clients/datagod";
-import { fetchCoverage, fetchTrendingStories, GN_US } from "../sources/google-news";
+import { fetchCoverage, fetchTrendingStories, resolveCoverageUrl, GN_US } from "../sources/google-news";
 import type { Coverage } from "../sources/google-news";
 import type { TrendingStory } from "../sources/google-news";
 import { createNewswire } from "../sources/newswire";
@@ -1278,6 +1278,11 @@ export async function translateHeadline(args: {
 const defaultCoverage = (headline: string): Promise<Coverage[]> =>
   fetchCoverage({ headline, edition: GN_US, limit: 12 });
 
+/** The shipped URL resolver: decode the coverage item's own Google News stub.
+ *  Returns "" when it cannot, and the hunt falls back to a site: search. */
+const defaultResolveUrl = (stub: string): Promise<string> =>
+  resolveCoverageUrl({ stub, edition: GN_US });
+
 export function createNewsDesk(opts: {
   llm: LlmClient;
   search: SearchClient;
@@ -1299,6 +1304,10 @@ export function createNewsDesk(opts: {
    *  (sources/google-news.ts fetchCoverage). Injected in checks, and the seam
    *  for swapping in another vetted-publisher index later. */
   coverageImpl?: (headline: string) => Promise<Coverage[]>;
+  /** Turn a coverage item's Google News stub into the publisher's URL.
+   *  Defaults to `resolveCoverageUrl`. Returning "" is normal and means "fall
+   *  back to the site: search" — it must never throw. Injected in checks. */
+  resolveUrlImpl?: (stub: string) => Promise<string>;
   coveredTopics?: () => Promise<CoveredTopic[]>;
   /** Called when a trending story matches one the paper has already run.
    *
@@ -1477,10 +1486,32 @@ export function createNewsDesk(opts: {
               hunted.push({ item, score: hit.score });
             }
 
-            // Pass 2 — locate a URL on an outlet GN already vetted. Web search
-            // is a URL-LOCATOR inside one named host here, never a discoverer
-            // of hosts: the query is site-restricted and any result off that
-            // host is discarded.
+            // Pass 2 — ask Google News for the URL it already has. Each
+            // coverage item carries a stub link to the very article whose
+            // headline we just read; decoding it returns the publisher URL
+            // directly, with no third party asked to find a page we have
+            // already been told exists. This is the primary resolver: on
+            // 2026-09-03 it returned 12/12 back to back while every search
+            // query was being met with an anti-bot page.
+            //
+            // The decode NEVER widens admissibility. The host still comes from
+            // GN's <source url> and has already passed provenance above; a
+            // decoded URL that lands anywhere else is discarded, so a Google
+            // redirect could not smuggle in a host the hunt had rejected.
+            for (const c of fresh) {
+              if (unblocked.length + hunted.length >= knobs.minSources) break;
+              if (unblocked.length + hunted.length >= knobs.pagesMax) break;
+              if (held.has(c.host) || c.stub === "") continue;
+              const url = await (opts.resolveUrlImpl ?? defaultResolveUrl)(c.stub);
+              if (url === "" || !hostOf(url).endsWith(c.host)) continue;
+              held.add(c.host);
+              hunted.push({ item: { outlet: c.outlet, region: "", title: c.headline, url }, score: 0 });
+            }
+
+            // Pass 3 — FALLBACK for coverage the decode could not resolve.
+            // Web search is a URL-LOCATOR inside one named host here, never a
+            // discoverer of hosts: the query is site-restricted and any result
+            // off that host is discarded.
             //
             // BUDGETED, because the first version was not: it searched every
             // outlet in the cluster, so a twelve-outlet story cost twelve
@@ -1497,7 +1528,9 @@ export function createNewsDesk(opts: {
             // gave 2/3, hunt stopped one source short). Pacing, not a small
             // budget, is what keeps this gentle now — the SearchClient spaces
             // consecutive searches (`createPacer`), so a bigger budget costs
-            // wall-clock, not goodwill with the backend.
+            // wall-clock, not goodwill with the backend. Since Pass 2 resolves
+            // most clusters without a search at all, the budget is now rarely
+            // reached — it bounds the tail, it is not the normal path.
             const SEARCH_BUDGET = 6;
             const EMPTY_STREAK_LIMIT = 3;
             let spent = 0;

@@ -9,6 +9,7 @@ import {
   GN_US,
   parseTopicStories,
   parseTrending,
+  resolveCoverageUrl,
 } from "./google-news";
 
 async function main(): Promise<void> {
@@ -230,6 +231,45 @@ async function main(): Promise<void> {
     cov.filter((c) => c.host === "nbcnews.com").length === 1 && cov.length === 3, JSON.stringify(cov.map((c) => c.host)));
   ok("empty xml yields no coverage rather than throwing", (await parseCoverageFeed("")).length === 0, "");
   ok("malformed xml yields no coverage rather than throwing", (await parseCoverageFeed("<rss><chan")).length === 0, "");
+
+  // ── resolveCoverageUrl ────────────────────────────────────────────────────
+  // Every branch is exercised against a FAKE fetch: the real endpoint is
+  // private and unversioned, so a live call here would make the check a
+  // weather report on Google rather than a test of this code.
+  const STUB = "https://news.google.com/rss/articles/CBMiTESTblob123";
+  const PAGE = '<c-wiz data-n-a-ts="1756900000" data-n-a-sg="AbCdEf123">x</c-wiz>';
+  const RPC = `)]}'\n\n[["wrb.fr","Fbv4je","[\\"garturlres\\",\\"https://www.reuters.com/world/story-2026\\",1]"]]`;
+
+  const stubFetch = (page: string, rpc: string, pageOk = true, rpcOk = true): typeof fetch =>
+    (async (input: string | URL | Request) => {
+      const url = String(input);
+      const isRpc = url.includes("batchexecute");
+      return new Response(isRpc ? rpc : page, { status: isRpc ? (rpcOk ? 200 : 429) : pageOk ? 200 : 503 });
+    }) as unknown as typeof fetch;
+
+  ok("a stub resolves to the publisher url",
+    (await resolveCoverageUrl({ stub: STUB, edition: GN_US, fetchImpl: stubFetch(PAGE, RPC) })) ===
+      "https://www.reuters.com/world/story-2026", "");
+  ok("a link that is not an /articles/ stub resolves to \"\" without fetching",
+    (await resolveCoverageUrl({ stub: "https://news.google.com/", edition: GN_US, fetchImpl: stubFetch(PAGE, RPC) })) === "", "");
+  ok("a stub page with no signature resolves to \"\"",
+    (await resolveCoverageUrl({ stub: STUB, edition: GN_US, fetchImpl: stubFetch("<html>nope</html>", RPC) })) === "", "");
+  ok("a refused stub page resolves to \"\"",
+    (await resolveCoverageUrl({ stub: STUB, edition: GN_US, fetchImpl: stubFetch(PAGE, RPC, false) })) === "", "");
+  ok("a refused rpc resolves to \"\"",
+    (await resolveCoverageUrl({ stub: STUB, edition: GN_US, fetchImpl: stubFetch(PAGE, RPC, true, false) })) === "", "");
+  ok("an rpc answer carrying no url resolves to \"\"",
+    (await resolveCoverageUrl({ stub: STUB, edition: GN_US, fetchImpl: stubFetch(PAGE, `)]}'\n\n[["wrb.fr","Fbv4je",null]]`) })) === "", "");
+  // The endpoint is private: when it changes, it must degrade to the search
+  // fallback, never take a run down with it.
+  ok("a throwing transport resolves to \"\" rather than propagating",
+    (await resolveCoverageUrl({
+      stub: STUB,
+      edition: GN_US,
+      fetchImpl: (async () => { throw new Error("network gone"); }) as unknown as typeof fetch,
+    })) === "", "");
+  ok("the coverage feed keeps each item's stub link for the resolver",
+    (await parseCoverageFeed(COVERAGE_XML)).every((c) => typeof c.stub === "string"), "");
 
   process.stdout.write("google-news checks: all green\n");
 }

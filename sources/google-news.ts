@@ -1,8 +1,10 @@
 /**
  * Google News Top-Stories RSS → ranked, PRE-CLUSTERED trending stories.
  * Extends news.ts's validated fetch pattern (15s timeout). GN item links are
- * JS-redirect stubs — NEVER decoded, NEVER scraped (per spec); resolution
- * happens by headline-matching against our own outlet feeds (matching.ts).
+ * opaque stubs; resolution happens by headline-matching against our own outlet
+ * feeds (matching.ts), and for a story's wider coverage by decoding the stub
+ * (`resolveCoverageUrl`). A stub is NEVER scraped as itself and never confers
+ * admissibility — the host from <source url> decides that, before any decode.
  * The <description> carries the coverage list: <ol><li><a>headline</a>
  * <font>Outlet</font></li>… (single-link form when GN lists one source).
  *
@@ -317,10 +319,11 @@ export async function fetchSiteStories(args: {
 // carries the outlet's OWN headline, which is what the desk needs to resolve a
 // scrapable URL.
 //
-// What this deliberately does NOT do: follow the <link>. GN item links are
-// JS-redirect stubs that stay on news.google.com when fetched (verified again
-// 2026-08-16), so they are never decoded and never scraped. The host and the
-// headline are the payload.
+// The <link> is an opaque stub, but no longer a dead end: `resolveCoverageUrl`
+// turns it into the publisher URL (see there). The host and the headline
+// remain the payload that discovery is built on — a decode is an optimisation
+// over searching for a URL we were already told exists, never the thing that
+// decides an outlet is admissible.
 // ───────────────────────────────────────────────────────────────────────────
 
 export interface Coverage {
@@ -330,6 +333,9 @@ export interface Coverage {
   host: string;
   /** That outlet's own headline for the story. */
   headline: string;
+  /** The item's `news.google.com/rss/articles/…` link. Opaque on its own —
+   *  feed it to `resolveCoverageUrl` to get the publisher URL. */
+  stub: string;
 }
 
 /** Host of a URL without www./m., or "" when unparseable. */
@@ -391,7 +397,7 @@ const coverageParser: Parser<Record<string, unknown>, { source?: RssSourceNode[]
 export async function parseCoverageFeed(xml: string): Promise<Coverage[]> {
   const out: Coverage[] = [];
   const seen = new Set<string>();
-  let items: { title?: string; source?: RssSourceNode[] }[];
+  let items: { title?: string; link?: string; source?: RssSourceNode[] }[];
   try {
     items = (await coverageParser.parseString(xml)).items ?? [];
   } catch {
@@ -408,7 +414,7 @@ export async function parseCoverageFeed(xml: string): Promise<Coverage[]> {
     if (outlet !== "" && headline.endsWith(suffix)) headline = headline.slice(0, -suffix.length).trim();
     if (host === "" || headline === "" || seen.has(host)) continue;
     seen.add(host);
-    out.push({ outlet: outlet === "" ? host : outlet, host, headline });
+    out.push({ outlet: outlet === "" ? host : outlet, host, headline, stub: String(item.link ?? "").trim() });
   }
   return out;
 }
@@ -436,5 +442,91 @@ export async function fetchCoverage(args: {
   } catch (err: unknown) {
     args.log?.(`google-news: coverage lookup failed for "${args.headline}" (best-effort): ${String(err)}`);
     return [];
+  }
+}
+
+// ─── Stub → publisher URL ───────────────────────────────────────────────────
+// A coverage item's <link> is `news.google.com/rss/articles/<blob>`, and the
+// blob is opaque: base64-decoding it yields a protobuf whose payload is an
+// `AU_yqL…` token with no URL in it (re-checked 2026-09-03 — this is why the
+// older "never decoded" note was true when written). The URL is obtained the
+// way Google's own front end obtains it: read a signature and timestamp off
+// the stub page, then ask the batchexecute RPC to resolve them.
+//
+// WHY BOTHER, when the hunt could just search for it: because we are not
+// looking for a page, we already know the page exists and who published it.
+// Searching re-asks a third party to find a URL Google just handed us a
+// receipt for, and that third party is the least reliable link in the chain —
+// on 2026-09-03 DuckDuckGo answered every `site:` query with an anti-bot page
+// and the desk published nothing for a day. Decoding measured 12/12 that same
+// afternoon, fired back to back with no pacing and no blocks.
+//
+// THIS IS A PRIVATE ENDPOINT. It carries no compatibility promise and will
+// break without notice; that is a cost of the approach, not a surprise. Every
+// failure path returns "" so the caller falls back to the search hunt, and
+// nothing here can throw into a run.
+
+/** Signature/timestamp the batchexecute call has to echo back. */
+function stubCredentials(html: string): { signature: string; timestamp: string } | undefined {
+  const signature = /data-n-a-sg="([^"]+)"/.exec(html)?.[1];
+  const timestamp = /data-n-a-ts="([^"]+)"/.exec(html)?.[1];
+  return signature === undefined || timestamp === undefined ? undefined : { signature, timestamp };
+}
+
+/** The one URL in a batchexecute response, which is escaped JSON inside JSON
+ *  inside an anti-hijacking prelude — read the `garturlres` payload rather
+ *  than JSON.parse-ing three layers to reach one string. */
+function firstResolvedUrl(body: string): string {
+  return /garturlres.{0,8}(https?:\/\/[^\\"]+)/.exec(body)?.[1] ?? "";
+}
+
+/**
+ * Resolve a Google News coverage stub to the publisher's own article URL.
+ *
+ * Returns "" on ANY failure — a missing stub, a page without credentials, a
+ * refused RPC, a response with no URL. The caller treats "" as "not resolved"
+ * and falls back to searching, so a Google-side change degrades this to the
+ * behaviour we had before it existed.
+ */
+export async function resolveCoverageUrl(args: {
+  stub: string;
+  edition: GnEdition;
+  fetchImpl?: typeof fetch;
+  log?: (line: string) => void;
+}): Promise<string> {
+  const fetchImpl = args.fetchImpl ?? fetch;
+  const blob = /\/articles\/([A-Za-z0-9_-]+)/.exec(args.stub)?.[1];
+  if (blob === undefined) return "";
+  try {
+    const page = await fetchImpl(`https://news.google.com/rss/articles/${blob}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!page.ok) throw new Error(`stub page HTTP ${page.status}`);
+    const creds = stubCredentials(await page.text());
+    if (creds === undefined) throw new Error("stub page carried no signature");
+
+    // The RPC argument is a fixed request envelope with the blob, timestamp
+    // and signature slotted in; its shape is Google's, not ours, so it is
+    // written out literally rather than modelled.
+    const request = JSON.stringify([
+      "garturlreq",
+      [["X", "X", ["X", "X"], null, null, 1, 1, args.edition.ceid, null, 1, null, null, null, null, null, 0, 1], "X", "X", 1, [1, 1, 1], 1, 1, null, 0, 0, null, 0],
+      blob,
+      Number(creds.timestamp),
+      creds.signature,
+    ]);
+    const res = await fetchImpl("https://news.google.com/_/DotsSplashUi/data/batchexecute", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body: new URLSearchParams({ "f.req": JSON.stringify([[["Fbv4je", request]]]) }).toString(),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`batchexecute HTTP ${res.status}`);
+    const url = firstResolvedUrl(await res.text());
+    if (url === "") throw new Error("batchexecute returned no url");
+    return url;
+  } catch (err: unknown) {
+    args.log?.(`google-news: stub decode failed (falling back to search): ${String(err)}`);
+    return "";
   }
 }

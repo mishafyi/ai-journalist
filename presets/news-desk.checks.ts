@@ -393,6 +393,10 @@ async function orchestrationChecks(): Promise<void> {
   const logs4: string[] = [];
   let published4: GeneratedPost | null = null;
   const searched4: string[] = [];
+  const decoded4: string[] = [];
+  const GN_STUB_B = "https://news.google.com/rss/articles/HUNTB";
+  const GN_STUB_C = "https://news.google.com/rss/articles/HUNTC";
+  const GN_STUB_DENY = "https://news.google.com/rss/articles/DENY";
   const post4 = await createNewsDesk({
     llm,
     search: {
@@ -433,11 +437,22 @@ async function orchestrationChecks(): Promise<void> {
     log: (line) => logs4.push(line),
     trendingImpl: async () => trending,
     indexImpl: async () => [index[0]],
+    // A mixed cluster, so one run covers both resolvers: Hunt A carries no
+    // stub and must fall back to a site: search, Hunt B decodes cleanly, Hunt
+    // C decodes to a URL on someone ELSE's host and must be thrown away, and
+    // the deny-tier outlet must never be touched by either path.
     coverageImpl: async () => [
-      { outlet: "Hunt A", host: "hunt-a.example", headline: "Central bank hikes to 20-year high" },
-      { outlet: "Hunt B", host: "hunt-b.example", headline: "Rate rise rocks markets" },
-      { outlet: "Telegraph Online", host: "telegraph.com", headline: "Rates explained" },
+      { outlet: "Hunt A", host: "hunt-a.example", headline: "Central bank hikes to 20-year high", stub: "" },
+      { outlet: "Hunt B", host: "hunt-b.example", headline: "Rate rise rocks markets", stub: GN_STUB_B },
+      { outlet: "Hunt C", host: "hunt-c.example", headline: "Markets react", stub: GN_STUB_C },
+      { outlet: "Telegraph Online", host: "telegraph.com", headline: "Rates explained", stub: GN_STUB_DENY },
     ],
+    resolveUrlImpl: async (stub: string) => {
+      decoded4.push(stub);
+      if (stub === GN_STUB_B) return "https://hunt-b.example/story";
+      if (stub === GN_STUB_C) return "https://scraper.example/copy";
+      return "https://telegraph.com/rates";
+    },
     internalsFactory,
     parallelFetchImpl,
   }).run();
@@ -456,8 +471,20 @@ async function orchestrationChecks(): Promise<void> {
   ok("parallel research: the tournament web-researched the verified candidate",
     searched4.some((q) => q.includes("Panic of 1907")), JSON.stringify(searched4));
   ok("hunt: log names the shortfall, the cluster and what resolved",
-    logs4.some((l) => l.includes("index gave 1/3") && l.includes("GN coverage named 3 outlet(s) (2 admissible), resolved 2")),
+    logs4.some((l) => l.includes("index gave 1/3") && l.includes("GN coverage named 4 outlet(s) (3 admissible), resolved 2")),
     logs4.join(" | "));
+  // The point of the decode: a URL Google already holds costs no search call.
+  ok("hunt: a decoded stub resolves the outlet with NO site: search for it",
+    decoded4.includes(GN_STUB_B) && !searched4.some((q) => q.startsWith("site:hunt-b.example")),
+    `decoded=${JSON.stringify(decoded4)} searched=${JSON.stringify(searched4)}`);
+  // A decode is a URL lookup, never a grant of admissibility: Google handing
+  // back a link on another host must not put that host in the paper.
+  ok("hunt: a decode landing off the named host is discarded, not cited",
+    decoded4.includes(GN_STUB_C) &&
+      !((published4 as GeneratedPost | null)?.sources ?? []).some((c) => c.url.includes("scraper.example")),
+    JSON.stringify((published4 as GeneratedPost | null)?.sources ?? []));
+  ok("hunt: a deny-tier outlet is never decoded either",
+    !decoded4.includes(GN_STUB_DENY), JSON.stringify(decoded4));
   const cited4 = (published4 as GeneratedPost | null)?.sources ?? [];
   ok("hunt: published with index + GN-vetted hosts; off-host decoy discarded",
     cited4.some((c) => c.title.startsWith("Wire: ")) &&
