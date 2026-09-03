@@ -150,8 +150,11 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
 
   return {
     async complete({ system, prompt, model, temperature }) {
+      // `model` is filled in AFTER the call with the id that actually served
+      // it. Recording the candidate list instead would hide the one fact the
+      // trace is for: which model wrote this, when any of four might have.
       const request = {
-        model: pin(model) ?? cfg.models.join(" > "),
+        model: "",
         ...(temperature === undefined ? {} : { temperature }),
         ...(system === undefined ? {} : { system }),
         prompt,
@@ -171,10 +174,10 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
         });
         const text = res.text ?? "";
         if (!text.trim()) throw new Error(`Gemini returned an empty completion (model=${served})`);
-        cfg.trace?.llm({ ...request, response: text });
+        cfg.trace?.llm({ ...request, model: served, response: text });
         return text;
       } catch (err: unknown) {
-        cfg.trace?.llm({ ...request, error: String(err) });
+        cfg.trace?.llm({ ...request, model: served, error: String(err) });
         throw err;
       }
     },
@@ -191,15 +194,17 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
         .filter((m) => m.role !== "system")
         .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
       const request = {
-        model: pin(args.model) ?? cfg.models.join(" > "),
+        model: "",
         ...(args.temperature === undefined ? {} : { temperature: args.temperature }),
         schemaName: args.schemaName,
         messages: args.messages,
       };
+      let served = "";
       let text: string;
       try {
-        const res = await rotate(args.schemaName, pin(args.model), (chosen) =>
-          ai.models.generateContent({
+        const res = await rotate(args.schemaName, pin(args.model), (chosen) => {
+          served = chosen;
+          return ai.models.generateContent({
             model: chosen,
             contents,
             config: {
@@ -208,14 +213,14 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
               ...(system === "" ? {} : { systemInstruction: system }),
               ...(args.temperature === undefined ? {} : { temperature: args.temperature }),
             },
-          }),
-        );
+          });
+        });
         text = res.text ?? "";
       } catch (err: unknown) {
-        cfg.trace?.llm({ ...request, error: String(err) });
+        cfg.trace?.llm({ ...request, model: served, error: String(err) });
         throw err;
       }
-      cfg.trace?.llm({ ...request, response: text });
+      cfg.trace?.llm({ ...request, model: served, response: text });
       let parsed: unknown;
       try {
         parsed = JSON.parse(firstJsonValue(text));
