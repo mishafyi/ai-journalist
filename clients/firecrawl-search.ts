@@ -38,6 +38,30 @@ interface FirecrawlWebHit {
 }
 
 /**
+ * Serialise search calls so consecutive ones are at least `minIntervalMs`
+ * apart. Slots are reserved SYNCHRONOUSLY, so callers that fire in parallel
+ * are spaced rather than all waiting the same interval and then racing.
+ *
+ * This exists because Firecrawl's search chain ends at its own DuckDuckGo
+ * client, and DDG answers a burst with an anti-bot page. Firecrawl retries
+ * that up to four times ~1s apart, which is too fast to clear the block, so
+ * the whole budget is spent and the query returns empty — indistinguishable
+ * from "this outlet did not cover the story". Measured 2026-09-03: four
+ * back-to-back `site:` queries all blocked; the same shape 8s apart answered
+ * every time. Spacing is the only lever the caller has.
+ */
+export function createPacer(minIntervalMs: number): () => Promise<void> {
+  let nextAt = 0;
+  return async (): Promise<void> => {
+    if (minIntervalMs <= 0) return;
+    const now = Date.now();
+    const wait = Math.max(0, nextAt - now);
+    nextAt = Math.max(now, nextAt) + minIntervalMs;
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  };
+}
+
+/**
  * Build the default Firecrawl-backed `SearchClient`. `apiKey` falls back to
  * `FIRECRAWL_API_KEY`; `apiUrl` falls back to `FIRECRAWL_API_URL` and is
  * REQUIRED — throws if neither is set (env access is permitted in
@@ -53,6 +77,11 @@ export function createFirecrawlSearch(opts: {
     tbs?: string;
     scrape?: boolean;
   };
+  /** Minimum gap between consecutive `search()` calls, in milliseconds.
+   *  Omit (or 0) for no pacing. Applies to `search()` only — `scrape()` goes
+   *  to the publisher, not to the search backend, and is not rate-limited the
+   *  same way. See `createPacer` for why this is needed at all. */
+  minIntervalMs?: number;
   /** When set, every search and scrape is recorded into its pipeline STEP's
    *  file — query, merged options and the complete results (a scrape keeps
    *  its full page text). Share one tracer with the LLM client so a step's
@@ -72,12 +101,14 @@ export function createFirecrawlSearch(opts: {
     apiUrl,
   });
   const searchDefaults = opts.searchDefaults;
+  const pace = createPacer(opts.minIntervalMs ?? 0);
 
   return {
     async search(
       query,
       searchOpts?: { limit?: number; scrape?: boolean },
     ): Promise<SearchResult[]> {
+      await pace();
       // Defaults spread first, per-call opts win.
       const merged = { ...searchDefaults, ...searchOpts };
       // Never add `excludeDomains` — documented regression: SearXNG-backed

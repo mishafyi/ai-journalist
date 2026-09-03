@@ -1489,8 +1489,17 @@ export function createNewsDesk(opts: {
             // moment and resolved zero (live, 2026-08-17). Now it stops as
             // soon as it has enough, and gives up early when the backend is
             // plainly not answering.
-            const SEARCH_BUDGET = 4;
-            const EMPTY_STREAK_LIMIT = 2;
+            //
+            // The budget is 6, not 4, because the floor is 3 and a miss is
+            // ordinary: Google News names 7–11 admissible outlets for a story
+            // and not all of them are findable by a `site:` query. 4 left no
+            // room for two misses (live, 2026-09-03: 10 outlets named, index
+            // gave 2/3, hunt stopped one source short). Pacing, not a small
+            // budget, is what keeps this gentle now — the SearchClient spaces
+            // consecutive searches (`createPacer`), so a bigger budget costs
+            // wall-clock, not goodwill with the backend.
+            const SEARCH_BUDGET = 6;
+            const EMPTY_STREAK_LIMIT = 3;
             let spent = 0;
             let emptyStreak = 0;
             for (const c of fresh) {
