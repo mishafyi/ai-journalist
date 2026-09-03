@@ -1506,7 +1506,7 @@ export function createNewsDesk(opts: {
               }
               if (held.has(c.host)) continue;
               spent += 1;
-              const found = await search.search(`site:${c.host} ${c.headline}`, { limit: 3 });
+              const found = await search.search(`site:${c.host} ${c.headline}`, { limit: 10 });
               const onHost = found.find(
                 (r) => r.url.startsWith("http") && hostOf(r.url).endsWith(c.host),
               );
@@ -1520,6 +1520,23 @@ export function createNewsDesk(opts: {
                 item: { outlet: c.outlet, region: "", title: c.headline, url: onHost.url },
                 score: 0,
               });
+            }
+            // Wide fallback: the backend has been answering `site:` queries with
+            // off-host pages (measured 2026-09-02: 1 on-host result in 14
+            // searches, all day), so one plain headline search is asked for
+            // ten results and any that land on an admissible, still-unheld
+            // coverage outlet count — the story is the filter, not the operator.
+            if (unblocked.length + hunted.length < knobs.minSources && fresh.length > 0) {
+              const wide = await search.search(story.headline, { limit: 10 });
+              for (const r of wide) {
+                if (unblocked.length + hunted.length >= knobs.pagesMax) break;
+                if (!r.url.startsWith("http")) continue;
+                const host = hostOf(r.url);
+                const outlet = fresh.find((c) => !held.has(c.host) && host.endsWith(c.host));
+                if (outlet === undefined) continue;
+                held.add(outlet.host);
+                hunted.push({ item: { outlet: outlet.outlet, region: "", title: r.title || outlet.headline, url: r.url }, score: 0 });
+              }
             }
             log?.(
               `news-desk: "${story.headline}" index gave ${unblocked.length}/${knobs.minSources} — GN coverage named ${coverage.length} outlet(s) (${fresh.length} admissible), resolved ${hunted.length}`,
