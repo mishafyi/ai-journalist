@@ -68,13 +68,37 @@ export const FREE_MODELS: string[] = (
 /** Rounds through the whole candidate list before giving up. */
 const ROTATION_ROUNDS = 8;
 
-/** How long the API asked us to wait, or null when the error is not a throttle. */
-function throttleDelayMs(err: unknown): number | null {
+/** Why a failed call is worth trying elsewhere, and how long to shun the pair
+ *  that produced it. `null` means the error is a real fault to surface. */
+interface Retryable {
+  waitMs: number;
+  reason: "rate-limited" | "transport failure";
+}
+
+/**
+ * Classify an error as retryable-elsewhere or not.
+ *
+ * TRANSPORT FAILURES ARE RETRYABLE, and getting that wrong took the desk down
+ * for an hour on 2026-09-03: undici raises a bare `TypeError: fetch failed`
+ * for a dropped socket, and because it carries no HTTP status and no response
+ * body, every status regex below missed it, this returned null, and the
+ * rotation treated a dead connection as a malformed request and rethrew. Five
+ * consecutive runs died mid-column on it. A dropped socket is neither a rate
+ * limit nor a bug in the request — it is the one thing a retry reliably fixes,
+ * and the next key is a fresh connection.
+ *
+ * The cooldown for one is deliberately short: the model and key are not at
+ * fault, so shunning them for 30s would be punishing the wrong thing.
+ */
+function retryableAfter(err: unknown): Retryable | null {
   const text = String(err instanceof Error ? err.message : err);
   const asked = text.match(/"retryDelay":\s*"(\d+)s"/);
-  if (asked !== null) return Number(asked[1]) * 1000;
-  if (/"code":\s*429|RESOURCE_EXHAUSTED/.test(text)) return 30_000;
-  if (/"code":\s*503|high demand|UNAVAILABLE/.test(text)) return 10_000;
+  if (asked !== null) return { waitMs: Number(asked[1]) * 1000, reason: "rate-limited" };
+  if (/"code":\s*429|RESOURCE_EXHAUSTED/.test(text)) return { waitMs: 30_000, reason: "rate-limited" };
+  if (/"code":\s*503|high demand|UNAVAILABLE/.test(text)) return { waitMs: 10_000, reason: "rate-limited" };
+  if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|terminated|other side closed/i.test(text)) {
+    return { waitMs: 2_000, reason: "transport failure" };
+  }
   return null;
 }
 
@@ -139,21 +163,23 @@ export function createRotation(
         try {
           return await send(model, key);
         } catch (err: unknown) {
-          const wait = throttleDelayMs(err);
-          if (wait === null) throw err;
+          const retry = retryableAfter(err);
+          if (retry === null) throw err;
           last = err;
-          coolUntil.set(slot(model, key), Date.now() + wait);
-          // One line per MODEL, not per key: twelve keys would otherwise put
-          // twelve near-identical lines in the log for every refused call.
-          if (announced !== model) {
-            announced = model;
-            log?.(`gemini: ${label} — ${model} rate-limited on key ${key + 1}/${keyCount}, trying its other keys`);
+          coolUntil.set(slot(model, key), Date.now() + retry.waitMs);
+          // One line per MODEL-AND-REASON, not per key: twelve keys would
+          // otherwise put twelve near-identical lines in the log for every
+          // refused call. The reason is named so a sick network reads as a
+          // network problem instead of hiding behind "rate-limited".
+          if (announced !== `${model}|${retry.reason}`) {
+            announced = `${model}|${retry.reason}`;
+            log?.(`gemini: ${label} — ${model} ${retry.reason} on key ${key + 1}/${keyCount}, trying its other keys`);
           }
         }
       }
     }
     throw new Error(
-      `gemini: ${label} — every model was rate-limited on all ${keyCount} key(s) across ` +
+      `gemini: ${label} — every model failed on all ${keyCount} key(s) across ` +
         `${ROTATION_ROUNDS} rounds (${candidateModels.join(", ")}); last error: ` +
         `${last instanceof Error ? last.message : String(last)}`,
     );

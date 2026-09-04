@@ -74,8 +74,8 @@ async function main(): Promise<void> {
   await createRotation(["a-model", "b-model"], 1)("complete", undefined, async () => {
     throw rateLimited(0);
   }).catch((e: unknown) => { raised = String(e); });
-  ok("all models limited → an error naming the candidates",
-    raised.includes("a-model") && raised.includes("b-model") && raised.includes("rate-limited"),
+  ok("all models exhausted → an error naming the candidates",
+    raised.includes("a-model") && raised.includes("b-model") && raised.includes("every model failed"),
     raised.slice(0, 120));
 
   // A caller naming its own model is pinned: rotation must never move a
@@ -99,6 +99,37 @@ async function main(): Promise<void> {
   });
   ok("with everything cooling it waits the shortest cooldown, then retries",
     late === "recovered" && Date.now() - waited >= 900, `${Date.now() - waited}ms`);
+
+  // ── transport failures ────────────────────────────────────────────────────
+  // undici raises a bare `TypeError: fetch failed` for a dropped socket: no
+  // status, no body, nothing for a status regex to match. Treating that as a
+  // real fault killed five consecutive runs on 2026-09-03. It is the one error
+  // a retry reliably fixes, and the next key is a fresh connection.
+  const lines: string[] = [];
+  let tries = 0;
+  const recovered = await createRotation(["m"], 2, (l) => lines.push(l))(
+    "complete",
+    undefined,
+    async () => {
+      tries += 1;
+      if (tries === 1) throw new TypeError("fetch failed");
+      return "recovered";
+    },
+  );
+  ok("a dropped socket advances instead of killing the run",
+    recovered === "recovered" && tries === 2, `tries=${tries} got=${recovered}`);
+  // A sick network must not masquerade as a quota problem in the logs, or the
+  // next person debugging it goes looking at Google's dashboard.
+  ok("a transport failure is logged as one, not as a rate limit",
+    lines.some((l) => l.includes("transport failure")) && !lines.some((l) => l.includes("rate-limited")),
+    lines.join(" | ") || "(no log lines)");
+  // Still not a licence to retry genuine faults.
+  let stillThrows = "";
+  await createRotation(["m"], 2)("complete", undefined, async () => {
+    throw new Error("400 INVALID_ARGUMENT: bad schema");
+  }).catch((e: unknown) => { stillThrows = String(e); });
+  ok("a malformed-request error is still surfaced, not retried",
+    stillThrows.includes("INVALID_ARGUMENT"), stillThrows.slice(0, 60));
 
   // ── the key ring ──────────────────────────────────────────────────────────
   // Free-tier limits are per PROJECT, so a model refused on one project's key
