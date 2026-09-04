@@ -20,6 +20,7 @@ import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import type { ZodType } from "zod";
 import type { LlmClient } from "../ports";
+import { describeError } from "./trace";
 import type { Tracer } from "./trace";
 
 export interface GeminiLlmConfig {
@@ -67,31 +68,6 @@ export const FREE_MODELS: string[] = (
 
 /** Rounds through the whole candidate list before giving up. */
 const ROTATION_ROUNDS = 8;
-
-/**
- * An error and its CAUSE CHAIN, flattened.
- *
- * Node wraps every transport failure as a bare `TypeError: fetch failed`, and
- * the reason it failed — a connect timeout, a reset, DNS, a server that hung up
- * on a pooled socket — is only ever in `err.cause`. `String(err)` throws that
- * away, which is how 35 recorded failures on 2026-09-03 all read as the same
- * useless line and left nothing to diagnose. The distinction matters: a connect
- * timeout points at the uplink, a reset at the far end, ENOTFOUND at DNS on
- * this box. Depth is capped because a cause chain can be circular.
- */
-export function describeError(err: unknown): string {
-  const seen = new Set<unknown>();
-  const parts: string[] = [];
-  let cur: unknown = err;
-  while (cur !== undefined && cur !== null && !seen.has(cur) && parts.length < 4) {
-    seen.add(cur);
-    const e = cur as { name?: string; message?: string; code?: string; cause?: unknown };
-    const label = e.message ? `${e.name ?? "Error"}: ${e.message}` : String(cur);
-    parts.push(typeof e.code === "string" ? `${label} [${e.code}]` : label);
-    cur = e.cause;
-  }
-  return parts.join(" ← ");
-}
 
 /** Why a failed call is worth trying elsewhere, and how long to shun the pair
  *  that produced it. `null` means the error is a real fault to surface. */

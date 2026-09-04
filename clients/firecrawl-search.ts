@@ -26,6 +26,7 @@
  */
 import { Firecrawl } from "firecrawl";
 import type { SearchClient, SearchResult } from "../ports";
+import { describeError } from "./trace";
 import type { Tracer } from "./trace";
 
 /** A union-shaped Firecrawl web hit — `SearchResultWeb` fields plus the
@@ -125,7 +126,7 @@ export function createFirecrawlSearch(opts: {
             : undefined,
         });
       } catch (err: unknown) {
-        opts.trace?.search({ query, op: "search", options: merged, error: String(err) });
+        opts.trace?.search({ query, op: "search", options: merged, error: describeError(err) });
         throw err;
       }
       const web = (data.web ?? []) as FirecrawlWebHit[];
@@ -155,7 +156,7 @@ export function createFirecrawlSearch(opts: {
         opts.trace?.search({ query: url, op: "scrape", content: markdown });
         return markdown;
       } catch (err: unknown) {
-        opts.trace?.search({ query: url, op: "scrape", error: String(err) });
+        opts.trace?.search({ query: url, op: "scrape", error: describeError(err) });
         throw err;
       }
     },

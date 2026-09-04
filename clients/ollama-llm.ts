@@ -13,6 +13,7 @@
 import { z } from "zod";
 import type { ZodType } from "zod";
 import type { LlmClient } from "../ports";
+import { describeError } from "./trace";
 import type { Tracer } from "./trace";
 
 export interface OllamaLlmConfig {
@@ -167,7 +168,7 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
         cfg.trace?.llm({ ...request, response: text });
         return text;
       } catch (err: unknown) {
-        cfg.trace?.llm({ ...request, error: String(err) });
+        cfg.trace?.llm({ ...request, error: describeError(err) });
         throw err;
       }
     },
@@ -198,7 +199,7 @@ export function createOllamaLlm(cfg: OllamaLlmConfig): LlmClient {
           keepAlive: cfg.options?.keepAlive,
         });
       } catch (err: unknown) {
-        cfg.trace?.llm({ ...request, error: String(err) });
+        cfg.trace?.llm({ ...request, error: describeError(err) });
         throw err;
       }
       cfg.trace?.llm({ ...request, response: text });

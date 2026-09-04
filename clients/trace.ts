@@ -18,6 +18,26 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { inspect } from "node:util";
+
+/**
+ * An error rendered with its CAUSE CHAIN, for a trace or a log.
+ *
+ * Node wraps every transport failure as a bare `TypeError: fetch failed` and
+ * puts the reason — connect timeout, reset, DNS, a server that hung up on a
+ * pooled socket — on `err.cause`. `String(err)` drops it, which is how 35
+ * recorded failures on 2026-09-03 all read as the same useless line with
+ * nothing to diagnose; the distinction matters, because a connect timeout
+ * points at the uplink, a reset at the far end and ENOTFOUND at DNS here.
+ *
+ * `util.inspect` already does this properly: it renders `[cause]` recursively
+ * with each cause's `code`, handles circular chains, and needs no dependency.
+ * Depth 4 is enough for wrapper → cause → cause and stops short of dumping a
+ * whole request object.
+ */
+export function describeError(err: unknown): string {
+  return inspect(err, { depth: 4, breakLength: Infinity });
+}
 
 export interface TraceMessage {
   role: string;

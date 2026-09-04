@@ -9,7 +9,8 @@
  * is decided entirely there. Driving it through the SDK would test Google's
  * mood and the SDK's constructor, neither of which is ours.
  */
-import { createRotation, describeError, FREE_MODELS } from "./gemini-llm";
+import { createRotation, FREE_MODELS } from "./gemini-llm";
+import { describeError } from "./trace";
 
 let failures = 0;
 const ok = (name: string, cond: boolean, detail: string): void => {
@@ -113,7 +114,7 @@ async function main(): Promise<void> {
   const loop = new Error("a");
   (loop as { cause?: unknown }).cause = loop;
   ok("a circular cause chain terminates instead of hanging",
-    describeError(loop) === "Error: a", describeError(loop));
+    describeError(loop).includes("Circular"), describeError(loop).slice(0, 80));
   // Socket codes live on the cause, so classification must read the chain.
   const reset = new TypeError("something odd");
   (reset as { cause?: unknown }).cause = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
