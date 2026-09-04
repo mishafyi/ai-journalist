@@ -9,7 +9,7 @@
  * is decided entirely there. Driving it through the SDK would test Google's
  * mood and the SDK's constructor, neither of which is ours.
  */
-import { createRotation, FREE_MODELS } from "./gemini-llm";
+import { createRotation, describeError, FREE_MODELS } from "./gemini-llm";
 
 let failures = 0;
 const ok = (name: string, cond: boolean, detail: string): void => {
@@ -99,6 +99,31 @@ async function main(): Promise<void> {
   });
   ok("with everything cooling it waits the shortest cooldown, then retries",
     late === "recovered" && Date.now() - waited >= 900, `${Date.now() - waited}ms`);
+
+  // ── the cause chain ───────────────────────────────────────────────────────
+  // `fetch failed` is a wrapper; the diagnosable part is always the cause.
+  const wrapped = new TypeError("fetch failed");
+  (wrapped as { cause?: unknown }).cause = Object.assign(new Error("Connect Timeout Error"), {
+    code: "UND_ERR_CONNECT_TIMEOUT",
+  });
+  ok("the cause chain survives into the recorded error",
+    describeError(wrapped).includes("fetch failed") &&
+      describeError(wrapped).includes("UND_ERR_CONNECT_TIMEOUT"),
+    describeError(wrapped));
+  const loop = new Error("a");
+  (loop as { cause?: unknown }).cause = loop;
+  ok("a circular cause chain terminates instead of hanging",
+    describeError(loop) === "Error: a", describeError(loop));
+  // Socket codes live on the cause, so classification must read the chain.
+  const reset = new TypeError("something odd");
+  (reset as { cause?: unknown }).cause = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+  let advanced = 0;
+  await createRotation(["m"], 2)("complete", undefined, async () => {
+    advanced += 1;
+    if (advanced === 1) throw reset;
+    return "ok";
+  });
+  ok("a socket code on the CAUSE is classified as retryable", advanced === 2, `attempts=${advanced}`);
 
   // ── transport failures ────────────────────────────────────────────────────
   // undici raises a bare `TypeError: fetch failed` for a dropped socket: no

@@ -68,6 +68,31 @@ export const FREE_MODELS: string[] = (
 /** Rounds through the whole candidate list before giving up. */
 const ROTATION_ROUNDS = 8;
 
+/**
+ * An error and its CAUSE CHAIN, flattened.
+ *
+ * Node wraps every transport failure as a bare `TypeError: fetch failed`, and
+ * the reason it failed — a connect timeout, a reset, DNS, a server that hung up
+ * on a pooled socket — is only ever in `err.cause`. `String(err)` throws that
+ * away, which is how 35 recorded failures on 2026-09-03 all read as the same
+ * useless line and left nothing to diagnose. The distinction matters: a connect
+ * timeout points at the uplink, a reset at the far end, ENOTFOUND at DNS on
+ * this box. Depth is capped because a cause chain can be circular.
+ */
+export function describeError(err: unknown): string {
+  const seen = new Set<unknown>();
+  const parts: string[] = [];
+  let cur: unknown = err;
+  while (cur !== undefined && cur !== null && !seen.has(cur) && parts.length < 4) {
+    seen.add(cur);
+    const e = cur as { name?: string; message?: string; code?: string; cause?: unknown };
+    const label = e.message ? `${e.name ?? "Error"}: ${e.message}` : String(cur);
+    parts.push(typeof e.code === "string" ? `${label} [${e.code}]` : label);
+    cur = e.cause;
+  }
+  return parts.join(" ← ");
+}
+
 /** Why a failed call is worth trying elsewhere, and how long to shun the pair
  *  that produced it. `null` means the error is a real fault to surface. */
 interface Retryable {
@@ -91,7 +116,10 @@ interface Retryable {
  * fault, so shunning them for 30s would be punishing the wrong thing.
  */
 function retryableAfter(err: unknown): Retryable | null {
-  const text = String(err instanceof Error ? err.message : err);
+  // The whole chain: the socket codes below live on the CAUSE, never on the
+  // `fetch failed` wrapper, so matching the top-level message alone would make
+  // every pattern except "fetch failed" unreachable.
+  const text = describeError(err);
   const asked = text.match(/"retryDelay":\s*"(\d+)s"/);
   if (asked !== null) return { waitMs: Number(asked[1]) * 1000, reason: "rate-limited" };
   if (/"code":\s*429|RESOURCE_EXHAUSTED/.test(text)) return { waitMs: 30_000, reason: "rate-limited" };
@@ -181,7 +209,7 @@ export function createRotation(
     throw new Error(
       `gemini: ${label} — every model failed on all ${keyCount} key(s) across ` +
         `${ROTATION_ROUNDS} rounds (${candidateModels.join(", ")}); last error: ` +
-        `${last instanceof Error ? last.message : String(last)}`,
+        `${describeError(last)}`,
     );
   };
 }
@@ -247,7 +275,7 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
         cfg.trace?.llm({ ...request, model: served, response: text });
         return text;
       } catch (err: unknown) {
-        cfg.trace?.llm({ ...request, model: served, error: String(err) });
+        cfg.trace?.llm({ ...request, model: served, error: describeError(err) });
         throw err;
       }
     },
@@ -287,7 +315,7 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
         });
         text = res.text ?? "";
       } catch (err: unknown) {
-        cfg.trace?.llm({ ...request, model: served, error: String(err) });
+        cfg.trace?.llm({ ...request, model: served, error: describeError(err) });
         throw err;
       }
       cfg.trace?.llm({ ...request, model: served, response: text });
