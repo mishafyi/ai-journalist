@@ -23,7 +23,12 @@ import type { LlmClient } from "../ports";
 import type { Tracer } from "./trace";
 
 export interface GeminiLlmConfig {
-  apiKey: string;
+  /** Every key available, each from a SEPARATE Google project. Free-tier
+   *  limits are per project (rate-limits doc: "applied per project, not per
+   *  API key"), so N keys from N projects multiply the budget N times — and N
+   *  keys from ONE project multiply nothing. Order is irrelevant: calls start
+   *  at a rotating offset so no single key carries the daily count. */
+  apiKeys: readonly string[];
   /** Free models in preference order; the first that answers serves the call.
    *  A call naming its own model pins to that one and does not rotate. */
   models: readonly string[];
@@ -39,17 +44,22 @@ export interface GeminiLlmConfig {
  *   prompt ~6.3K tokens  3.5-flash-lite 1.7s | gemma-4-26b 4.7s | gemma-4-31b 24.3s
  *   prompt ~14.3K tokens 3.5-flash-lite 0.9s | BOTH gemma models 429, limit=16000
  *
- * The Gemma models share ONE 16,000 input-tokens-per-minute bucket, so a real
- * column prompt — persona, standing tests and the scraped source pages — is
- * refused outright by both, and no backoff can help: the cap is volume per
- * minute, not a transient. They stay in the list because their daily ceiling is
- * 14,400 requests against Flash-Lite's 500, which is the budget that matters
- * for the many small calls (tags, headlines, judgments) a run also makes.
+ * GEMMA LEADS BY OPERATOR CHOICE (2026-09-03), and the key ring is what makes
+ * that affordable. Within one project the two Gemma models share a single
+ * 16,000 input-tokens-per-minute bucket; across twelve projects there are
+ * twelve such buckets, so the cap that used to end runs is now something the
+ * rotation walks around. Gemma also has the daily headroom — 14,400 requests
+ * against Flash-Lite's 500.
+ *
+ * Flash-Lite still sits behind them, and not only as a spare: a SINGLE request
+ * over 16,000 input tokens is refused by Gemma on every key, because no per-
+ * minute budget can hold a prompt that large. Those calls fall through to
+ * Flash-Lite, which took the same 14.3K-token prompt in 0.9s.
  * `GEMINI_FREE_MODELS` overrides the order without a code change.
  */
 export const FREE_MODELS: string[] = (
   process.env.GEMINI_FREE_MODELS ??
-  "gemini-3.5-flash-lite,gemma-4-26b-a4b-it,gemma-4-31b-it,gemini-3.1-flash-lite"
+  "gemma-4-31b-it,gemma-4-26b-a4b-it,gemini-3.5-flash-lite,gemini-3.1-flash-lite"
 )
   .split(",")
   .map((m) => m.trim())
@@ -84,36 +94,68 @@ function throttleDelayMs(err: unknown): number | null {
  */
 export function createRotation(
   models: readonly string[],
+  keyCount: number,
   log?: (line: string) => void,
-): <T>(label: string, pinned: string | undefined, send: (model: string) => Promise<T>) => Promise<T> {
+): <T>(label: string, pinned: string | undefined, send: (model: string, keyIndex: number) => Promise<T>) => Promise<T> {
+  // Cooldowns are per MODEL-AND-KEY. A model limited on one project's key is
+  // fine on the next project's, so retiring the model outright would throw
+  // away eleven working budgets over one exhausted one.
   const coolUntil = new Map<string, number>();
-  return async <T>(label: string, pinned: string | undefined, send: (model: string) => Promise<T>): Promise<T> => {
-    const candidates = pinned === undefined ? models : [pinned];
-    if (candidates.length === 0) throw new Error("gemini: no models configured");
+  const slot = (model: string, key: number): string => `${model}#${key}`;
+  // Where the key ring starts, advanced per call. Without this every call
+  // begins at key 0, which would burn one project's 14,400 daily requests
+  // while the other eleven sat idle.
+  let cursor = 0;
+
+  return async <T>(
+    label: string,
+    pinned: string | undefined,
+    send: (model: string, keyIndex: number) => Promise<T>,
+  ): Promise<T> => {
+    const candidateModels = pinned === undefined ? models : [pinned];
+    if (candidateModels.length === 0) throw new Error("gemini: no models configured");
+    if (keyCount === 0) throw new Error("gemini: no api keys configured");
+    const start = cursor;
+    cursor = (cursor + 1) % keyCount;
+    // Model-major: every key for the preferred model before the next model,
+    // so an operator's first choice is genuinely exhausted before we move off
+    // it. The keys themselves rotate so the load spreads across projects.
+    const pairs = candidateModels.flatMap((model) =>
+      Array.from({ length: keyCount }, (_, n) => ({ model, key: (start + n) % keyCount })),
+    );
+
     let last: unknown;
     for (let round = 1; round <= ROTATION_ROUNDS; round += 1) {
-      const ready = candidates.filter((m) => (coolUntil.get(m) ?? 0) <= Date.now());
+      const ready = pairs.filter((p) => (coolUntil.get(slot(p.model, p.key)) ?? 0) <= Date.now());
       if (ready.length === 0) {
-        const wait = Math.max(0, Math.min(...candidates.map((m) => coolUntil.get(m) ?? 0)) - Date.now());
-        log?.(`gemini: ${label} — every free model is cooling down, waiting ${Math.round(wait / 1000)}s`);
+        const soonest = Math.min(...pairs.map((p) => coolUntil.get(slot(p.model, p.key)) ?? 0));
+        const wait = Math.max(0, soonest - Date.now());
+        log?.(`gemini: ${label} — every model/key pair is cooling, waiting ${Math.round(wait / 1000)}s`);
         await new Promise((resolve) => setTimeout(resolve, wait));
         continue;
       }
-      for (const model of ready) {
+      let announced = "";
+      for (const { model, key } of ready) {
         try {
-          return await send(model);
+          return await send(model, key);
         } catch (err: unknown) {
           const wait = throttleDelayMs(err);
           if (wait === null) throw err;
           last = err;
-          coolUntil.set(model, Date.now() + wait);
-          log?.(`gemini: ${label} — ${model} rate-limited, cooling ${Math.round(wait / 1000)}s; advancing`);
+          coolUntil.set(slot(model, key), Date.now() + wait);
+          // One line per MODEL, not per key: twelve keys would otherwise put
+          // twelve near-identical lines in the log for every refused call.
+          if (announced !== model) {
+            announced = model;
+            log?.(`gemini: ${label} — ${model} rate-limited on key ${key + 1}/${keyCount}, trying its other keys`);
+          }
         }
       }
     }
     throw new Error(
-      `gemini: ${label} — every free model was rate-limited across ${ROTATION_ROUNDS} rounds ` +
-        `(${candidates.join(", ")}); last error: ${last instanceof Error ? last.message : String(last)}`,
+      `gemini: ${label} — every model was rate-limited on all ${keyCount} key(s) across ` +
+        `${ROTATION_ROUNDS} rounds (${candidateModels.join(", ")}); last error: ` +
+        `${last instanceof Error ? last.message : String(last)}`,
     );
   };
 }
@@ -143,8 +185,10 @@ function firstJsonValue(text: string): string {
 }
 
 export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
-  const ai = new GoogleGenAI({ apiKey: cfg.apiKey });
-  const rotate = createRotation(cfg.models, cfg.log);
+  // One SDK client per key — the key is fixed at construction, so a ring of
+  // keys is a ring of clients.
+  const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({ apiKey }));
+  const rotate = createRotation(cfg.models, ring.length, cfg.log);
   const pin = (candidate: string | undefined): string | undefined =>
     candidate === undefined || candidate.trim() === "" ? undefined : candidate;
 
@@ -161,9 +205,9 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
       };
       let served = "";
       try {
-        const res = await rotate("complete", pin(model), (chosen) => {
+        const res = await rotate("complete", pin(model), (chosen, key) => {
           served = chosen;
-          return ai.models.generateContent({
+          return ring[key].models.generateContent({
             model: chosen,
             contents: prompt,
             config: {
@@ -202,9 +246,9 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
       let served = "";
       let text: string;
       try {
-        const res = await rotate(args.schemaName, pin(args.model), (chosen) => {
+        const res = await rotate(args.schemaName, pin(args.model), (chosen, key) => {
           served = chosen;
-          return ai.models.generateContent({
+          return ring[key].models.generateContent({
             model: chosen,
             contents,
             config: {
