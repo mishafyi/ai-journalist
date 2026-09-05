@@ -157,6 +157,31 @@ async function main(): Promise<void> {
   ok("a malformed-request error is still surfaced, not retried",
     stillThrows.includes("INVALID_ARGUMENT"), stillThrows.slice(0, 60));
 
+  // ── dead keys ─────────────────────────────────────────────────────────────
+  // Keys get revoked and projects get disabled without warning. On 2026-09-05,
+  // 4 of 12 read 401 "The bound service account is deleted or disabled", and
+  // because that counted as a real fault the run died on whichever key the
+  // ring happened to open on — with eight working keys untried behind it.
+  const dead = new Error('{"error":{"code":401,"message":"The bound service account is deleted or disabled."}}');
+  const tried: number[] = [];
+  const survived = await createRotation(["m"], 4)("complete", undefined, async (_m, k) => {
+    tried.push(k);
+    if (k < 2) throw dead;
+    return `served by key ${k}`;
+  });
+  ok("a dead key advances to the next key instead of failing the run",
+    survived === "served by key 2" && tried.join(">") === "0>1>2", `${survived} | ${tried.join(">")}`);
+
+  // It must not be confused with a rate limit in the log: one is "wait", the
+  // other is "this key is gone and someone has to replace it".
+  const deadLines: string[] = [];
+  await createRotation(["m"], 2, (l) => deadLines.push(l))("complete", undefined, async () => {
+    throw dead;
+  }).catch(() => undefined);
+  ok("a dead key is logged as one, not as a rate limit",
+    deadLines.some((l) => l.includes("dead key")) && !deadLines.some((l) => l.includes("rate-limited")),
+    deadLines.join(" | ").slice(0, 90));
+
   // ── the key ring ──────────────────────────────────────────────────────────
   // Free-tier limits are per PROJECT, so a model refused on one project's key
   // is fine on the next one's. Exhausting a model's keys before moving off it

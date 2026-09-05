@@ -68,12 +68,22 @@ export const FREE_MODELS: string[] = (
 
 /** Rounds through the whole candidate list before giving up. */
 const ROTATION_ROUNDS = 8;
+/**
+ * The longest this will ever sit waiting for a cooldown to expire.
+ *
+ * Waiting is only worth it for something that clears in a moment. A dead key
+ * is parked for an hour, and without this the rotation would block the whole
+ * desk for that hour rather than saying plainly that every key is gone — a
+ * silent stall being much the worse failure, because nothing is logged and
+ * nothing recovers.
+ */
+const MAX_COOLDOWN_WAIT_MS = 120_000;
 
 /** Why a failed call is worth trying elsewhere, and how long to shun the pair
  *  that produced it. `null` means the error is a real fault to surface. */
 interface Retryable {
   waitMs: number;
-  reason: "rate-limited" | "transport failure";
+  reason: "rate-limited" | "transport failure" | "dead key";
 }
 
 /**
@@ -102,6 +112,21 @@ function retryableAfter(err: unknown): Retryable | null {
   if (/"code":\s*503|high demand|UNAVAILABLE/.test(text)) return { waitMs: 10_000, reason: "rate-limited" };
   if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|terminated|other side closed/i.test(text)) {
     return { waitMs: 2_000, reason: "transport failure" };
+  }
+  // A DEAD KEY IS THE RING'S PROBLEM, NOT THE REQUEST'S. Keys get revoked and
+  // projects get disabled independently of anything the caller did, so the
+  // answer is the next key — exactly as for a rate limit. Treating this as a
+  // real fault cost the paper 35 hours on 2026-09-05: 4 of 12 keys had gone
+  // 401 "The bound service account is deleted or disabled", the ring starts at
+  // a rotating offset, and so roughly one run in three opened on a dead key
+  // and died on the spot with 8 working keys sitting untried behind it.
+  //
+  // Parked for an hour rather than seconds: a revoked key does not come back
+  // in the next breath, and probing it every call would spend a request each
+  // time to be told the same thing. If EVERY key is dead the rotation still
+  // ends with its "every model failed" error, naming them.
+  if (/"code":\s*40[13]|API_KEY_INVALID|API key not valid|bound service account is (?:deleted|disabled)|PERMISSION_DENIED|UNAUTHENTICATED/i.test(text)) {
+    return { waitMs: 60 * 60_000, reason: "dead key" };
   }
   return null;
 }
@@ -158,6 +183,7 @@ export function createRotation(
       if (ready.length === 0) {
         const soonest = Math.min(...pairs.map((p) => coolUntil.get(slot(p.model, p.key)) ?? 0));
         const wait = Math.max(0, soonest - Date.now());
+        if (wait > MAX_COOLDOWN_WAIT_MS) break; // nothing usable soon — say so
         log?.(`gemini: ${label} — every model/key pair is cooling, waiting ${Math.round(wait / 1000)}s`);
         await new Promise((resolve) => setTimeout(resolve, wait));
         continue;
