@@ -182,6 +182,28 @@ async function main(): Promise<void> {
     deadLines.some((l) => l.includes("dead key")) && !deadLines.some((l) => l.includes("rate-limited")),
     deadLines.join(" | ").slice(0, 90));
 
+  // REGRESSION (2026-09-08). Classification read the whole `describeError`
+  // output, STACK INCLUDED, and every awaited SDK rejection carries
+  // `at process.processTicksAndRejections (node:internal/process/task_queues)`
+  // — which matches /INTERNAL/i in the 500 branch and swallowed every case
+  // after it. Confirmed against a live 401: a revoked key came back as
+  // "transport failure" on a 5-second cooldown instead of "dead key" parked
+  // for an hour, so the ring re-probed a corpse a dozen times a minute. The
+  // stack is pinned here rather than left to whatever V8 captures, so the case
+  // cannot start passing by an accident of stack depth.
+  const deadFromSdk = new Error("unused — the stack below is what gets read");
+  deadFromSdk.stack =
+    'ApiError: {"error":{"code":401,"message":"The bound service account is deleted or disabled.","status":"UNAUTHENTICATED"}}\n' +
+    "    at throwErrorIfNotOK (file:///app/node_modules/@google/genai/dist/node/index.mjs:14090:30)\n" +
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)";
+  const sdkLines: string[] = [];
+  await createRotation(["m"], 2, (l) => sdkLines.push(l))("complete", undefined, async () => {
+    throw deadFromSdk;
+  }).catch(() => undefined);
+  ok("a node:internal stack frame must not turn a revoked key into a 500",
+    sdkLines.some((l) => l.includes("dead key")) && !sdkLines.some((l) => l.includes("transport failure")),
+    sdkLines.join(" | ").slice(0, 120));
+
   // A 500 from Google is Google failing, not our request being wrong. Left
   // unclassified it ended 254 runs in one day (2026-09-08).
   let after500 = 0;

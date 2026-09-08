@@ -101,11 +101,28 @@ interface Retryable {
  * The cooldown for one is deliberately short: the model and key are not at
  * fault, so shunning them for 30s would be punishing the wrong thing.
  */
+/**
+ * The error as EVIDENCE — message and cause chain, with the V8 stack frames
+ * taken out.
+ *
+ * The frames are not evidence about the failure, and matching them was a bug
+ * with teeth: every awaited SDK rejection carries
+ * `at process.processTicksAndRejections (node:internal/process/task_queues)`,
+ * which matches /INTERNAL/i, so the 500 branch below swallowed EVERY later
+ * case. A revoked key was classified "transport failure" and parked for 5
+ * seconds instead of an hour — re-probed a dozen times a minute to be told
+ * the same thing, which is precisely what the dead-key branch exists to stop.
+ * Confirmed against a live 401 on 2026-09-08.
+ */
+function evidence(err: unknown): string {
+  return describeError(err).replace(/\n\s+at .*/g, "");
+}
+
 function retryableAfter(err: unknown): Retryable | null {
   // The whole chain: the socket codes below live on the CAUSE, never on the
   // `fetch failed` wrapper, so matching the top-level message alone would make
   // every pattern except "fetch failed" unreachable.
-  const text = describeError(err);
+  const text = evidence(err);
   const asked = text.match(/"retryDelay":\s*"(\d+)s"/);
   if (asked !== null) return { waitMs: Number(asked[1]) * 1000, reason: "rate-limited" };
   if (/"code":\s*429|RESOURCE_EXHAUSTED/.test(text)) return { waitMs: 30_000, reason: "rate-limited" };
