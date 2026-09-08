@@ -1897,11 +1897,26 @@ export function createNewsDesk(opts: {
                   content: `Story: ${story.headline}\n\nEvidence excerpt:\n${evidence.slice(0, 1200)}\n\nAlso choose the ONE section this story files under, from exactly this list: ${SECTIONS.join(", ")}.`,
                 },
               ],
-              schema: z.object({ tags: z.array(z.string().min(2).max(28)).min(3).max(10), section: z.enum(SECTIONS) }),
+              // PERMISSIVE ON PURPOSE, then shaped in code below. The bounds
+              // used to live here — max(28) per tag, max(10) tags — and zod
+              // rejects the WHOLE object when any one element misses, so a
+              // single over-long tag discarded the section too. That is how
+              // 18% of the archive ended up with no tags AND no section,
+              // appearing on no section page and no tag page at all: an
+              // article was thrown away over a tag that was four characters
+              // long. Length and count are preferences, not correctness, so
+              // they are enforced by trimming what came back.
+              schema: z.object({ tags: z.array(z.string().min(2)).min(1).max(30), section: z.enum(SECTIONS) }),
               schemaName: "story_tags",
               temperature: 0,
             });
-            tags = [...new Set(tagged.tags.map((t) => t.toLowerCase().trim()).filter((t) => t !== ""))].slice(0, 10);
+            tags = [
+              ...new Set(
+                tagged.tags
+                  .map((t) => t.toLowerCase().trim())
+                  .filter((t) => t !== "" && t.length <= 28),
+              ),
+            ].slice(0, 10);
             section = tagged.section;
             recordArtifact?.("tags", `${section} — ${tags.join(", ")}`);
           } catch (err: unknown) {
