@@ -110,6 +110,15 @@ function retryableAfter(err: unknown): Retryable | null {
   if (asked !== null) return { waitMs: Number(asked[1]) * 1000, reason: "rate-limited" };
   if (/"code":\s*429|RESOURCE_EXHAUSTED/.test(text)) return { waitMs: 30_000, reason: "rate-limited" };
   if (/"code":\s*503|high demand|UNAVAILABLE/.test(text)) return { waitMs: 10_000, reason: "rate-limited" };
+  // A 500 INTERNAL is Google's side falling over, not our request being wrong.
+  // It reads like a fault and is not one: on 2026-09-08 it ended 254 runs in a
+  // day — the desk published once, at 04:12, and spent the rest of the day
+  // dying mid-column on "Internal error encountered". The next key or model
+  // answers it, which is the same remedy as for a dropped socket, so it gets
+  // the same short cooldown rather than taking the run down.
+  if (/"code":\s*50[024]|INTERNAL|Internal error encountered|Bad Gateway|Gateway Time/i.test(text)) {
+    return { waitMs: 5_000, reason: "transport failure" };
+  }
   if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|terminated|other side closed/i.test(text)) {
     return { waitMs: 2_000, reason: "transport failure" };
   }

@@ -182,6 +182,17 @@ async function main(): Promise<void> {
     deadLines.some((l) => l.includes("dead key")) && !deadLines.some((l) => l.includes("rate-limited")),
     deadLines.join(" | ").slice(0, 90));
 
+  // A 500 from Google is Google failing, not our request being wrong. Left
+  // unclassified it ended 254 runs in one day (2026-09-08).
+  let after500 = 0;
+  const past500 = await createRotation(["m"], 3)("complete", undefined, async () => {
+    after500 += 1;
+    if (after500 === 1) throw new Error('{"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}');
+    return "served";
+  });
+  ok("a 500 INTERNAL advances instead of killing the run",
+    past500 === "served" && after500 === 2, `attempts=${after500}`);
+
   // ── the key ring ──────────────────────────────────────────────────────────
   // Free-tier limits are per PROJECT, so a model refused on one project's key
   // is fine on the next one's. Exhausting a model's keys before moving off it
