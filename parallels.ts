@@ -9,12 +9,27 @@
 import { z } from "zod";
 import type { LlmClient } from "./ports";
 
+// Bounds are STRUCTURAL only. They used to be `era.min(2)`, `event.min(3)`,
+// `actors.min(1).max(6)`, `claimedSimilarity.min(10)` — and because zod rejects
+// the whole object when any one element misses, a single candidate naming a
+// two-letter actor or a nine-character similarity threw away all four good
+// candidates. Worse than the tags and dossier versions of this mistake: these
+// call sites are NOT wrapped, so it ended the entire run. 15 runs died that
+// way, the most recent on 2026-09-08. Shape is correctness; length is a
+// preference, applied by `shapeCandidates` after the parse.
 export const ParallelCandidate = z.object({
-  era: z.string().min(2),
-  event: z.string().min(3),
-  actors: z.array(z.string().min(2)).min(1).max(6),
-  claimedSimilarity: z.string().min(10),
+  era: z.string().min(1),
+  event: z.string().min(1),
+  actors: z.array(z.string().min(1)).min(1),
+  claimedSimilarity: z.string().min(1),
 });
+
+/** Drop candidates too empty to research, cap the actor list, keep the rest. */
+export function shapeCandidates(candidates: readonly ParallelCandidate[]): ParallelCandidate[] {
+  return candidates
+    .filter((c) => c.event.trim() !== "" && c.claimedSimilarity.trim() !== "")
+    .map((c) => ({ ...c, actors: c.actors.filter((a) => a.trim() !== "").slice(0, 6) }));
+}
 export type ParallelCandidate = z.infer<typeof ParallelCandidate>;
 
 export interface VerifiedParallel extends ParallelCandidate {
@@ -49,12 +64,12 @@ export async function proposeParallels(args: {
         content: `STORY:\n${args.storySummary}\n\nPropose exactly ${args.count} candidate parallels. For each: era (the year or period, e.g. "1956"), event (the standard name, e.g. "Suez Crisis"), actors (1-6 principal parties), claimedSimilarity (one sentence: which dynamic matches).${args.correctiveContext === undefined ? "" : `\n\nYOUR PREVIOUS CANDIDATES FAILED VERIFICATION — your memory of at least one event conflicted with the historical record. The verified record says:\n${args.correctiveContext}\nRe-propose candidates whose era, actors, and facts MATCH documented history; the record always wins over your memory.`}`,
       },
     ],
-    schema: z.object({ candidates: z.array(ParallelCandidate).min(1).max(args.count) }),
+    schema: z.object({ candidates: z.array(ParallelCandidate).min(1) }),
     schemaName: "parallel_candidates",
     ...(args.model === undefined ? {} : { model: args.model }),
     temperature: 0.4,
   });
-  return result.candidates;
+  return shapeCandidates(result.candidates).slice(0, args.count);
 }
 
 const WIKI_OPENSEARCH = "https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit=1&search=";

@@ -177,40 +177,76 @@ export function checkAuthorVersionContract(
 // the future holds — and incorporating both in the story." No gates of its
 // own: the stage is best-effort and the column runs without it when it fails.
 
+// A NOTE ON THE BOUNDS BELOW, because getting this wrong cost the archive a
+// lot. zod rejects the WHOLE object when any one element misses, so a cosmetic
+// length cap inside an array schema is a whole-response discard: measured over
+// the run logs, 5 dossiers were thrown away for a `restsOn` a few characters
+// over 200, 7 more for a short `basis`, and 18 articles lost their tags AND
+// their section over one long tag. In every case the rest of the answer was
+// perfectly good.
+//
+// So the schemas keep only what is STRUCTURAL — the shape, the enum, the pair
+// — and the cosmetic limits are applied by `shapeDossier` below, which drops
+// or trims the offending entry and keeps everything else. A length is a
+// preference; the model getting the shape right is the correctness question.
 export const PrincipalsSchema = z.object({
   principals: z
     .array(
       z.object({
-        name: z.string().min(2).max(80),
+        name: z.string().min(1),
         kind: z.enum(["person", "organization", "country"]),
-        role: z.string().min(3).max(200),
+        role: z.string().min(1),
       }),
     )
-    .min(1)
-    .max(6),
+    .min(1),
 });
 export type Principal = z.infer<typeof PrincipalsSchema>["principals"][number];
 
 export const ConnectionsSchema = z.object({
-  connections: z
-    .array(
-      z.object({
-        between: z.array(z.string().min(2)).length(2),
-        claim: z.string().min(10).max(400),
-        basis: z.string().min(3).max(200),
-      }),
-    )
-    .max(8),
+  connections: z.array(
+    z.object({
+      // .length(2) stays: a connection BETWEEN things is a pair by definition,
+      // and a one-sided one is meaningless rather than merely untidy.
+      between: z.array(z.string().min(1)).length(2),
+      claim: z.string().min(1),
+      basis: z.string().min(1),
+    }),
+  ),
 });
 export type Connection = z.infer<typeof ConnectionsSchema>["connections"][number];
 
 export const HypothesesSchema = z.object({
-  hypotheses: z
-    .array(z.object({ scenario: z.string().min(10).max(400), restsOn: z.string().min(3).max(200) }))
-    .min(1)
-    .max(5),
+  hypotheses: z.array(z.object({ scenario: z.string().min(1), restsOn: z.string().min(1) })).min(1),
 });
 export type Hypothesis = z.infer<typeof HypothesesSchema>["hypotheses"][number];
+
+/** Trim a dossier to the house limits, dropping only what cannot be salvaged.
+ *  Everything here was a zod bound until 2026-09-08, when it became clear the
+ *  bounds were discarding whole dossiers over one long sentence. */
+const trim = (v: string, max: number): string => (v.length <= max ? v : `${v.slice(0, max - 1).trimEnd()}…`);
+export function shapeDossier<T extends { principals?: Principal[]; connections?: Connection[]; hypotheses?: Hypothesis[] }>(
+  d: T,
+): T {
+  if (d.principals) {
+    d.principals = d.principals
+      .filter((p) => p.name.trim() !== "" && p.role.trim() !== "")
+      .map((p) => ({ ...p, name: trim(p.name, 80), role: trim(p.role, 200) }))
+      .slice(0, 6);
+  }
+  if (d.connections) {
+    d.connections = d.connections
+      .filter((c) => c.claim.trim() !== "" && c.between.every((b) => b.trim() !== ""))
+      .map((c) => ({ ...c, claim: trim(c.claim, 400), basis: trim(c.basis, 200) }))
+      .slice(0, 8);
+  }
+  if (d.hypotheses) {
+    d.hypotheses = d.hypotheses
+      .filter((h) => h.scenario.trim() !== "")
+      .map((h) => ({ ...h, scenario: trim(h.scenario, 400), restsOn: trim(h.restsOn, 200) }))
+      .slice(0, 5);
+  }
+  return d;
+}
 
 export interface DossierEntry extends Principal {
   background: string;
@@ -239,7 +275,7 @@ export async function namePrincipals(args: {
     temperature: 0,
     ...(args.model === undefined ? {} : { model: args.model }),
   });
-  return out.principals;
+  return shapeDossier(out).principals ?? [];
 }
 
 /** Background per principal: the encyclopedia summary when DataGod has one,
@@ -309,7 +345,7 @@ export async function findConnections(args: {
     temperature: 0.3,
     ...(args.model === undefined ? {} : { model: args.model }),
   });
-  return out.connections;
+  return shapeDossier(out).connections ?? [];
 }
 
 /** What the future holds: plausible next chapters, each naming what it rests on. */
@@ -342,7 +378,7 @@ export async function projectHypotheses(args: {
     temperature: 0.5,
     ...(args.model === undefined ? {} : { model: args.model }),
   });
-  return out.hypotheses;
+  return shapeDossier(out).hypotheses ?? [];
 }
 
 /** The block the column prompt carries. Empty when there is nothing to carry. */
