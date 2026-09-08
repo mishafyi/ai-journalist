@@ -41,6 +41,7 @@
     "./clients/auto": "./clients/auto.ts",
     "./clients/datagod": "./clients/datagod.ts",
     "./clients/firecrawl-search": "./clients/firecrawl-search.ts",
+    "./clients/gemini-embedder": "./clients/gemini-embedder.ts",
     "./clients/gemini-llm": "./clients/gemini-llm.ts",
     "./clients/ollama-embedder": "./clients/ollama-embedder.ts",
     "./clients/ollama-llm": "./clients/ollama-llm.ts",
