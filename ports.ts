@@ -261,6 +261,11 @@ export interface SearchClient {
 /** Optional — enables embedding-based dedup. Omit → trigram dedup only. */
 export interface Embedder {
   embed(texts: string[]): Promise<number[][]>;
+  /** Which vector space these come from, when it can change during a run.
+   *  Two embedders are not interchangeable mid-run — a cosine similarity
+   *  between a Gemini vector and an Ollama one is arithmetic, not meaning —
+   *  so a cache that outlives a failover keys on this. Omit when fixed. */
+  readonly space?: string;
 }
 
 export interface BrandProfile {

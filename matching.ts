@@ -36,14 +36,20 @@ function trigramScores(probes: readonly string[], candidates: readonly string[])
  */
 function createVectorCache(embedder: Embedder) {
   const cache = new Map<string, number[]>();
+  // Keyed by SPACE and text, not text alone. An embedder that fails over to a
+  // second backend mid-run returns vectors from a different space, and a
+  // cosine similarity across two spaces is arithmetic without meaning. Reading
+  // `space` per call rather than once is the point: it changes when the
+  // failover fires, and every prior entry simply misses and is re-embedded.
+  const key = (text: string): string => `${embedder.space ?? ""}\n${text}`;
   return async function embedCached(texts: readonly string[]): Promise<number[][]> {
-    const missing = [...new Set(texts.filter((t) => !cache.has(t)))];
+    const missing = [...new Set(texts.filter((t) => !cache.has(key(t))))];
     if (missing.length > 0) {
       const fresh = await embedder.embed(missing);
-      missing.forEach((t, i) => cache.set(t, fresh[i]));
+      missing.forEach((t, i) => cache.set(key(t), fresh[i]));
     }
     // Non-null: every text is either cached or was just embedded.
-    return texts.map((t) => cache.get(t) as number[]);
+    return texts.map((t) => cache.get(key(t)) as number[]);
   };
 }
 

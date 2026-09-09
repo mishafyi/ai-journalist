@@ -171,6 +171,20 @@ function retryableAfter(err: unknown): Retryable | null {
  * error is a real failure and propagates at once rather than costing the
  * caller a tour of every model.
  */
+/**
+ * Every model was refused on every key. DISTINCT FROM A REAL ERROR ON PURPOSE:
+ * a caller may reasonably answer this by going somewhere else — which is what
+ * Ollama is still installed for — while a 400 for a malformed prompt must not
+ * be quietly re-run on another engine, because that hides the bug instead of
+ * fixing it.
+ *
+ * The plain-node mirror in the site repo (`scripts/gemini.mjs`) has had this
+ * since 2026-09-08 and this side did not, so the desk could only tell "the
+ * quota is gone" from "the request is broken" by matching on message text.
+ * The embed path did not try, and one exhausted daily quota killed every run.
+ */
+export class GeminiExhausted extends Error {}
+
 export function createRotation(
   models: readonly string[],
   keyCount: number,
@@ -234,7 +248,7 @@ export function createRotation(
         }
       }
     }
-    throw new Error(
+    throw new GeminiExhausted(
       `gemini: ${label} — every model failed on all ${keyCount} key(s) across ` +
         `${ROTATION_ROUNDS} rounds (${candidateModels.join(", ")}); last error: ` +
         `${describeError(last)}`,
