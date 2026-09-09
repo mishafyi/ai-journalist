@@ -1,4 +1,6 @@
+import assert from "node:assert/strict";
 import { createHeadlineMatcher } from "./matching";
+import { EmbeddingUnavailable } from "./ports";
 import type { Embedder } from "./ports";
 
 async function main(): Promise<void> {
@@ -81,3 +83,29 @@ main().catch((err: unknown) => {
   process.stderr.write(`matching.checks failed: ${String(err)}\n`);
   process.exit(1);
 });
+
+// An embedder that runs out for the day is a SIGNAL: the matcher scores the
+// rest of the run with trigrams and never asks the embedder again. Anything
+// else the embedder throws is a real error and must propagate unchanged.
+{
+  let calls = 0;
+  const spent: Embedder = {
+    async embed() {
+      calls += 1;
+      throw new EmbeddingUnavailable("ring exhausted");
+    },
+  };
+  const logged: string[] = [];
+  const m = createHeadlineMatcher({ embedder: spent, log: (l) => logged.push(l) });
+  const hit = await m.match("Fed holds rates steady", ["Federal Reserve holds interest rates steady", "Cricket scores"], 0.3);
+  assert.ok(hit !== null && hit.index === 0, "trigram fallback still matches the right candidate");
+  await m.match("anything else", ["something"], 0.3);
+  assert.equal(calls, 1, "the embedder is not asked again after it declared itself unavailable");
+  assert.equal(logged.length, 1, "the switch is logged exactly once");
+  assert.ok(/trigram/.test(logged[0]));
+
+  const broken: Embedder = { async embed() { throw new TypeError("malformed request"); } };
+  const m2 = createHeadlineMatcher({ embedder: broken });
+  await assert.rejects(() => m2.match("a", ["a"], 0.3), TypeError, "a real error propagates, never re-scored");
+  console.log("PASS embedding unavailable → trigram for the rest of the run; real errors propagate");
+}

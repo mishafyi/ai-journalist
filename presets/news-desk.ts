@@ -1398,7 +1398,7 @@ export function createNewsDesk(opts: {
       if (scrape === undefined) {
         throw new Error("news-desk: search client has no scrape() port — full-page evidence scraping is required");
       }
-      const matcher = createHeadlineMatcher(opts.embedder === undefined ? {} : { embedder: opts.embedder });
+      const matcher = createHeadlineMatcher(opts.embedder === undefined ? { log } : { embedder: opts.embedder, log });
       const fetchTrending =
         opts.trendingImpl ?? ((): Promise<TrendingStory[]> => fetchTrendingStories({ edition: GN_US, limit: knobs.trendingLimit }));
       const buildIndex =

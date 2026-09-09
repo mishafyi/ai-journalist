@@ -258,6 +258,15 @@ export interface SearchClient {
   scrape?(url: string): Promise<string>;
 }
 
+/**
+ * Thrown by an Embedder that can no longer answer for the rest of a run —
+ * every key refused, a daily budget spent. It is a SIGNAL, not a failure:
+ * the matcher answers it by scoring with trigrams for the remainder of the
+ * run, which is what it does when no embedder was configured at all. A
+ * malformed request must not be wrapped in this; that is a bug to surface.
+ */
+export class EmbeddingUnavailable extends Error {}
+
 /** Optional — enables embedding-based dedup. Omit → trigram dedup only. */
 export interface Embedder {
   embed(texts: string[]): Promise<number[][]>;

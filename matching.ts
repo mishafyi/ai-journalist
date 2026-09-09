@@ -5,6 +5,7 @@
  */
 import { cosineSimilarity } from "./text";
 import { trigramSimilarity } from "./primitives";
+import { EmbeddingUnavailable } from "./ports";
 import type { Embedder } from "./ports";
 
 export interface MatchHit {
@@ -64,10 +65,24 @@ async function embedScores(
   return candVecs.map((cv) => Math.max(...probeVecs.map((pv) => cosineSimilarity(pv, cv))));
 }
 
-export function createHeadlineMatcher(opts: { embedder?: Embedder }): HeadlineMatcher {
-  const embed = opts.embedder ? createVectorCache(opts.embedder) : null;
-  const scoresFor = (probes: readonly string[], candidates: readonly string[]): Promise<number[]> =>
-    embed ? embedScores(embed, probes, candidates) : Promise.resolve(trigramScores(probes, candidates));
+export function createHeadlineMatcher(opts: { embedder?: Embedder; log?: (line: string) => void }): HeadlineMatcher {
+  let embed = opts.embedder ? createVectorCache(opts.embedder) : null;
+  // Embeddings until they are unavailable, trigrams after — for the rest of
+  // the run, not per call: flapping between two scoring methods mid-run makes
+  // the thresholds mean two things. Trigram is the documented no-embedder
+  // mode, so its thresholds already hold. Anything other than
+  // EmbeddingUnavailable is a real error and propagates.
+  const scoresFor = async (probes: readonly string[], candidates: readonly string[]): Promise<number[]> => {
+    if (embed === null) return trigramScores(probes, candidates);
+    try {
+      return await embedScores(embed, probes, candidates);
+    } catch (err) {
+      if (!(err instanceof EmbeddingUnavailable)) throw err;
+      embed = null;
+      opts.log?.(`matching: embeddings unavailable (${err.message.slice(0, 120)}) — trigram scoring for the rest of this run`);
+      return trigramScores(probes, candidates);
+    }
+  };
 
   return {
     async match(probe, candidates, threshold): Promise<MatchHit | null> {
