@@ -1,4 +1,4 @@
-import { createNewswire } from "./newswire";
+import { createNewswire , repairEntities } from "./newswire";
 
 async function main(): Promise<void> {
   let failures = 0;
@@ -52,7 +52,15 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  process.stdout.write("newswire checks: all green\n");
+    // A bare & is the one malformed-XML case real newsrooms ship: Premium Times
+  // failed to parse 112 times in 1,967 runs on "Invalid character in entity
+  // name". Repair it, and change nothing that is already valid.
+  ok("a bare ampersand is escaped", repairEntities("<t>Dangote & Sons</t>") === "<t>Dangote &amp; Sons</t>", "");
+  ok("a valid named entity is untouched", repairEntities("<t>A &amp; B</t>") === "<t>A &amp; B</t>", "");
+  ok("a numeric entity is untouched", repairEntities("<t>&#8217;s</t>") === "<t>&#8217;s</t>", "");
+  ok("a hex entity is untouched", repairEntities("<t>&#x2019;</t>") === "<t>&#x2019;</t>", "");
+
+process.stdout.write("newswire checks: all green\n");
 }
 
 main().catch((err: unknown) => {

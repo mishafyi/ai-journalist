@@ -22,6 +22,27 @@ export interface OutletItem {
   date?: string;
 }
 
+/**
+ * Repair the one malformed-XML case real newsrooms actually ship: a bare `&`
+ * that is not the start of an entity.
+ *
+ * Premium Times failed to parse 112 times in 1,967 runs with "Invalid
+ * character in entity name" — intermittent, not constant, because it depends
+ * on a particular headline carrying a stray ampersand. The feed is otherwise
+ * fine, so dropping the outlet (as the Daily Star was, for a different and
+ * unfixable reason) would lose a working African source over a punctuation
+ * bug. A dead feed costs its outlet's headlines silently, which is why this is
+ * worth repairing rather than tolerating.
+ *
+ * Deliberately narrow: only a `&` that begins no valid named, decimal or hex
+ * entity is escaped. Anything else is left exactly as sent — this is a repair,
+ * not a sanitiser, and rewriting more of a publisher's feed than necessary is
+ * how you start silently changing their words.
+ */
+export function repairEntities(xml: string): string {
+  return xml.replace(/&(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#[xX][0-9a-fA-F]+);)/g, "&amp;");
+}
+
 export function createNewswire(opts: {
   feeds: readonly OutletFeed[];
   concurrency: number;
@@ -47,7 +68,7 @@ export function createNewswire(opts: {
         signal: AbortSignal.timeout(opts.timeoutMs),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return parser.parseString(await res.text());
+      return parser.parseString(repairEntities(await res.text()));
     });
   return {
     async buildIndex(): Promise<OutletItem[]> {
