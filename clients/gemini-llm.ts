@@ -205,7 +205,12 @@ export function createRotation(
   models: readonly string[],
   keyCount: number,
   log?: (line: string) => void,
-): <T>(label: string, pinned: string | undefined, send: (model: string, keyIndex: number) => Promise<T>) => Promise<T> {
+): <T>(
+  label: string,
+  pinned: string | undefined,
+  send: (model: string, keyIndex: number) => Promise<T>,
+  promptTokens?: number,
+) => Promise<T> {
   // Cooldowns are per MODEL-AND-KEY. A model limited on one project's key is
   // fine on the next project's, so retiring the model outright would throw
   // away eleven working budgets over one exhausted one.
@@ -232,7 +237,9 @@ export function createRotation(
     label: string,
     pinned: string | undefined,
     send: (model: string, keyIndex: number) => Promise<T>,
-    promptTokens: number,
+    // Optional on purpose: a caller that does not know its size gets the
+    // default order, which is what every call did before routing existed.
+    promptTokens?: number,
   ): Promise<T> => {
     // SIZE-MAJOR before model-major. A prompt over BIG_PROMPT_TOKENS would
     // spend most of a Gemma-minute on one call, and a transcript-sized one is
@@ -241,7 +248,7 @@ export function createRotation(
     // large-budget models FIRST; small requests keep the operator's Gemma-first
     // order, because Flash-Lite's scarce number is requests per day (500/key).
     const ordered =
-      promptTokens > BIG_PROMPT_TOKENS
+      (promptTokens ?? 0) > BIG_PROMPT_TOKENS
         ? [...models].sort((a, b) => Number(isBigBudget(b)) - Number(isBigBudget(a)))
         : models;
     const candidateModels = pinned === undefined ? ordered : [pinned];
