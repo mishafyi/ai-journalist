@@ -185,6 +185,20 @@ function retryableAfter(err: unknown): Retryable | null {
  */
 export class GeminiExhausted extends Error {}
 
+/** Above this many input tokens a request goes to the large-budget models first.
+ *  Gemma's budget is 16K input tokens per model per key per minute; Flash-Lite's
+ *  is 250K (AI Studio, 2026-09-09). 8K is half a Gemma-minute. */
+const BIG_PROMPT_TOKENS = Number(process.env.GEMINI_BIG_PROMPT_TOKENS ?? 8_000);
+/** The models whose per-minute token budget is in the hundreds of thousands. */
+function isBigBudget(model: string): boolean {
+  return /flash/i.test(model);
+}
+/** Four characters per token is the working estimate everywhere in this repo. */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+
 const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS ?? 300_000);
 
 export function createRotation(
@@ -218,8 +232,19 @@ export function createRotation(
     label: string,
     pinned: string | undefined,
     send: (model: string, keyIndex: number) => Promise<T>,
+    promptTokens: number,
   ): Promise<T> => {
-    const candidateModels = pinned === undefined ? models : [pinned];
+    // SIZE-MAJOR before model-major. A prompt over BIG_PROMPT_TOKENS would
+    // spend most of a Gemma-minute on one call, and a transcript-sized one is
+    // refused by every Gemma pair before the rotation reaches Flash-Lite —
+    // sixteen failed calls per condense. So a big request tries the
+    // large-budget models FIRST; small requests keep the operator's Gemma-first
+    // order, because Flash-Lite's scarce number is requests per day (500/key).
+    const ordered =
+      promptTokens > BIG_PROMPT_TOKENS
+        ? [...models].sort((a, b) => Number(isBigBudget(b)) - Number(isBigBudget(a)))
+        : models;
+    const candidateModels = pinned === undefined ? ordered : [pinned];
     if (candidateModels.length === 0) throw new Error("gemini: no models configured");
     if (keyCount === 0) throw new Error("gemini: no api keys configured");
     const start = cursor;
@@ -328,7 +353,7 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
               ...(temperature === undefined ? {} : { temperature }),
             },
           });
-        });
+        }, estimateTokens(prompt + (system ?? "")));
         const text = res.text ?? "";
         if (!text.trim()) throw new Error(`Gemini returned an empty completion (model=${served})`);
         cfg.trace?.llm({ ...request, model: served, response: text });
@@ -371,7 +396,7 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
               ...(args.temperature === undefined ? {} : { temperature: args.temperature }),
             },
           });
-        });
+        }, estimateTokens(JSON.stringify(contents)));
         text = res.text ?? "";
       } catch (err: unknown) {
         cfg.trace?.llm({ ...request, model: served, error: describeError(err) });

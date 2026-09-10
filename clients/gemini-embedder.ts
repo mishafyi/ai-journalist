@@ -100,7 +100,7 @@ export function createGeminiEmbedder(cfg: GeminiEmbedderConfig): Embedder {
         if (values.length === 0) throw new Error(`gemini embed returned an empty vector at index ${i} (model=${m})`);
         return values;
       });
-    });
+    }, 0);
   }
 
   return {
