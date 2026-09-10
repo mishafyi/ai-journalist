@@ -10,6 +10,7 @@
  * mood and the SDK's constructor, neither of which is ours.
  */
 import { createRotation, FREE_MODELS } from "./gemini-llm";
+process.env.GEMINI_RING_START = "0"; // the checks reason about "the next key" from key 1
 import { describeError } from "./trace";
 
 let failures = 0;

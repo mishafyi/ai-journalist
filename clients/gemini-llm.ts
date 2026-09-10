@@ -207,7 +207,12 @@ export function createRotation(
   // where each process joins the ring is spread. (Measured 2026-09-09: seven
   // scripts share one ring, and the Gemma models' 16K-tokens-per-minute bucket
   // is per key, so one 12.7K-token fact-check call is most of a key's minute.)
-  let cursor = Math.floor(Math.random() * keyCount);
+  // GEMINI_RING_START pins the start (the checks use 0 so "the next key" is a
+  // definite key); production leaves it unset.
+  let cursor =
+    process.env.GEMINI_RING_START !== undefined
+      ? Number(process.env.GEMINI_RING_START) % keyCount
+      : Math.floor(Math.random() * keyCount);
 
   return async <T>(
     label: string,
