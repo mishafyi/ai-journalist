@@ -573,15 +573,17 @@ async function orchestrationChecks(): Promise<void> {
   const obs = Array.from({ length: 12 }, (_, i) => ({ date: `2026-0${(i % 9) + 1}-01`, value: String(100 + i) }));
   const chart = fredChartUrl("UNRATE", obs);
   // Dynamic word cap (operator, 2026-07-28): length tracks evidence richness,
-  // floored at 500, clamped to the max ceiling.
-  ok("evidenceWordCap: a thin 3-source story stays near the 700 floor",
-    evidenceWordCap(3, 5000, 1100) === 700, String(evidenceWordCap(3, 5000, 1100)));
+  // floored at 1000, clamped to the max ceiling. 1500 here is what the live
+  // news desk passes (`desk/run-news-desk.ts`) — testing against a ceiling the
+  // base already touches would hide the curve behind the clamp.
+  ok("evidenceWordCap: a thin 3-source story sits on the 1000 floor",
+    evidenceWordCap(3, 5000, 1500) === 1000, String(evidenceWordCap(3, 5000, 1500)));
   ok("evidenceWordCap: more sources raise the cap",
-    evidenceWordCap(5, 5000, 1100) === 900, String(evidenceWordCap(5, 5000, 1100)));
+    evidenceWordCap(5, 5000, 1500) === 1200, String(evidenceWordCap(5, 5000, 1500)));
   ok("evidenceWordCap: a large evidence corpus adds a bonus",
-    evidenceWordCap(4, 20000, 1100) === 800 + Math.round((20000 - 7000) / 45), String(evidenceWordCap(4, 20000, 1100)));
+    evidenceWordCap(4, 20000, 1500) === 1100 + Math.round((20000 - 7000) / 45), String(evidenceWordCap(4, 20000, 1500)));
   ok("evidenceWordCap: never exceeds the max ceiling",
-    evidenceWordCap(9, 60000, 1100) === 1100, String(evidenceWordCap(9, 60000, 1100)));
+    evidenceWordCap(9, 60000, 1500) === 1500, String(evidenceWordCap(9, 60000, 1500)));
 
   // Boundary bugs seen live 2026-07-26: mid-word dek chop, mid-word slug cap.
   const { dekFrom } = await import("./news-desk");
