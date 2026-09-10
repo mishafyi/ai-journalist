@@ -71,7 +71,7 @@ export interface GeminiEmbedderConfig {
 
 export function createGeminiEmbedder(cfg: GeminiEmbedderConfig): Embedder {
   const model = cfg.model ?? process.env.GEMINI_EMBED_MODEL ?? "gemini-embedding-2";
-  const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({ apiKey }));
+  const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({ apiKey, httpOptions: { timeout: 120_000 } }));
   const rotate = createRotation([model], ring.length, cfg.log);
 
   async function embedChunk(texts: readonly string[]): Promise<number[][]> {

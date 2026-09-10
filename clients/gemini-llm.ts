@@ -136,7 +136,7 @@ function retryableAfter(err: unknown): Retryable | null {
   if (/"code":\s*50[024]|INTERNAL|Internal error encountered|Bad Gateway|Gateway Time/i.test(text)) {
     return { waitMs: 5_000, reason: "transport failure" };
   }
-  if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|terminated|other side closed/i.test(text)) {
+  if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|terminated|other side closed|timed? ?out|AbortError|The operation was aborted/i.test(text)) {
     return { waitMs: 2_000, reason: "transport failure" };
   }
   // A DEAD KEY IS THE RING'S PROBLEM, NOT THE REQUEST'S. Keys get revoked and
@@ -184,6 +184,8 @@ function retryableAfter(err: unknown): Retryable | null {
  * The embed path did not try, and one exhausted daily quota killed every run.
  */
 export class GeminiExhausted extends Error {}
+
+const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS ?? 300_000);
 
 export function createRotation(
   models: readonly string[],
@@ -283,7 +285,10 @@ function firstJsonValue(text: string): string {
 export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
   // One SDK client per key — the key is fixed at construction, so a ring of
   // keys is a ring of clients.
-  const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({ apiKey }));
+  // A request that has taken five minutes is not going to answer. The SDK has
+  // no default timeout, so without this a dead stream holds the await until
+  // the caller's own cap kills the whole run.
+  const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({ apiKey, httpOptions: { timeout: REQUEST_TIMEOUT_MS } }));
   const rotate = createRotation(cfg.models, ring.length, cfg.log);
   const pin = (candidate: string | undefined): string | undefined =>
     candidate === undefined || candidate.trim() === "" ? undefined : candidate;
