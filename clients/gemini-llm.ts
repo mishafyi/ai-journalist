@@ -200,7 +200,14 @@ export function createRotation(
   // Where the key ring starts, advanced per call. Without this every call
   // begins at key 0, which would burn one project's 14,400 daily requests
   // while the other eleven sat idle.
-  let cursor = 0;
+  // Random START, not zero. Every process that opens the ring — the desk,
+  // a video script, the podcast desk, an update — used to begin at key 1 and
+  // walk the same order, so concurrent processes stacked their first calls on
+  // the same key in the same minute. Per-call round-robin is unchanged; only
+  // where each process joins the ring is spread. (Measured 2026-09-09: seven
+  // scripts share one ring, and the Gemma models' 16K-tokens-per-minute bucket
+  // is per key, so one 12.7K-token fact-check call is most of a key's minute.)
+  let cursor = Math.floor(Math.random() * keyCount);
 
   return async <T>(
     label: string,
