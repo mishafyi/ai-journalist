@@ -878,17 +878,6 @@ export async function gatherPrimaryData(args: {
     }
     try {
       const data = await args.datagod.get(req.path, req.params);
-      // One chart per article: the first FRED series a story runs on becomes
-      // a reader-facing figure, from the same fetch the evidence uses.
-      if (chartMarkdown === "" && pick.id === "fred_series" && pick.seriesId !== undefined) {
-        const obs = (data as { observations?: { date: string; value: string }[] }).observations;
-        const url = Array.isArray(obs) ? fredChartUrl(pick.seriesId, obs) : null;
-        if (url !== null) {
-          const title = FRED_TITLES[pick.seriesId] ?? pick.seriesId;
-          chartMarkdown = `\n\n![${title}](${url})\n\n*${title}. Source: Federal Reserve Economic Data (FRED).*`;
-          args.recordArtifact?.("datagod:chart", `${pick.seriesId}\n${url}`);
-        }
-      }
       const raw = JSON.stringify(data).slice(0, 20_000);
       const parts = await extractEvidence({
         llm: args.llm,
@@ -901,6 +890,22 @@ export async function gatherPrimaryData(args: {
       if (parts.length === 0) {
         args.log?.(`datagod: play "${pick.id}" returned nothing relevant — dropped`);
         continue;
+      }
+      // THE CHART SHIPS ONLY IF THE EVIDENCE DID. It used to be built above,
+      // before this gate, so a series the desk had just judged irrelevant was
+      // still stamped on the page — and `content` appends it after the line
+      // edit and the lens, so nothing downstream ever saw it. Audit
+      // 2026-09-09: 48 of 50 charts in out/runs were orphans, and four live
+      // articles carry a figure whose subject the prose never mentions (a CPI
+      // chart on a Michigan primary; a federal-funds chart on car loans).
+      if (chartMarkdown === "" && pick.id === "fred_series" && pick.seriesId !== undefined) {
+        const obs = (data as { observations?: { date: string; value: string }[] }).observations;
+        const url = Array.isArray(obs) ? fredChartUrl(pick.seriesId, obs) : null;
+        if (url !== null) {
+          const title = FRED_TITLES[pick.seriesId] ?? pick.seriesId;
+          chartMarkdown = `\n\n![${title}](${url})\n\n*${title}. Source: Federal Reserve Economic Data (FRED).*`;
+          args.recordArtifact?.("datagod:chart", `${pick.seriesId}\n${url}`);
+        }
       }
       blocks.push(
         play.evidenceLabel !== undefined
