@@ -1928,6 +1928,23 @@ export function createNewsDesk(opts: {
           // Story tags (operator, 2026-07-23): one schema-constrained call per
           // story, shared by all versions. Best-effort like the audit — a tag
           // failure logs loudly and never blocks the run.
+          //
+          // TAGS ARE TOPIC AND STORY NAMES, NOT CATEGORIES (operator,
+          // 2026-09-11: "tag should be a concrete googleble story/topic"). The
+          // field is read by seven consumers — tag pages, footage search, the
+          // press-channel lookup, NASA and Archive search, YouTube tags,
+          // TikTok hashtags — and a category satisfies exactly one of them
+          // while actively misleading the rest. The old prompt ASKED for "the
+          // subject area" and "the country or region", and got what it asked
+          // for: a 9/11 health story tagged "new york city" searched footage
+          // libraries for generic Manhattan b-roll, and a story about campus
+          // polarization tagged "universities" resolved through Wikidata to the
+          // Lunar and Planetary Institute and filed it as a footage source.
+          //
+          // The site side now refuses categories anyway (isConcreteTerm in
+          // lorien-times scripts/video/footage.mjs), but refusing downstream
+          // only means the story has fewer usable tags. Generating the right
+          // thing is the fix; the refusal is the belt.
           let tags: readonly string[] = [];
           let section = "";
           try {
@@ -1936,7 +1953,16 @@ export function createNewsDesk(opts: {
                 {
                   role: "system",
                   content:
-                    "You tag news stories for a section index. Output 5-10 short lowercase tags (1-3 words each) drawn ONLY from the story. ALWAYS include, when the story supports it: (a) the country or region it concerns (e.g. \"ukraine\", \"middle east\", \"european union\"); (b) every organization or institution named (e.g. \"nato\", \"federal reserve\", \"opec\", \"pentagon\"); (c) every notable person named, as their surname or full name (e.g. \"zelensky\", \"jerome powell\"); and (d) the subject area (e.g. \"tariffs\", \"nuclear program\"). Every tag must be a noun or noun phrase — a place, organization, person, or subject. NEVER a verb phrase or clipped sentence fragment (\"france evacuates\", \"wildfires rage\" are wrong; \"france\", \"wildfires\" are right). Never invent an entity the story does not mention.",
+                    "You tag news stories. Output 5-10 short lowercase tags (1-3 words each) drawn ONLY from the story.\n\n" +
+                    "EVERY TAG MUST NAME A CONCRETE, SEARCHABLE THING — something a reader could type into a search engine and find THIS story or the thing itself. A tag is a topic or a story name, never a category the story belongs to.\n\n" +
+                    "Include, when the story supports it:\n" +
+                    "- every notable person named, as their full name (\"jerome powell\", \"volodymyr zelensky\")\n" +
+                    "- every organization, institution, company or agency named (\"nato\", \"federal reserve\", \"opec\", \"columbia university\")\n" +
+                    "- the specific place the story concerns — the city, country or named site, not the continent (\"rafah\", \"jafurah gas field\", \"ukraine\")\n" +
+                    "- the named event, programme, law, product, vessel or case at issue (\"cop28\", \"chips act\", \"nord stream 2\", \"9/11\")\n\n" +
+                    "REJECT anything that is a category rather than a thing. These are wrong: \"universities\", \"polarization\", \"inflation\", \"climate change\", \"artificial intelligence\", \"immigration\", \"healthcare\", \"elections\". Each names a field the story sits in, not a thing the story is about — thousands of unrelated stories share it, so it identifies nothing. If the story is about campus protests at a named university, tag the university, not \"universities\". If it is about a specific tariff, tag it by what it targets, not \"trade\".\n\n" +
+                    "Also reject: bare plural common nouns; the section names (world, politics, business, economy, technology, culture, climate); verb phrases and clipped sentence fragments (\"france evacuates\", \"wildfires rage\" are wrong — \"france\" is right).\n\n" +
+                    "Prefer a specific tag over a general one every time, and return fewer tags rather than padding with categories. Never invent an entity the story does not mention.",
                 },
                 {
                   role: "user",
