@@ -1985,10 +1985,12 @@ export function createNewsDesk(opts: {
               ...new Set(
                 tagged.tags
                   .map((t) => t.toLowerCase().trim())
-                  // 40, not 28: a topic phrase ("smithsonian institution statue
-                  // dispute") is longer than a name, and the cap silently
-                  // discarded the tags the prompt now asks for first.
-                  .filter((t) => t !== "" && t.length <= 40),
+                  // No length cap (operator, 2026-09-13: "remove limits"): the
+                  // old 28 silently discarded any topic phrase, and a tag is
+                  // for the tag page and the footage search — the consumers
+                  // with their own limits (YouTube's 30 per tag) filter for
+                  // themselves at their own boundary.
+                  .filter((t) => t !== ""),
               ),
             ].slice(0, 10);
             section = tagged.section;
