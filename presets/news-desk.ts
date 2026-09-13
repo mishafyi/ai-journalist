@@ -1929,8 +1929,11 @@ export function createNewsDesk(opts: {
           // story, shared by all versions. Best-effort like the audit — a tag
           // failure logs loudly and never blocks the run.
           //
-          // TAGS ARE TOPIC AND STORY NAMES, NOT CATEGORIES (operator,
-          // 2026-09-11: "tag should be a concrete googleble story/topic"). The
+          // TAGS ARE TOPIC PHRASES FIRST, THEN NAMES (operator, 2026-09-13:
+          // "topic phrases that name the story"; 2026-09-11: "tag should be a
+          // concrete googleble story/topic"). A phrase like "iran war midterm
+          // elections" names the story for the tag page and is the query the
+          // footage search runs; the names carry the channel lookup. The
           // field is read by seven consumers — tag pages, footage search, the
           // press-channel lookup, NASA and Archive search, YouTube tags,
           // TikTok hashtags — and a category satisfies exactly one of them
@@ -1953,16 +1956,12 @@ export function createNewsDesk(opts: {
                 {
                   role: "system",
                   content:
-                    "You tag news stories. Output 5-10 short lowercase tags (1-3 words each) drawn ONLY from the story.\n\n" +
-                    "EVERY TAG MUST NAME A CONCRETE, SEARCHABLE THING — something a reader could type into a search engine and find THIS story or the thing itself. A tag is a topic or a story name, never a category the story belongs to.\n\n" +
-                    "Include, when the story supports it:\n" +
-                    "- every notable person named, as their full name (\"jerome powell\", \"volodymyr zelensky\")\n" +
-                    "- every organization, institution, company or agency named (\"nato\", \"federal reserve\", \"opec\", \"columbia university\")\n" +
-                    "- the specific place the story concerns — the city, country or named site, not the continent (\"rafah\", \"jafurah gas field\", \"ukraine\")\n" +
-                    "- the named event, programme, law, product, vessel or case at issue (\"cop28\", \"chips act\", \"nord stream 2\", \"9/11\")\n\n" +
-                    "REJECT anything that is a category rather than a thing. These are wrong: \"universities\", \"polarization\", \"inflation\", \"climate change\", \"artificial intelligence\", \"immigration\", \"healthcare\", \"elections\". Each names a field the story sits in, not a thing the story is about — thousands of unrelated stories share it, so it identifies nothing. If the story is about campus protests at a named university, tag the university, not \"universities\". If it is about a specific tariff, tag it by what it targets, not \"trade\".\n\n" +
-                    "Also reject: bare plural common nouns; the section names (world, politics, business, economy, technology, culture, climate); verb phrases and clipped sentence fragments (\"france evacuates\", \"wildfires rage\" are wrong — \"france\" is right).\n\n" +
-                    "Prefer a specific tag over a general one every time, and return fewer tags rather than padding with categories. Never invent an entity the story does not mention.",
+                    "You tag news stories for a newspaper: its tag pages, its search, and the video desk that searches footage libraries with the tags. Output 5-9 lowercase tags drawn ONLY from the story.\n\n" +
+                    "A TAG NAMES THE STORY OR A THING IN IT — something a reader could type into a search engine and find this story. Two kinds, and most stories want both:\n" +
+                    "- TOPIC PHRASES that name what the story is about, 2-4 words, the way a headline writer compresses it — concrete nouns joined to the event: \"iran war midterm elections\", \"blizzcon 2026 announcements\", \"diablo v release date\", \"omarchy linux launch\", \"9/11 first responders health\". At least three, listed first. A phrase is the story's SUBJECT as a search query, never its theme or the column's argument: \"political pr strategy\", \"institutional capture\", \"regulatory capture in tech\", \"ai risk warning\" are wrong.\n" +
+                    "- NAMED ENTITIES central to the story, as full names spelled the way they spell themselves: people (\"jensen huang\", \"josé de rivera\"), organisations (\"openai\", \"nvidia\", \"federal reserve\"), named events, laws, products, and a place only when it is THE subject (\"strait of hormuz\"). Never the outlets that merely REPORTED the story (\"the guardian\", \"new york post\") unless the outlet itself is the subject.\n\n" +
+                    "REJECT categories and bare generic words: \"iran\", \"israel\", \"united states\", \"inflation\", \"elections\", \"artificial intelligence\", \"universities\", \"healthcare\". A country on its own is a category — \"iran war\" or \"iran sanctions\" is a topic. Also reject section names, bare plurals, verb phrases and sentence fragments.\n\n" +
+                    "Prefer fewer, sharper tags. Never invent an entity the story does not mention.",
                 },
                 {
                   role: "user",
@@ -1986,7 +1985,10 @@ export function createNewsDesk(opts: {
               ...new Set(
                 tagged.tags
                   .map((t) => t.toLowerCase().trim())
-                  .filter((t) => t !== "" && t.length <= 28),
+                  // 40, not 28: a topic phrase ("smithsonian institution statue
+                  // dispute") is longer than a name, and the cap silently
+                  // discarded the tags the prompt now asks for first.
+                  .filter((t) => t !== "" && t.length <= 40),
               ),
             ].slice(0, 10);
             section = tagged.section;
