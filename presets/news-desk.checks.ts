@@ -295,9 +295,12 @@ async function orchestrationChecks(): Promise<void> {
     internalsOpts.length === 1 &&
       ((await internalsOpts[0].gatherResearch?.("any"))?.block ?? "").includes(`SOURCE Wire — ${STORY2} (https://wire.example/rates):`),
     JSON.stringify(internalsOpts.length));
-  ok("fact-check audit read the assembled markdown INCLUDING the Analysis",
-    prompts.some((p) => p.includes("fact-checker reviewing") && p.includes("## A liquidity halt wearing a modern suit")),
-    "no audit prompt carried the Analysis");
+  // Both were informational and nothing read them (operator, 2026-09-18: "if
+  // they are never used these steps can be removed").
+  ok("the desk runs no fact-check audit and no claim check",
+    !prompts.some((p) => p.includes("fact-checker reviewing")) &&
+      !artifacts.some((a) => a.label.startsWith("fact-check-audit: ") || a.label.startsWith("claim-check: ")),
+    artifacts.map((a) => a.label).join(","));
   ok("the author version is line-edited (Pass 6 wired into the desk)",
     prompts.some((p) => p.startsWith("Line-edit this draft")),
     "no Line-edit prompt was sent");
@@ -305,8 +308,7 @@ async function orchestrationChecks(): Promise<void> {
     ["trending", "evidence", "parallels", "lead-image", "published"].every((l) => artifacts.some((a) => a.label === l)) &&
       artifacts.some((a) => a.label === `resolution: ${STORY2}`) &&
       artifacts.some((a) => a.label.startsWith("scrape: ")) &&
-      artifacts.some((a) => a.label === `author version: ${PERSONAS.historian.name}`) &&
-      artifacts.some((a) => a.label === `fact-check-audit: ${PERSONAS.historian.name}`),
+      artifacts.some((a) => a.label === `author version: ${PERSONAS.historian.name}`),
     artifacts.map((a) => a.label).join(","));
   ok("scrape artifacts carry the scraped text itself, not just a length marker",
     artifacts.some((a) => a.label === "scrape: Wire" && a.content.includes("full article body")),

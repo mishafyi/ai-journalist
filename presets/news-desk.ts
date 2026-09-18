@@ -4,8 +4,7 @@
  * Part 2 (createNewsDesk) orchestrates: trending → resolution → floors →
  * verified parallel → ONE columnist's fused column → publish.
  */
-import { mentionsName, namesEvent, NO_PARALLEL_PHRASE, runEdit, runFactCheckAudit } from "../gates";
-import { checkClaims } from "../claim-check";
+import { mentionsName, namesEvent, NO_PARALLEL_PHRASE, runEdit } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
 import type { ImageSearchConfig } from "../sources/lead-image";
@@ -985,7 +984,7 @@ function properNounsOf(text: string): Set<string> {
  *  assert anything the reporting didn't. The guarantee here is the same, made
  *  by inspection instead — a headline may only use names, numbers and
  *  quotations that are already in the column (whose own facts the evidence
- *  contract and fact-check audit already govern). Judgement, verbs and framing
+ *  contract governs). Judgement, verbs and framing
  *  are the columnist's and are deliberately unconstrained; that is the part
  *  that makes the headline ours.
  *
@@ -2088,57 +2087,6 @@ export function createNewsDesk(opts: {
           });
           const content = `${stripVerdictLabel(finalBody)}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
-          try {
-            // Everything the desk actually read: the extracted evidence first (so
-            // it always fits the cap), then every scraped source page in full —
-            // a fact the extraction skipped is still in the page (operator,
-            // 2026-09-02: "if not, fact check can't work properly").
-            const research =
-              evidence +
-              "\n\nSOURCE PAGES (verbatim):\n" +
-              pages.map((p) => `=== ${p.outlet}: ${p.title}\n${p.url}\n${p.content}`).join("\n\n");
-            const audit = await runFactCheckAudit(content, research, {
-              llm,
-              model: "",
-              withRetry: async (_label, fn) => fn(),
-              ctx: createRunContext("news-desk-audit"),
-              gatherExemplars: () => [],
-              fetchPriorTitles: async () => [],
-              embedDedupSurvivors: async () => null,
-              titleExemplarCount: 0,
-              titleCollisionSim: 0,
-              titleEmbedSim: 0,
-              searchTermsCount: 0,
-            }, dossierText);
-            recordArtifact?.(`fact-check-audit: ${columnist.name}`, audit);
-          } catch (err: unknown) {
-            log?.(`news-desk: fact-check audit failed (informational, non-blocking): ${String(err)}`);
-          }
-          // Claim check — the second job for an open web search now that it no
-          // longer discovers sources: does anyone INDEPENDENT report this?
-          // Informational like the audit; search silence is not falsehood, and
-          // blocking on it would gut the paper on legitimate scoops.
-          try {
-            const checked = await checkClaims({
-              column: content,
-              llm,
-              search,
-              citedHosts: contributing.map((c) => hostOf(c.url)),
-              max: 4,
-              subject: story.headline,
-              log,
-            });
-            if (checked.length > 0) {
-              recordArtifact?.(
-                `claim-check: ${columnist.name}`,
-                checked
-                  .map((c) => `${c.corroborated ? "OK  " : "WEAK"} ${c.claim}\n     ${c.corroborating.join(", ") || "(no independent corroboration found)"}`)
-                  .join("\n"),
-              );
-            }
-          } catch (err: unknown) {
-            log?.(`news-desk: claim check failed (informational, non-blocking): ${String(err)}`);
-          }
           // One take per story → the headline alone is the slug, capped at a
           // WORD boundary (a raw 70-char slice shipped ".../criminal-co").
           // `title` is the chosen verbatim headline; `telemetry.topic` below

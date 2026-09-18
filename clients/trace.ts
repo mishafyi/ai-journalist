@@ -92,8 +92,6 @@ function stepForLlm(entry: LlmTrace): string {
       return "16-headline";
     case "wire_headline_translation":
       return "17-headline-translation";
-    case "checkable_claims":
-      return "20-claim-check";
     case "editorial_lens_judgment":
       return "14-lens-judgment";
     case "data_play_pick":
@@ -116,14 +114,13 @@ function stepForLlm(entry: LlmTrace): string {
 }
 
 /** Which step a search belongs to: the hunt is site-restricted, the parallel
- *  research carries its fixed suffix, a scrape is a scrape, and what remains
- *  is the claim check's corroboration hunt. */
+ *  research carries its fixed suffix, and a scrape is a scrape. */
 function stepForSearch(entry: SearchTrace): string {
   if (entry.step !== undefined && entry.step !== "") return entry.step;
   if (entry.op === "scrape") return "04-scrape";
   if (/^site:/i.test(entry.query)) return "03-resolution-hunt";
   if (/history mechanism significance$/.test(entry.query)) return "08-parallel-research";
-  return "20-claim-check";
+  return "99-unclassified";
 }
 
 export function createTracer(cfg: { dir: string }): Tracer {
