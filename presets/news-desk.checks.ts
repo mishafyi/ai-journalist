@@ -904,7 +904,7 @@ async function lineEditChecks(): Promise<void> {
     contract: CONTRACT,
   });
   ok("the line edit runs on the pinned best model, at its own temperature",
-    seen.model === LINE_EDIT_MODEL && LINE_EDIT_MODEL === "gemini-3.8-flash" && seen.temperature === LINE_EDIT_TEMPERATURE && LINE_EDIT_TEMPERATURE === 0.7,
+    seen.model === LINE_EDIT_MODEL && LINE_EDIT_MODEL === "gemini-3.5-flash-lite" && seen.temperature === LINE_EDIT_TEMPERATURE && LINE_EDIT_TEMPERATURE === 0.7,
     `${seen.model} @ ${seen.temperature}`);
   ok("the line edit is told to keep the names its gate checks",
     ['"Wire"', '"Beacon"', '"Panic of 1907"'].every((n) => seen.prompt.includes(n)) && seen.prompt.includes("thrown away if one drops out"),

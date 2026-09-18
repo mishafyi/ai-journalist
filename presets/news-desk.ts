@@ -488,12 +488,12 @@ export async function composeAuthorVersion(args: {
   throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
 }
 
-/** The line edit is the last read before print, so it gets the best model
- *  the free keys can call — gemini-3.8-flash, the newest Flash (probed
- *  2026-09-18: the Pro models answer 429 without billing) — and never Gemma
- *  (operator, 2026-09-18). Pinned, the rotation tries it on every key and on
- *  no other model; when all refuse, the edit throws and the draft ships. */
-export const LINE_EDIT_MODEL = "gemini-3.8-flash";
+/** The line edit is the last read before print: a Gemini model, never Gemma
+ *  (operator, 2026-09-18) — Flash-Lite, the operator's pick for the desk's
+ *  editorial calls (500 requests a day per key, against Flash's 20). Pinned,
+ *  the rotation tries it on every key and on no other model; when all
+ *  refuse, the edit throws and the draft ships. */
+export const LINE_EDIT_MODEL = "gemini-3.5-flash-lite";
 /** Warmer than runEdit's 0.5 (operator, 2026-09-18). */
 export const LINE_EDIT_TEMPERATURE = 0.7;
 
