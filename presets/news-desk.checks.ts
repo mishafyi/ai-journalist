@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, PERSONAS, SERP_TITLE_CHARS, applyEditorialLens, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, lineEditAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, LINE_EDIT_MODEL, LINE_EDIT_TEMPERATURE, PERSONAS, SERP_TITLE_CHARS, applyEditorialLens, protectedNames, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, lineEditAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import { proposeParallels } from "../parallels";
@@ -887,6 +887,36 @@ async function lineEditChecks(): Promise<void> {
       log: (l) => bandLogs.push(l),
     })) === DRAFT && bandLogs.some((l) => l.includes("outside the 70-130% length band")),
     bandLogs.join(" | "));
+  // The edit is the paper's last read: the best Gemini model, pinned, warmer
+  // than runEdit's default, told the names its gate will check.
+  let seen: { prompt: string; model?: string; temperature?: number } = { prompt: "" };
+  await lineEditAuthorVersion({
+    llm: {
+      complete: async (a: { prompt: string; model?: string; temperature?: number }): Promise<string> => {
+        seen = a;
+        return POLISHED;
+      },
+      completeStructured: async <T,>(): Promise<T> => {
+        throw new Error("unused");
+      },
+    },
+    body: DRAFT,
+    contract: CONTRACT,
+  });
+  ok("the line edit runs on the pinned best model, at its own temperature",
+    seen.model === LINE_EDIT_MODEL && LINE_EDIT_MODEL === "gemini-3.8-flash" && seen.temperature === LINE_EDIT_TEMPERATURE && LINE_EDIT_TEMPERATURE === 0.7,
+    `${seen.model} @ ${seen.temperature}`);
+  ok("the line edit is told to keep the names its gate checks",
+    ['"Wire"', '"Beacon"', '"Panic of 1907"'].every((n) => seen.prompt.includes(n)) && seen.prompt.includes("thrown away if one drops out"),
+    seen.prompt.slice(-400));
+  ok("protectedNames: only what the draft carries, as it writes it",
+    JSON.stringify(protectedNames("Wire and the Guardian report; it echoes Dust Bowl summers.", {
+      outletNames: ["Wire", "The Guardian", "Beacon"],
+      parallelEvent: "The Dust Bowl",
+      echoEvents: ["Panic of 1907"],
+    })) === JSON.stringify(["Wire", "The Guardian", "Dust Bowl"]),
+    "");
+
   const throwLogs: string[] = [];
   ok("a thrown edit call keeps the draft (best-effort)",
     (await lineEditAuthorVersion({

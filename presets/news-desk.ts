@@ -488,8 +488,35 @@ export async function composeAuthorVersion(args: {
   throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
 }
 
+/** The line edit is the last read before print, so it gets the best model
+ *  the free keys can call — gemini-3.8-flash, the newest Flash (probed
+ *  2026-09-18: the Pro models answer 429 without billing) — and never Gemma
+ *  (operator, 2026-09-18). Pinned, the rotation tries it on every key and on
+ *  no other model; when all refuse, the edit throws and the draft ships. */
+export const LINE_EDIT_MODEL = "gemini-3.8-flash";
+/** Warmer than runEdit's 0.5 (operator, 2026-09-18). */
+export const LINE_EDIT_TEMPERATURE = 0.7;
+
+/** Pure. The names the contract checks that THIS draft carries — its outlets,
+ *  the parallel, the echoes — in the form the draft writes them: what the
+ *  line edit is told to keep. An event may be named without its leading
+ *  "The", as namesEvent allows. */
+export function protectedNames(
+  body: string,
+  contract: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[] },
+): string[] {
+  const asWritten = (event: string): string | null =>
+    !namesEvent(body, event) ? null : mentionsName(body, event) ? event : event.replace(/^the\s+/i, "");
+  return [
+    ...contract.outletNames.filter((n) => mentionsName(body, n)),
+    ...[contract.parallelEvent, ...contract.echoEvents].flatMap((e) => (e === null || asWritten(e) === null ? [] : [asWritten(e) as string])),
+  ];
+}
+
 /** Pass 6 for the desk: line-edit a contract-passing author version (the
  *  newspaper self-edit pass, gates.runEdit) without ever weakening the gate.
+ *  It is the LAST read before print, for every columnist — after the lens,
+ *  so a lens rewrite is edited too (operator, 2026-09-18).
  *  The edited text ships only when it stays inside lengthSafe's 70–130% band
  *  AND still passes checkAuthorVersionContract; any rejection — or a thrown
  *  edit call — keeps the draft, so the desk's hot path grows no new failure
@@ -507,7 +534,9 @@ export async function lineEditAuthorVersion(args: {
   try {
     const raw = await runEdit(args.body, {
       llm: args.llm,
-      model: "",
+      model: LINE_EDIT_MODEL,
+      editTemperature: LINE_EDIT_TEMPERATURE,
+      editKeep: protectedNames(args.body, args.contract),
       withRetry: async (_label, fn) => fn(),
       ctx: createRunContext("news-desk-line-edit"),
       gatherExemplars: () => [],
@@ -537,10 +566,11 @@ export async function lineEditAuthorVersion(args: {
   }
 }
 
-/** The persona's standing editorial lens — the FINAL read, after the line
- *  edit (operator, 2026-08-30: "some articles should evoke a sense of
- *  justice … select a few authors … the whole voice of the article pushed
- *  through this lens as final editorial"). Two honest steps, the
+/** The persona's standing editorial lens, read before the line edit — the
+ *  last pass for every columnist since 2026-09-18. Operator, 2026-08-30:
+ *  "some articles should evoke a sense of justice … select a few authors …
+ *  the whole voice of the article pushed through this lens as final
+ *  editorial". Two honest steps, the
  *  append-update shape: a structured judgment of whether THIS story carries
  *  the lens — "no" is the expected answer and changes nothing — then a
  *  full-voice rewrite only on a yes. The rewrite ships only inside
@@ -2067,21 +2097,22 @@ export function createNewsDesk(opts: {
             wordCap: authorWordCap,
             writerName: columnist.name,
           };
-          const editedBody = await lineEditAuthorVersion({
+          // The lens (operator, 2026-08-30): a persona with a standing lens
+          // gives the piece a read through it — judged per story, most
+          // stories pass untouched — under the same band + contract guard as
+          // the line edit, so a lens can color the paper but never break it.
+          const lensBody = await applyEditorialLens({
             llm,
             body,
+            persona: columnist,
             contract: authorContract,
             log,
           });
-          // Final editorial (operator, 2026-08-30): a persona with a standing
-          // lens gives the piece one last read through it — judged per story,
-          // most stories pass untouched — under the same band + contract
-          // guard as the line edit, so a lens can color the paper but never
-          // break it.
-          const finalBody = await applyEditorialLens({
+          // The line edit LAST, for every columnist, so what prints is what
+          // the editor read (operator, 2026-09-18).
+          const finalBody = await lineEditAuthorVersion({
             llm,
-            body: editedBody,
-            persona: columnist,
+            body: lensBody,
             contract: authorContract,
             log,
           });
