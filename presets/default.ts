@@ -500,15 +500,15 @@ export function createDefaultInternals(
   const generate = (plan: Plan): Promise<GeneratedArticle> =>
     runGeneration(plan, pipelineDeps);
 
-  // ── 13. slugify — lowercase, strip diacritics, collapse to hyphens, cap 80.
+  // ── 13. slugify — lowercase, strip diacritics, collapse to hyphens. The
+  // whole title, never cut (operator, 2026-09-19).
   const slugify = (title: string): string =>
     title
       .toLowerCase()
       .normalize("NFKD")
       .replace(/[̀-ͯ]/g, "")
       .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80);
+      .replace(/^-+|-+$/g, "");
 
   // ── 14. finalizePost — wrap the article in the GeneratedPost envelope with a
   //      random byline + the live run telemetry snapshot.
