@@ -158,7 +158,7 @@ export const EDIT_RULES: readonly string[] = [
   "Alternate the general and the concrete to keep the piece MOVING: a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row.",
   "Break up stacked citations: where a stretch hides behind them, surface once and draw the prudent conclusion plainly in one sentence.",
   "Attribute with \"said\", and use \"according to\" at most twice in the whole piece.",
-  "Vary sentence length.",
+  "Vary sentence length by what each sentence does: state conclusions and key points in short declarative sentences; carry explanation, ambiguity and complex reasoning in longer ones; follow a long summary sentence with a short one that lands the point; never run three sentences of the same length in a row.",
   "Vary section-header shapes: mix plain noun phrases, claims, and the occasional question; never let every H2 share one construction — e.g. the \"Topic — Subtitle\" em-dash pattern on every header.",
   "Cut ONLY what these edits name — line-fat, repetition, filler — and never cut whole paragraphs or sections for brevity's sake.",
   "Keep every markdown link and the H1 exactly as the draft has them.",
