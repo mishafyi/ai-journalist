@@ -22,19 +22,20 @@
  * a batch too large is our bug, not Google's weather. 100 texts embed in
  * ~1.3s.
  *
- * FREE TIER IS PER PROJECT (docs/gemini.md in the site repo): 100 RPM,
- * 30,000 TPM, 1,000 RPD. The ring holds 12 keys of which 8 answer, so the
- * paper's real budget is ~8,000 embed requests a day.
+ * FREE TIER IS PER PROJECT AND PER MODEL, AND COUNTS EVERY TEXT (measured
+ * 2026-09-19): 100 embeddings a minute and 1,000 a day, where a 100-text
+ * batch is 100 of them (quota `EmbedContentRequestsPerMinutePerProjectPerModel
+ * -FreeTier`, limit 100). Batching saves round trips, not quota. With 8 keys,
+ * one model is 8,000 texts a day, and a run embeds ~3,700 (2,000 covered
+ * titles, ~1,000 outlet headlines, every trending and coverage headline), so
+ * the day's budget used to be spent by 03:00 Pacific. Each MODEL has its own
+ * quota, so a second model doubles the day (operator, 2026-09-19: "use second
+ * model").
  *
- * WHY THAT IS ENOUGH, and why batching is not optional: the desk matches every
- * trending story against the whole outlet index, 1,000+ headlines, which at
- * one request per text would be 1,000 requests — an eighth of the day's total
- * budget for a single run, at a desk that runs every ~25 minutes. At 100 per
- * request the same index costs 10, and `matching.ts` caches vectors per run so
- * the index is embedded once per run rather than once per story: ~700 requests
- * a day against ~8,000. The 30K TPM cap is cleared the same way — a full index
- * is ~20K tokens, and the rotation advances a key per call, so ten batches
- * land on ten projects rather than stacking on one minute's budget.
+ * ONE MODEL PER CALL. Two models' vectors live in different spaces and never
+ * meet: a call that runs out on one model starts again from its first text on
+ * the next, `space` names the model in use, and the matcher's cache keys every
+ * vector by it (matching.ts).
  *
  * ── The one deliberate difference from the Ollama embedder ─────────────────
  *
@@ -48,7 +49,7 @@
  */
 import { GoogleGenAI } from "@google/genai";
 import type { Embedder } from "../ports";
-import { createRotation } from "./gemini-llm";
+import { createRotation, GeminiExhausted } from "./gemini-llm";
 
 /**
  * Texts per request. The API's own ceiling, not a guess — see the header.
@@ -59,28 +60,33 @@ const BATCH = 100;
 /** Native width is 3,072; 768 is the truncation the header defends. */
 const DIMENSIONS = 768;
 
+/** The embedding models, in order: each has its own daily quota per project. */
+export const EMBED_MODELS: readonly string[] = ["gemini-embedding-2", "gemini-embedding-001"];
+
 export interface GeminiEmbedderConfig {
   /** The ring. Free-tier limits are per PROJECT, so keys help only when they
    *  come from different projects — see `createGeminiLlm`'s note. */
   apiKeys: readonly string[];
-  /** Default `gemini-embedding-2`; `GEMINI_EMBED_MODEL` overrides. */
-  model?: string;
+  /** Tried in order; the next takes over, for the rest of the run, once one
+   *  is spent on every key. */
+  models: readonly string[];
   /** Where a rotation announces itself; silent when absent. */
   log?: (line: string) => void;
 }
 
 export function createGeminiEmbedder(cfg: GeminiEmbedderConfig): Embedder {
-  const model = cfg.model ?? process.env.GEMINI_EMBED_MODEL ?? "gemini-embedding-2";
+  if (cfg.models.length === 0) throw new Error("gemini embed: no models configured");
   const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({ apiKey, httpOptions: { timeout: 120_000 } }));
-  const rotate = createRotation([model], ring.length, cfg.log);
+  const rotate = createRotation(cfg.models, ring.length, cfg.log);
+  let current = 0;
 
-  async function embedChunk(texts: readonly string[]): Promise<number[][]> {
+  async function embedChunk(model: string, texts: readonly string[]): Promise<number[][]> {
     // A string[] here would be WRONG and silently so: the SDK folds it into
     // ONE content of many parts and returns a single vector for the lot
     // (measured — 250 texts came back as 1 embedding, no error). One Content
     // per text is what makes it a batch.
     const contents = texts.map((text) => ({ parts: [{ text }] }));
-    return await rotate("embed", undefined, async (m, keyIndex) => {
+    return await rotate("embed", model, async (m, keyIndex) => {
       const res = await ring[keyIndex].models.embedContent({
         model: m,
         contents,
@@ -104,16 +110,29 @@ export function createGeminiEmbedder(cfg: GeminiEmbedderConfig): Embedder {
   }
 
   return {
+    /** The model in use: vectors from two models are never compared. */
+    get space(): string {
+      return cfg.models[current] as string;
+    },
     async embed(texts: string[]): Promise<number[][]> {
       if (texts.length === 0) return [];
-      const out: number[][] = [];
-      // Sequential: the rotation moves to the next key per call, so this
-      // spreads the load across projects on its own. Firing them in parallel
-      // would only race the same per-minute budgets into 429s.
-      for (let i = 0; i < texts.length; i += BATCH) {
-        out.push(...(await embedChunk(texts.slice(i, i + BATCH))));
+      for (;;) {
+        const model = cfg.models[current] as string;
+        try {
+          const out: number[][] = [];
+          // Sequential: the rotation moves to the next key per call, so this
+          // spreads the load across projects on its own. Firing them in parallel
+          // would only race the same per-minute budgets into 429s.
+          for (let i = 0; i < texts.length; i += BATCH) {
+            out.push(...(await embedChunk(model, texts.slice(i, i + BATCH))));
+          }
+          return out;
+        } catch (err: unknown) {
+          if (!(err instanceof GeminiExhausted) || current === cfg.models.length - 1) throw err;
+          current += 1;
+          cfg.log?.(`gemini: embed — ${model} is spent on every key; ${cfg.models[current]} embeds the rest of the run, starting this call again`);
+        }
       }
-      return out;
     },
   };
 }

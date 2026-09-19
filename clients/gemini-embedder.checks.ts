@@ -1,5 +1,5 @@
 /** Gemini embedder batching + rotation — run: npx tsx clients/gemini-embedder.checks.ts */
-import { createGeminiEmbedder } from "./gemini-embedder";
+import { createGeminiEmbedder, EMBED_MODELS } from "./gemini-embedder";
 
 interface EmbedRequest {
   requests?: { content?: { parts?: { text?: string }[] } }[];
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
   // would spend an eighth of the day's 8,000-request budget on a single run.
   {
     const seen = spy();
-    const embedder = createGeminiEmbedder({ apiKeys: keys });
+    const embedder = createGeminiEmbedder({ apiKeys: keys, models: EMBED_MODELS });
     const out = await embedder.embed(Array.from({ length: 250 }, (_, i) => "x".repeat(i + 1)));
     ok("250 texts go out as 100/100/50, not 250 requests",
       seen.sizes.length === 3 && seen.sizes[0] === 100 && seen.sizes[1] === 100 && seen.sizes[2] === 50,
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
   // one batch`, so a chunk over it is a bug we would ship, not a retryable.
   {
     const seen = spy();
-    await createGeminiEmbedder({ apiKeys: keys }).embed(Array.from({ length: 100 }, (_, i) => `t${i}`));
+    await createGeminiEmbedder({ apiKeys: keys, models: EMBED_MODELS }).embed(Array.from({ length: 100 }, (_, i) => `t${i}`));
     ok("a batch exactly at the ceiling stays one request",
       seen.sizes.length === 1 && seen.sizes[0] === 100, `sizes=${JSON.stringify(seen.sizes)}`);
     ok("no request may exceed the API's 100-content ceiling",
@@ -74,7 +74,7 @@ async function main(): Promise<void> {
   // would have shipped as "matching quietly stopped working".
   {
     const seen = spy();
-    await createGeminiEmbedder({ apiKeys: keys }).embed(["alpha", "beta", "gamma"]);
+    await createGeminiEmbedder({ apiKeys: keys, models: EMBED_MODELS }).embed(["alpha", "beta", "gamma"]);
     ok("each text is its own Content, never folded into one",
       textsOf(seen.bodies[0]).join("|") === "alpha|beta|gamma",
       JSON.stringify(seen.bodies[0]).slice(0, 200));
@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   // ── Empty input must not touch the network.
   {
     const seen = spy();
-    const out = await createGeminiEmbedder({ apiKeys: keys }).embed([]);
+    const out = await createGeminiEmbedder({ apiKeys: keys, models: EMBED_MODELS }).embed([]);
     ok("no request is made for an empty input list",
       out.length === 0 && seen.sizes.length === 0, `requests=${seen.sizes.length}`);
   }
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
       return vectors(textsOf(JSON.parse(String(init?.body ?? "{}")) as EmbedRequest));
     }) as typeof fetch;
     const logs: string[] = [];
-    const out = await createGeminiEmbedder({ apiKeys: keys, log: (l) => logs.push(l) }).embed(["a", "b"]);
+    const out = await createGeminiEmbedder({ apiKeys: keys, models: EMBED_MODELS, log: (l) => logs.push(l) }).embed(["a", "b"]);
     ok("a 429 on one key is answered by the next key, not by failing the run",
       out.length === 2 && calls === 2, `len=${out.length} calls=${calls}`);
     ok("the rotation says so rather than swallowing it",
@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     }) as typeof fetch;
     let message = "";
     try {
-      await createGeminiEmbedder({ apiKeys: keys }).embed(["a", "b"]);
+      await createGeminiEmbedder({ apiKeys: keys, models: EMBED_MODELS }).embed(["a", "b"]);
     } catch (err: unknown) {
       message = err instanceof Error ? err.message : String(err);
     }
@@ -132,12 +132,47 @@ async function main(): Promise<void> {
     globalThis.fetch = (async (): Promise<Response> => json({ embeddings: [{ values: [] }] })) as typeof fetch;
     let message = "";
     try {
-      await createGeminiEmbedder({ apiKeys: keys }).embed(["a"]);
+      await createGeminiEmbedder({ apiKeys: keys, models: EMBED_MODELS }).embed(["a"]);
     } catch (err: unknown) {
       message = err instanceof Error ? err.message : String(err);
     }
     ok("an empty vector is named here, not deep inside the matcher",
       /empty vector at index 0/.test(message), `msg=${message}`);
+  }
+
+  // ── The second model (operator, 2026-09-19): each model has its own daily
+  // quota. When the first is spent on every key, the second takes the whole
+  // call from its first text, and `space` says which model the vectors are.
+  {
+    const models: string[] = [];
+    globalThis.fetch = (async (u: unknown, init?: RequestInit): Promise<Response> => {
+      const url = String(u);
+      models.push(url.includes("model-one") ? "one" : "two");
+      if (url.includes("model-one")) {
+        return json({
+          error: {
+            code: 429,
+            status: "RESOURCE_EXHAUSTED",
+            message: "Quota exceeded",
+            details: [{ violations: [{ quotaId: "EmbedContentRequestsPerDayPerProjectPerModel-FreeTier" }] }],
+          },
+        }, 429);
+      }
+      return vectors(textsOf(JSON.parse(String(init?.body ?? "{}")) as EmbedRequest));
+    }) as typeof fetch;
+    const logs: string[] = [];
+    const embedder = createGeminiEmbedder({ apiKeys: keys, models: ["model-one", "model-two"], log: (l) => logs.push(l) });
+    const before = embedder.space;
+    const out = await embedder.embed(Array.from({ length: 150 }, (_, i) => `t${i}`));
+    ok("a model spent on every key hands the whole call to the next model",
+      out.length === 150 && models.filter((m) => m === "one").length === keys.length && models.filter((m) => m === "two").length === 2,
+      `calls=${JSON.stringify(models)}`);
+    ok("space names the model the vectors come from",
+      before === "model-one" && embedder.space === "model-two", `${before} → ${embedder.space}`);
+    ok("the switch is logged", logs.some((l) => l.includes("model-two embeds the rest of the run")), JSON.stringify(logs));
+    models.length = 0;
+    await embedder.embed(["later"]);
+    ok("the rest of the run stays on the second model", models.join() === "two", JSON.stringify(models));
   }
 
   globalThis.fetch = realFetch;

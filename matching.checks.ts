@@ -76,6 +76,31 @@ async function main(): Promise<void> {
     ok("a repeated probe costs nothing", textsEmbedded === 53, String(textsEmbedded));
   }
 
+  // A model switch DURING a call (the embedder's second model taking over):
+  // what was cached belongs to the old space, so every text is asked again in
+  // the new one, and no comparison mixes two spaces.
+  {
+    let space = "one";
+    const asked: string[][] = [];
+    const switching: Embedder = {
+      get space(): string {
+        return space;
+      },
+      async embed(texts: string[]): Promise<number[][]> {
+        asked.push([...texts]);
+        const vecs = texts.map((t) => (space === "one" ? [1, 0] : t.startsWith("probe") || t.startsWith("MATCH") ? [0, 1] : [1, 0]));
+        if (asked.length === 2) space = "two"; // the first model runs out inside the second call
+        return vecs;
+      },
+    };
+    const m = createHeadlineMatcher({ embedder: switching });
+    await m.match("probe", ["MATCH a"], 0.5); // caches both in space one
+    const hitTwo = await m.match("probe", ["MATCH a", "MATCH b"], 0.5);
+    ok("a mid-call switch re-embeds the whole list in the new space",
+      asked.length === 3 && asked[2].join("|") === "probe|MATCH a|MATCH b" && hitTwo !== null && hitTwo.score > 0.99,
+      `${JSON.stringify(asked)} ${JSON.stringify(hitTwo)}`);
+  }
+
   process.stdout.write("matching checks: all green\n");
 }
 

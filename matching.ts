@@ -44,13 +44,19 @@ function createVectorCache(embedder: Embedder) {
   // failover fires, and every prior entry simply misses and is re-embedded.
   const key = (text: string): string => `${embedder.space ?? ""}\n${text}`;
   return async function embedCached(texts: readonly string[]): Promise<number[][]> {
-    const missing = [...new Set(texts.filter((t) => !cache.has(key(t))))];
-    if (missing.length > 0) {
-      const fresh = await embedder.embed(missing);
-      missing.forEach((t, i) => cache.set(key(t), fresh[i]));
+    for (;;) {
+      const space = embedder.space;
+      const missing = [...new Set(texts.filter((t) => !cache.has(key(t))))];
+      if (missing.length > 0) {
+        const fresh = await embedder.embed(missing);
+        // The space moved DURING this call: the texts cached before it are
+        // vectors of the old space, so the whole list is asked again in the new one.
+        if (embedder.space !== space) continue;
+        missing.forEach((t, i) => cache.set(key(t), fresh[i]));
+      }
+      // Non-null: every text is either cached or was just embedded, in one space.
+      return texts.map((t) => cache.get(key(t)) as number[]);
     }
-    // Non-null: every text is either cached or was just embedded.
-    return texts.map((t) => cache.get(key(t)) as number[]);
   };
 }
 
