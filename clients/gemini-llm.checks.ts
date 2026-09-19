@@ -9,7 +9,7 @@
  * is decided entirely there. Driving it through the SDK would test Google's
  * mood and the SDK's constructor, neither of which is ours.
  */
-import { createRotation, FREE_MODELS } from "./gemini-llm";
+import { createRotation, FREE_MODELS, untilPacificMidnight } from "./gemini-llm";
 process.env.GEMINI_RING_START = "0"; // the checks reason about "the next key" from key 1
 import { describeError } from "./trace";
 
@@ -26,7 +26,43 @@ const ok = (name: string, cond: boolean, detail: string): void => {
 const rateLimited = (seconds: number): Error =>
   new Error(`{"error":{"code":429,"message":"Quota exceeded","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"${seconds}s"}]}}`);
 
+/** The Flash models' two limits as Google sends them (captured 2026-09-19 on
+ *  gemini-3-flash): both 429 with a short retryDelay; only the quotaId differs. */
+const perMinute = new Error('{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier","quotaValue":"5"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"24s"}]}}');
+const perDay = new Error('{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaValue":"20"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"18s"}]}}');
+
+async function limitChecks(): Promise<void> {
+  ok("03:00 PDT is 21 hours before the daily reset",
+    untilPacificMidnight(Date.parse("2026-09-19T10:00:00Z")) === 21 * 3_600_000,
+    String(untilPacificMidnight(Date.parse("2026-09-19T10:00:00Z"))));
+  // Key 0 refuses with `refusal`; a minute later — past both retryDelays —
+  // is key 0 asked again? A spent minute: yes. A spent day: never.
+  const askedAgainAfterAMinute = async (refusal: Error): Promise<boolean> => {
+    const realNow = Date.now;
+    let keys: number[] = [];
+    const rotate = createRotation(["flash"], 2);
+    const send = async (_model: string, key: number): Promise<string> => {
+      keys.push(key);
+      if (key === 0 && keys.filter((k) => k === 0).length === 1) throw refusal;
+      return "ok";
+    };
+    await rotate("first", undefined, send);
+    try {
+      Date.now = () => realNow() + 60_000;
+      keys = [];
+      await rotate("second", undefined, send);
+      await rotate("third", undefined, send);
+    } finally {
+      Date.now = realNow;
+    }
+    return keys.includes(0);
+  };
+  ok("a spent minute is asked again once its delay has passed", await askedAgainAfterAMinute(perMinute), "key 0 never asked again");
+  ok("a spent day is not asked again the same run, whatever its retryDelay says", !(await askedAgainAfterAMinute(perDay)), "key 0 asked again");
+}
+
 async function main(): Promise<void> {
+  await limitChecks();
   // Gemma leads by operator choice; Flash-Lite must stay in the list because a
   // single >16K-token prompt is refused by Gemma on EVERY key.
   ok("the shipped list leads with gemma and keeps a flash-lite fallback",

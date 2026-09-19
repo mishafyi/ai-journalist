@@ -83,7 +83,7 @@ const MAX_COOLDOWN_WAIT_MS = 120_000;
  *  that produced it. `null` means the error is a real fault to surface. */
 interface Retryable {
   waitMs: number;
-  reason: "rate-limited" | "transport failure" | "dead key";
+  reason: "rate-limited" | "daily limit" | "transport failure" | "dead key";
 }
 
 /**
@@ -118,11 +118,33 @@ function evidence(err: unknown): string {
   return describeError(err).replace(/\n\s+at .*/g, "");
 }
 
+/** Milliseconds from `nowMs` to the next midnight Pacific, when
+ *  requests-per-day quotas reset (https://ai.google.dev/gemini-api/docs/rate-limits).
+ *  On the two DST days it is an hour off either way; a pair parked an hour
+ *  early answers the same refusal and is parked again. Mirrored in
+ *  lorien-times `scripts/gemini.mjs`. */
+export function untilPacificMidnight(nowMs: number): number {
+  const at = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hourCycle: "h23", hour: "numeric", minute: "numeric", second: "numeric" })
+      .formatToParts(new Date(nowMs))
+      .map((p) => [p.type, Number(p.value)]),
+  ) as Record<string, number>;
+  return (86_400 - (at.hour * 3600 + at.minute * 60 + at.second)) * 1000;
+}
+
 function retryableAfter(err: unknown): Retryable | null {
   // The whole chain: the socket codes below live on the CAUSE, never on the
   // `fetch failed` wrapper, so matching the top-level message alone would make
   // every pattern except "fetch failed" unreachable.
   const text = evidence(err);
+  // A spent DAY names a different quota from a spent minute, and it still says
+  // "retry in 18s" — obeyed, a used-up pair was asked again every few seconds
+  // all day. Read on the free tier 2026-09-19: the minute is
+  // `GenerateRequestsPerMinutePerProjectPerModel-FreeTier` (limit 5, retry
+  // 24s), the day `GenerateRequestsPerDayPerProjectPerModel-FreeTier` (limit
+  // 20, retry 18s). The day's pair is skipped until midnight Pacific for the
+  // rest of this process; the next run asks again.
+  if (/PerDay/.test(text)) return { waitMs: untilPacificMidnight(Date.now()), reason: "daily limit" };
   const asked = text.match(/"retryDelay":\s*"(\d+)s"/);
   if (asked !== null) return { waitMs: Number(asked[1]) * 1000, reason: "rate-limited" };
   if (/"code":\s*429|RESOURCE_EXHAUSTED/.test(text)) return { waitMs: 30_000, reason: "rate-limited" };
