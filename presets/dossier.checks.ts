@@ -126,6 +126,7 @@ ok(dgCalls.some((c) => c.startsWith("/wikipedia/article/")), "the picked article
 ok(entry.detail?.documents[0]?.chars === WIKI.length, "the document is read whole — every character");
 ok(entry.research.includes("the oil concessions he signed outlived him") && !entry.research.includes("not in the article"), "a quote found word for word is kept; one that is not is dropped");
 ok(entry.detail?.documents[0]?.quotesDropped === 1, "and the drop is counted");
+ok(!/wikipedia/i.test(entry.research) && entry.research.includes("— reference article"), "the column never sees the encyclopedia named: its article is a reference article, no URL");
 ok(structured.every((c) => c.model === "gemini-3.5-flash-lite,gemini-3.1-flash-lite"), "every research call runs on Flash-Lite");
 ok(structured.filter((c) => c.schemaName !== "dossier_plan_searches").every((c) => c.content.includes(ARTICLE)), "rate, pick and notes all carry the source articles whole");
 ok(structured.some((c) => c.schemaName === "dossier_notes" && c.content.includes(WIKI)), "the notes call reads the whole document");

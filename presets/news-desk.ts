@@ -1175,6 +1175,41 @@ function unsupportedClaims(text: string, hay: string, hayDigits: string, hayName
   return failures;
 }
 
+/** Pure. A headline in the paper's sentence case: the first word, acronyms,
+ *  words with an inner capital, and every word the column itself capitalises
+ *  mid-sentence (its names) keep their capitals; every other word goes lower
+ *  case, hyphenated parts one by one. A headline already in sentence case (a
+ *  capital on under half the words after the first) comes back unchanged.
+ *  Title Case headlines were refused wholesale — validateHeadline reads each
+ *  capitalised word as a name the column must carry (production, 2026-09-19:
+ *  "Exposes", "Empty", "Shell"). */
+export function sentenceCase(headline: string, column: string): string {
+  const words = headline.split(" ");
+  const rest = words.slice(1).filter((w) => /[A-Za-z]/.test(w));
+  if (rest.filter((w) => /^["“‘(]?[A-Z]/.test(w)).length * 2 < rest.length) return headline;
+  const names = new Set<string>();
+  const bare = (w: string): string => w.replace(/['’]s$/, "").replace(/[^A-Za-z]/g, "").toLowerCase();
+  for (const line of column.split("\n")) {
+    if (/^\s*#/.test(line)) continue;
+    for (const sentence of line.split(/(?<=[.!?])\s+/)) {
+      for (const w of sentence.split(/\s+/).slice(1)) {
+        for (const part of w.split("-")) if (/^["“‘(]?[A-Z]/.test(part)) names.add(bare(part));
+      }
+    }
+  }
+  const keep = (part: string): boolean =>
+    !/^["“‘(]?[A-Z]/.test(part) || /^[^a-z]*[A-Z]{2,}[^a-z]*$/.test(part) || /[a-z][A-Z]/.test(part) || names.has(bare(part));
+  return [
+    words[0],
+    ...words.slice(1).map((w) =>
+      w
+        .split("-")
+        .map((part) => (keep(part) ? part : part.replace(/[A-Z]/, (c) => c.toLowerCase())))
+        .join("-"),
+    ),
+  ].join(" ");
+}
+
 /** The first candidate that passes its check, logging each refusal; null
  *  when none holds. */
 export function firstValid(
@@ -1410,7 +1445,7 @@ export async function translateHeadline(args: {
         schemaName: "wire_headline_translation",
         temperature: 0.3,
       });
-      const candidate = stripFurniture(out.headline);
+      const candidate = sentenceCase(stripFurniture(out.headline), args.body);
       const failures = isEnglishHeadline(candidate)
         ? validateHeadline(candidate, {
             body: args.body,
@@ -2261,7 +2296,7 @@ export function createNewsDesk(opts: {
           // The Audit's headline and dek, else the column's working ones: the
           // first that asserts nothing the printed column lacks.
           const headline = firstValid(
-            [audited.headline, draft.headline].map((h) => (h === null ? null : stripFurniture(h))),
+            [audited.headline, draft.headline].map((h) => (h === null ? null : sentenceCase(stripFurniture(h), printed))),
             (h) => validateHeadline(h, { body: printed, sourceHeadline: wires, personaName: columnist.name, maxChars: SERP_TITLE_CHARS }),
             "headline",
             log,

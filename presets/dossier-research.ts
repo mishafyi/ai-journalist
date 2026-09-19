@@ -924,7 +924,15 @@ export function researchText(r: PrincipalResearch): string {
     ...r.documents
       .filter((d) => d.relevant)
       .map((d) =>
-        [`[${d.id}] ${d.title} — ${d.source}${d.date ? `, ${d.date}` : ""} — ${d.url}`, ...d.keyPoints.map((k) => `  - ${k}`), ...d.quotes.map((q) => `  > "${q.replace(/\s+/g, " ")}"`)].join("\n"),
+        [
+          // The column never names the encyclopedia (rules/column.md): its
+          // articles reach the column as a reference article, without the URL.
+          /wikipedia/i.test(d.source)
+            ? `[${d.id}] ${d.title} — reference article`
+            : `[${d.id}] ${d.title} — ${d.source}${d.date ? `, ${d.date}` : ""} — ${d.url}`,
+          ...d.keyPoints.map((k) => `  - ${k}`),
+          ...d.quotes.map((q) => `  > "${q.replace(/\s+/g, " ")}"`),
+        ].join("\n"),
       ),
     ...r.records.filter((x) => x.keyPoints.length > 0).map((x) => [`[${x.id}] ${x.source} records — ${x.call}`, ...x.keyPoints.map((k) => `  - ${k}`)].join("\n")),
   ]

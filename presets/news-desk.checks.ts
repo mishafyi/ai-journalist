@@ -694,6 +694,21 @@ async function orchestrationChecks(): Promise<void> {
   ok("validateDek: a double-quoted phrase the column lacks is refused",
     validateDek(`Riyadh calls it "a war of necessity" while the Houthis hold the chokepoint and Donald Trump weighs his options in Washington.`, { body: MBS_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).some((f) => f.startsWith("quotation not in the column")),
     "");
+  // Production, 2026-09-19: both Title Case headlines were refused as naming
+  // "Exposes", "Empty" and "Shell"; the paper's style is sentence case.
+  const { sentenceCase } = await import("./news-desk");
+  const RIYADH = "## The fire at Riyadh\n\nSmoke rose near Riyadh airport after air raid alerts, and Aramco said a depot burned. Saudi Arabia leans on Washington, and the Saudi-led coalition has not answered. The US sent no new batteries.";
+  const cased = sentenceCase("Aramco Fire Near Riyadh Airport Exposes Limits of Saudi Defense", RIYADH);
+  ok("sentenceCase: Title Case goes to sentence case, the column's names kept",
+    cased === "Aramco fire near Riyadh airport exposes limits of Saudi defense" &&
+      validateHeadline(cased, { body: RIYADH, sourceHeadline: "Smoke seen near Riyadh airport", personaName: "Tom Beckwith", maxChars: 70 }).length === 0,
+    `${cased} — ${validateHeadline(cased, { body: RIYADH, sourceHeadline: "Smoke seen near Riyadh airport", personaName: "Tom Beckwith", maxChars: 70 }).join("; ")}`);
+  ok("sentenceCase: acronyms and hyphenated names keep their capitals",
+    sentenceCase("US Batteries Stay Home as Saudi-Led Coalition Stalls", RIYADH) === "US batteries stay home as Saudi-led coalition stalls",
+    sentenceCase("US Batteries Stay Home as Saudi-Led Coalition Stalls", RIYADH));
+  ok("sentenceCase: a sentence-case headline is left alone",
+    sentenceCase("Mohammed bin Salman's reliance on Trump is a fantasy", RIYADH) === "Mohammed bin Salman's reliance on Trump is a fantasy", "");
+
   // The column opens with a working headline and dek, and the Audit polishes
   // them; the first that asserts nothing the column lacks prints.
   const split = splitHeadlineLines('Here is the draft:\n\n**HEADLINE:** "Jerome Powell finally chose credibility"\nDEK: The Federal Reserve raised rates.\n\n## A chapter\n\nBody.');
