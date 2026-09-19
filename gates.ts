@@ -161,7 +161,6 @@ export const EDIT_RULES: readonly string[] = [
   "Vary sentence length: land conclusions and key points in short declarative sentences, carry explanation and complex reasoning in longer ones, and never write three sentences of the same length in a row.",
   "Vary section-header shapes: mix plain noun phrases, claims, and the occasional question; never let every H2 share one construction — e.g. the \"Topic — Subtitle\" em-dash pattern on every header.",
   "Cut ONLY what these edits name — line-fat, repetition, filler — and never cut whole paragraphs or sections for brevity's sake.",
-  "Keep every markdown link and the H1 exactly as the draft has them.",
 ];
 
 /** Pass 6 — the Editor: line-edits the draft (the journalist self-edit pass). */

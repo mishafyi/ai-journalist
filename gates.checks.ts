@@ -136,7 +136,6 @@ const refEdit = (draft: string): string =>
 13. Vary sentence length: land conclusions and key points in short declarative sentences, carry explanation and complex reasoning in longer ones, and never write three sentences of the same length in a row.
 14. Vary section-header shapes: mix plain noun phrases, claims, and the occasional question; never let every H2 share one construction — e.g. the "Topic — Subtitle" em-dash pattern on every header.
 15. Cut ONLY what these edits name — line-fat, repetition, filler — and never cut whole paragraphs or sections for brevity's sake.
-16. Keep every markdown link and the H1 exactly as the draft has them.
 
 Output ONLY the edited markdown article, nothing else.
 
