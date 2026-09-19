@@ -76,10 +76,10 @@ export const PERSONAS: { historian: PersonaProfile } = {
 const GENERIC_HEADING_RE =
   /^(the\s+)?(analysis|analyses|introduction|intro|conclusion|conclusions|background|context|overview|summary|commentary|opinion|takeaway|takeaways|discussion|body|what\s+happened|the\s+numbers|the\s+facts|reactions?|sources?|final\s+thoughts?)\b/i;
 
-/** Reader-facing dek from a column: the first PROSE paragraph — chapter
- *  headings stripped, markdown flattened — cut at a sentence boundary. A raw
- *  slice of the markdown put "## Chapter Title…" into cards and og tags
- *  (seen live 2026-07-24). */
+/** The fallback dek, used only when the Headline Desk wrote no valid one: the
+ *  column's first PROSE paragraph, whole — chapter headings stripped (a raw
+ *  slice once put "## Chapter Title…" into cards and og tags, 2026-07-24),
+ *  markdown flattened, never cut (operator, 2026-09-19). */
 export function dekFrom(markdown: string): string {
   const para = markdown
     .split(/\n\s*\n/)
@@ -92,16 +92,7 @@ export function dekFrom(markdown: string): string {
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
-  if (prose.length <= 200) return prose;
-  const cut = prose.slice(0, 200);
-  // A complete short sentence beats a chopped long one (live 2026-07-26: the
-  // second sentence ran past the cap and the dek ended mid-name). Take the
-  // last sentence end inside the cap however early it falls; only a
-  // paragraph with NO sentence break gets cut, and then at a word boundary.
-  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
-  if (end > 0) return cut.slice(0, end + 1);
-  const word = cut.slice(0, 180).replace(/\s+\S*$/, "");
-  return `${word.trimEnd()}…`;
+  return prose;
 }
 
 /** Mechanical contract for a fused author version (operator, 2026-07-23:
@@ -1026,6 +1017,48 @@ function properNounsOf(text: string): Set<string> {
  *  them fails.
  *
  *  Returns the list of failures — empty means the headline is publishable. */
+/** Pure. Every number, capitalised name and quotation in `text` that the column
+ *  and the wires (`hay`, normalised; `hayDigits`; `hayNames` with apostrophes
+ *  and hyphens removed) do not carry — what a headline or a dek would assert
+ *  on its own. */
+function unsupportedClaims(text: string, hay: string, hayDigits: string, hayNames: string): string[] {
+  const failures: string[] = [];
+  // A number is always a claim.
+  for (const m of text.match(/\d[\d,.]*/g) ?? []) {
+    const digits = m.replace(/[^0-9]/g, "");
+    if (digits !== "" && !hayDigits.includes(digits)) failures.push(`number not in the column: ${m}`);
+  }
+  // A capitalised word that is not a stopword is a name, place or institution.
+  const words = text.split(/[^A-Za-z0-9'’.-]+/).filter((w) => w !== "");
+  words.slice(1).forEach((w) => {
+    const bare = w.replace(/[^A-Za-z]/g, "");
+    if (bare.length < 3 || !/^[A-Z]/.test(bare)) return;
+    if (HEADLINE_STOPWORDS.has(bare.toLowerCase())) return;
+    if (!hayNames.includes(norm(bare))) failures.push(`name not in the column: ${bare}`);
+  });
+  // A quotation is the one thing a reader takes as verbatim.
+  for (const m of text.matchAll(/["“']([^"”']{4,})["”']/g)) {
+    if (!hay.includes(norm(m[1] ?? ""))) failures.push(`quotation not in the column: "${m[1]}"`);
+  }
+  return failures;
+}
+
+/** The dek's contract: one sentence under the headline, asserting nothing the
+ *  column lacks and never naming the columnist. No length cap — the prompt
+ *  asks for 20–35 words and nothing is cut (operator, 2026-09-19). */
+export function validateDek(candidate: string, args: { body: string; sourceHeadline: readonly string[]; personaName: string }): string[] {
+  const d = candidate.trim();
+  const failures: string[] = [];
+  const text = `${args.body} ${args.sourceHeadline.join(" ")}`;
+  const hay = norm(text);
+  if (d.split(/\s+/).length < 12) failures.push(`too short for a dek: ${d.split(/\s+/).length} words (floor 12)`);
+  if (/\n/.test(d)) failures.push("more than one paragraph");
+  if (stripFurniture(d) !== d) failures.push("opens with a label");
+  if (norm(d).includes(norm(args.personaName))) failures.push("names the columnist");
+  failures.push(...unsupportedClaims(d, hay, hay.replace(/[^0-9]/g, " "), norm(text.replace(/['’-]/g, ""))));
+  return failures;
+}
+
 export function validateHeadline(
   candidate: string,
   args: { body: string; sourceHeadline: string | readonly string[]; personaName: string; maxChars: number },
@@ -1056,26 +1089,7 @@ export function validateHeadline(
   // reject exactly the terse headlines worth having.
   if (stripFurniture(h) !== h) failures.push("opens with editorial furniture we have not earned");
   if (norm(h).includes(norm(args.personaName))) failures.push("names the columnist");
-
-  // A number in a headline is always a claim.
-  for (const m of h.match(/\d[\d,.]*/g) ?? []) {
-    const digits = m.replace(/[^0-9]/g, "");
-    if (digits !== "" && !hayDigits.includes(digits)) failures.push(`number not in the column: ${m}`);
-  }
-
-  // A capitalised word that is not a stopword is a name, place or institution.
-  const words = h.split(/[^A-Za-z0-9'’.-]+/).filter((w) => w !== "");
-  words.slice(1).forEach((w) => {
-    const bare = w.replace(/[^A-Za-z]/g, "");
-    if (bare.length < 3 || !/^[A-Z]/.test(bare)) return;
-    if (HEADLINE_STOPWORDS.has(bare.toLowerCase())) return;
-    if (!hayNames.includes(norm(bare))) failures.push(`name not in the column: ${bare}`);
-  });
-
-  // A quotation is the one thing a reader takes as verbatim.
-  for (const m of h.matchAll(/["“']([^"”']{4,})["”']/g)) {
-    if (!hay.includes(norm(m[1] ?? ""))) failures.push(`quotation not in the column: "${m[1]}"`);
-  }
+  failures.push(...unsupportedClaims(h, hay, hayDigits, hayNames));
 
   // If it merely echoes ANY wire headline, nothing was gained by writing it.
   const nh = norm(h);
@@ -1222,10 +1236,10 @@ export async function composeHeadline(args: {
   maxChars: number;
   maxAttempts: number;
   log?: (line: string) => void;
-}): Promise<string | null> {
+}): Promise<{ headline: string | null; dek: string | null }> {
   const system =
-    `You write the headline for a signed opinion column in a daily paper.\n\n` +
-    `It must do TWO things at once: say what happened, and land the column's judgement of it. A headline that carries only the judgement ("Private power needs the state to manage risk") is useless — the reader cannot tell which story it is. Name the people, institutions or places at the centre of it.\n\nHARD RULES:\n` +
+    `You write the headline and the dek for a signed opinion column in a daily paper.\n\n` +
+    `THE HEADLINE must do TWO things at once: say what happened, and land the column's judgement of it. A headline that carries only the judgement ("Private power needs the state to manage risk") is useless — the reader cannot tell which story it is. Name the people, institutions or places at the centre of it.\n\nHARD RULES:\n` +
     `- Aim for 55-65 characters and never exceed ${args.maxChars}.\n` +
     `- Name at least one person, institution or place that the column names, spelled and capitalised exactly as the column spells it.\n` +
     `- Use ONLY names, places, organisations, numbers and quotations that appear in the column. Introduce nothing new — no figure, no name, no statistic.\n` +
@@ -1233,7 +1247,16 @@ export async function composeHeadline(args: {
     `- No label prefixes ("Opinion:", "Analysis:", "Exclusive:", "Watch:"), no colon-prefixed section tags, and never the columnist's name.\n` +
     `- No clickbait ("You won't believe", "Here's why"), and no full stop at the end.\n\n` +
     `GOOD (names the actors, and takes a side): "Brussels blinked, and Beijing collected the winnings"\n` +
-    `BAD (a verdict about nothing in particular): "Trade policy should not reward coercion"`;
+    `BAD (a verdict about nothing in particular): "Trade policy should not reward coercion"\n\n` +
+    // The dek is the column's main theme statement — Blundell, The Art and
+    // Craft of Feature Writing, in our own words (operator, 2026-09-19).
+    `THE DEK is the one sentence printed under the headline and shown in search results and share cards: the column's main theme statement.\n` +
+    `1. State the development and what the column says it means: who did what, its main effect or the reaction it drew, and the columnist's verdict.\n` +
+    `2. Treat what the press has already reported as given: allude to the event in a few words and put the weight on the column's angle.\n` +
+    `3. Write one sentence of 20 to 35 words, with no details, figures or explanations beyond what the point needs, because the column carries those.\n` +
+    `4. Use plain words, straight and simple.\n` +
+    `5. Deliver the point instead of advertising it: no "a remarkable story", no "here's why it matters".\n` +
+    `6. Use only names, numbers and quotations the column contains, never the columnist's name, and no label prefix.`;
 
   const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
     { role: "system", content: system },
@@ -1241,38 +1264,53 @@ export async function composeHeadline(args: {
       role: "user",
       content:
         `COLUMNIST: ${args.persona.name}\n\nWHAT THE WIRES CALLED IT (context only — do NOT reuse any of them):\n${args.sourceHeadlines.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
-        `THE COLUMN:\n${args.body}\n\nWrite the headline.`,
+        `THE COLUMN:\n${args.body}\n\nWrite the headline and the dek.`,
     },
   ];
 
-  for (let attempt = 1; attempt <= args.maxAttempts; attempt += 1) {
+  // The first valid headline and the first valid dek are kept; a retry
+  // revises only the part that failed.
+  let headline: string | null = null;
+  let dek: string | null = null;
+  for (let attempt = 1; attempt <= args.maxAttempts && (headline === null || dek === null); attempt += 1) {
     try {
       const out = await args.llm.completeStructured({
         messages,
-        schema: z.object({ headline: z.string().min(20).max(160) }),
+        schema: z.object({ headline: z.string().min(20).max(160), dek: z.string() }),
         schemaName: "column_headline",
         temperature: 0.4,
       });
-      const candidate = stripFurniture(out.headline);
-      const failures = validateHeadline(candidate, {
-        body: args.body,
-        sourceHeadline: args.sourceHeadlines,
-        personaName: args.persona.name,
-        maxChars: args.maxChars,
-      });
-      if (failures.length === 0) return candidate;
-      args.log?.(`news-desk: headline attempt ${attempt} rejected — ${failures.join("; ")}`);
+      const problems: string[] = [];
+      if (headline === null) {
+        const candidate = stripFurniture(out.headline);
+        const failures = validateHeadline(candidate, {
+          body: args.body,
+          sourceHeadline: args.sourceHeadlines,
+          personaName: args.persona.name,
+          maxChars: args.maxChars,
+        });
+        if (failures.length === 0) headline = candidate;
+        else problems.push(`the headline fails: ${failures.join("; ")}`);
+      }
+      if (dek === null) {
+        const candidate = out.dek.trim();
+        const failures = validateDek(candidate, { body: args.body, sourceHeadline: args.sourceHeadlines, personaName: args.persona.name });
+        if (failures.length === 0) dek = candidate;
+        else problems.push(`the dek fails: ${failures.join("; ")}`);
+      }
+      if (problems.length === 0) break;
+      args.log?.(`news-desk: headline attempt ${attempt} rejected — ${problems.join(" | ")}`);
       // Revise, don't regenerate — same shape as the column's contract retry.
-      messages.push({ role: "assistant", content: out.headline });
+      messages.push({ role: "assistant", content: JSON.stringify(out) });
       messages.push({
         role: "user",
-        content: `That headline fails: ${failures.join("; ")}. Fix every point and write one headline.`,
+        content: `${problems.join(". ")}. Fix every point${headline !== null ? " in the dek; keep the headline" : dek !== null ? " in the headline; keep the dek" : ""} and write both again.`,
       });
     } catch (err: unknown) {
       args.log?.(`news-desk: headline attempt ${attempt} failed: ${String(err)}`);
     }
   }
-  return null;
+  return { headline, dek };
 }
 
 /** An English headline translated from a foreign-only cluster — the fallback
@@ -2150,7 +2188,10 @@ export function createNewsDesk(opts: {
             ),
             log,
           });
-          const content = `${stripVerdictLabel(finalBody)}${chartMarkdown}`;
+          // What prints: the headline, the dek and their checks read this, not
+          // the pre-Editor draft (operator, 2026-09-19).
+          const printed = stripVerdictLabel(finalBody);
+          const content = `${printed}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
           // One take per story → the headline alone is the slug, capped at a
           // WORD boundary (a raw 70-char slice shipped ".../criminal-co").
@@ -2169,7 +2210,7 @@ export function createNewsDesk(opts: {
             (await translateHeadline({
               llm,
               story,
-              body,
+              body: printed,
               personaName: columnist.name,
               maxChars: SERP_TITLE_CHARS,
               maxAttempts: 2,
@@ -2200,19 +2241,20 @@ export function createNewsDesk(opts: {
           const composed = await composeHeadline({
             llm,
             persona: columnist,
-            body,
+            body: printed,
             sourceHeadlines: wires,
             maxChars: SERP_TITLE_CHARS,
             maxAttempts: 2,
             log,
           });
-          if (composed === null) log?.(`news-desk: headline unverified — keeping the wire headline`);
-          const title = composed ?? sourceHeadline;
+          if (composed.headline === null) log?.(`news-desk: headline unverified — keeping the wire headline`);
+          if (composed.dek === null) log?.(`news-desk: dek unverified — the column's first paragraph, whole, stands in`);
+          const title = composed.headline ?? sourceHeadline;
           // The whole title, never cut (operator, 2026-09-19: "don't cut anything during publish").
           const slug = internals.slugify(title);
           const article: GeneratedArticle = {
             title,
-            description: dekFrom(body),
+            description: composed.dek ?? dekFrom(printed),
             category: "news",
             tags: [...tags],
             keywords: [],

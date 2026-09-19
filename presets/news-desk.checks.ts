@@ -272,10 +272,10 @@ async function orchestrationChecks(): Promise<void> {
     !cited.some((c) => /wikipedia/i.test(c.title) || /wikipedia\.org/.test(c.url)) &&
       !md.includes("wikipedia.org"),
     JSON.stringify(cited));
-  ok("dek is the column's first prose sentence — never a chapter heading",
+  ok("with no written dek, the dek is the printed column's first prose paragraph, whole — never a heading, never cut",
     ((published as GeneratedPost | null)?.description ?? "").startsWith("The Panic of 1907 is the closest rhyme") &&
       !((published as GeneratedPost | null)?.description ?? "").includes("#") &&
-      ((published as GeneratedPost | null)?.description ?? "").length <= 200,
+      !((published as GeneratedPost | null)?.description ?? "").endsWith("…"),
     (published as GeneratedPost | null)?.description ?? "(none)");
   // The slug follows pickHeadline, not the feed headline: both the lead
   // ("…raises interest rates to twenty-year high", 53 chars) and Beacon's
@@ -656,14 +656,45 @@ async function orchestrationChecks(): Promise<void> {
   ok("evidenceWordCap: never exceeds the max ceiling",
     evidenceWordCap(9, 60000, 1500) === 1500, String(evidenceWordCap(9, 60000, 1500)));
 
-  // Boundary bugs seen live 2026-07-26: mid-word dek chop, mid-word slug cap.
-  const { dekFrom } = await import("./news-desk");
-  const twoSentences = "They want you looking at the scandal. " + "x".repeat(200);
-  ok("dekFrom: a short complete sentence beats a chopped long one",
-    dekFrom(twoSentences) === "They want you looking at the scandal.", dekFrom(twoSentences));
-  const noBreaks = "word ".repeat(60).trim();
-  ok("dekFrom: a breakless paragraph cuts at a word boundary, never mid-word",
-    dekFrom(noBreaks).endsWith("word…"), dekFrom(noBreaks));
+  // The fallback dek is never cut (operator, 2026-09-19).
+  const { composeHeadline, dekFrom, validateDek } = await import("./news-desk");
+  const longPara = "They want you looking at the scandal. " + "x".repeat(200);
+  ok("dekFrom: the first prose paragraph, whole",
+    dekFrom(`## A heading\n\n${longPara}\n\nNext paragraph.`) === longPara, dekFrom(longPara));
+
+  // The Headline Desk writes the dek in the same call; both are checked
+  // against the column, and a retry revises only the part that failed.
+  const DEK_COLUMN = "The Federal Reserve raised rates by half a point, and Jerome Powell said the move was overdue. Markets in New York fell two percent.";
+  const GOOD_DEK = "The Federal Reserve raised rates again, and the columnist says Jerome Powell has finally chosen credibility over comfort for the markets";
+  ok("validateDek: a dek built from the column passes",
+    validateDek(GOOD_DEK, { body: DEK_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).length === 0,
+    validateDek(GOOD_DEK, { body: DEK_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).join("; "));
+  ok("validateDek: a name the column lacks is refused",
+    validateDek(`${GOOD_DEK} while Christine Lagarde watched`, { body: DEK_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).some((f) => f.includes("Lagarde")),
+    "");
+  const replies = [
+    { headline: "Jerome Powell finally chose credibility at the Federal Reserve", dek: `${GOOD_DEK}, as Christine Lagarde did` },
+    { headline: "ignored on the retry", dek: GOOD_DEK },
+  ];
+  const asked: string[] = [];
+  const composed = await composeHeadline({
+    llm: {
+      complete: async (): Promise<string> => "",
+      completeStructured: async <T,>(a: { messages: { content: string }[] }): Promise<T> => {
+        asked.push(a.messages[a.messages.length - 1].content);
+        return replies[asked.length - 1] as unknown as T;
+      },
+    } as unknown as LlmClient,
+    persona: { ...PERSONAS.historian, name: "Test Writer" },
+    body: DEK_COLUMN,
+    sourceHeadlines: ["Fed raises rates"],
+    maxChars: 70,
+    maxAttempts: 2,
+  });
+  ok("composeHeadline: keeps the valid headline and revises only the failing dek",
+    composed.headline === "Jerome Powell finally chose credibility at the Federal Reserve" && composed.dek === GOOD_DEK &&
+      asked.length === 2 && asked[1].includes("the dek fails") && asked[1].includes("keep the headline"),
+    JSON.stringify({ composed, asked }));
   ok("fredChartUrl renders a QuickChart line config for a real series",
     chart !== null && chart.startsWith("https://quickchart.io/chart?") &&
       decodeURIComponent(chart).includes(FRED_TITLES.UNRATE) && decodeURIComponent(chart).includes("#e4572e"),
