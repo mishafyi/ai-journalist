@@ -146,22 +146,22 @@ function themeHead(deps: GateDeps): string {
 /** Pass 6's rules, printed numbered and in this order. The podcast desk's line
  *  edit (lorien-times scripts/podcast/run-podcast.mjs) mirrors them — edit both. */
 export const EDIT_RULES: readonly string[] = [
-  "Kill passive voice and nominalizations.",
-  "Fix adjective pile-up and editorializing.",
+  "Rewrite passive sentences in the active voice, and turn nominalizations back into verbs.",
+  "Trim adjective pile-ups, and cut editorializing.",
   "Cut throat-clearing and clichés.",
-  "Break fact-lists into narrative.",
-  "Cut repeated material (each statistic, sentence, and company list appears ONCE, at its strongest spot — rephrase later references instead of restating the number).",
-  "Thin stat pile-ups (where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table).",
-  "Recast raw figures the pictorial way (round unless precision is the point; prefer ratios — \"one in four\" over \"24.7%\"; give an incomprehensibly large number one visualizable equivalent).",
-  "Never let two number-heavy paragraphs sit adjacent.",
-  "Hunt abstract blobs and replace them with specific pictorial words (\"severe personnel problems\" → the actual thing: turnover; \"resource companies\" → oil rigs and mines).",
-  "Keep the piece MOVING by alternating the general and the concrete (a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row).",
-  "When a stretch hides behind stacked citations, surface once and draw the prudent conclusion plainly in one sentence.",
-  "Ensure \"said\" attribution with at most two \"according to\" in the whole piece.",
+  "Rewrite fact-lists as narrative.",
+  "State each statistic, sentence, and company list ONCE, at its strongest spot; cut the repeats, and rephrase later references instead of restating the number.",
+  "Thin stat pile-ups: where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table.",
+  "Recast raw figures the pictorial way: round unless precision is the point; prefer ratios — \"one in four\" over \"24.7%\"; give an incomprehensibly large number one visualizable equivalent.",
+  "Separate number-heavy paragraphs: never let two sit adjacent.",
+  "Replace abstract blobs with specific pictorial words (\"severe personnel problems\" → the actual thing: turnover; \"resource companies\" → oil rigs and mines).",
+  "Alternate the general and the concrete to keep the piece MOVING: a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row.",
+  "Break up stacked citations: where a stretch hides behind them, surface once and draw the prudent conclusion plainly in one sentence.",
+  "Attribute with \"said\", and use \"according to\" at most twice in the whole piece.",
   "Vary sentence length.",
-  "Vary section-header shapes (never let every H2 share one construction — e.g. the \"Topic — Subtitle\" em-dash pattern on every header; mix plain noun phrases, claims, and the occasional question).",
-  "Cut ONLY what these edits name — line-fat, repetition, filler — never whole paragraphs or sections for brevity's sake.",
-  "Keep every markdown link and the H1 intact.",
+  "Vary section-header shapes: mix plain noun phrases, claims, and the occasional question; never let every H2 share one construction — e.g. the \"Topic — Subtitle\" em-dash pattern on every header.",
+  "Cut ONLY what these edits name — line-fat, repetition, filler — and never cut whole paragraphs or sections for brevity's sake.",
+  "Keep every markdown link and the H1 exactly as the draft has them.",
 ];
 
 /** Pass 6 — line-edit the draft (the journalist self-edit pass). */

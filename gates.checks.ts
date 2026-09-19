@@ -121,22 +121,22 @@ function makeDeps(llmReply: (prompt: string) => string): GateDeps {
 // landed in the live prompts; these references carry the same bytes.
 const refEdit = (draft: string): string =>
   `Line-edit this draft for publication. Apply the newspaper self-edit pass:
-1. Kill passive voice and nominalizations.
-2. Fix adjective pile-up and editorializing.
+1. Rewrite passive sentences in the active voice, and turn nominalizations back into verbs.
+2. Trim adjective pile-ups, and cut editorializing.
 3. Cut throat-clearing and clichés.
-4. Break fact-lists into narrative.
-5. Cut repeated material (each statistic, sentence, and company list appears ONCE, at its strongest spot — rephrase later references instead of restating the number).
-6. Thin stat pile-ups (where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table).
-7. Recast raw figures the pictorial way (round unless precision is the point; prefer ratios — "one in four" over "24.7%"; give an incomprehensibly large number one visualizable equivalent).
-8. Never let two number-heavy paragraphs sit adjacent.
-9. Hunt abstract blobs and replace them with specific pictorial words ("severe personnel problems" → the actual thing: turnover; "resource companies" → oil rigs and mines).
-10. Keep the piece MOVING by alternating the general and the concrete (a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row).
-11. When a stretch hides behind stacked citations, surface once and draw the prudent conclusion plainly in one sentence.
-12. Ensure "said" attribution with at most two "according to" in the whole piece.
+4. Rewrite fact-lists as narrative.
+5. State each statistic, sentence, and company list ONCE, at its strongest spot; cut the repeats, and rephrase later references instead of restating the number.
+6. Thin stat pile-ups: where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table.
+7. Recast raw figures the pictorial way: round unless precision is the point; prefer ratios — "one in four" over "24.7%"; give an incomprehensibly large number one visualizable equivalent.
+8. Separate number-heavy paragraphs: never let two sit adjacent.
+9. Replace abstract blobs with specific pictorial words ("severe personnel problems" → the actual thing: turnover; "resource companies" → oil rigs and mines).
+10. Alternate the general and the concrete to keep the piece MOVING: a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row.
+11. Break up stacked citations: where a stretch hides behind them, surface once and draw the prudent conclusion plainly in one sentence.
+12. Attribute with "said", and use "according to" at most twice in the whole piece.
 13. Vary sentence length.
-14. Vary section-header shapes (never let every H2 share one construction — e.g. the "Topic — Subtitle" em-dash pattern on every header; mix plain noun phrases, claims, and the occasional question).
-15. Cut ONLY what these edits name — line-fat, repetition, filler — never whole paragraphs or sections for brevity's sake.
-16. Keep every markdown link and the H1 intact.
+14. Vary section-header shapes: mix plain noun phrases, claims, and the occasional question; never let every H2 share one construction — e.g. the "Topic — Subtitle" em-dash pattern on every header.
+15. Cut ONLY what these edits name — line-fat, repetition, filler — and never cut whole paragraphs or sections for brevity's sake.
+16. Keep every markdown link and the H1 exactly as the draft has them.
 
 Output ONLY the edited markdown article, nothing else.
 
