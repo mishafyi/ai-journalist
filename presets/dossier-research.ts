@@ -296,23 +296,39 @@ const POINT_STOPWORDS = new Set(
   ).split(" "),
 );
 
-/** Pure. The first capitalised name (not opening the point) or multi-digit
- *  number in `point` that `docText` does not contain; null when there is none.
- *  A key point is the model's reading of a document, and a name or number the
- *  document lacks is a claim it did not make ("President Biden issued" a
- *  notice Trump signed, 2026-09-19). */
+/** Pure. Lowercase, accents gone, every non-alphanumeric a space. */
+const plainWords = (x: string): string =>
+  x.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+
+/** Pure. A number as compared: its digits alone ("4.5" and "4,5" are "45"). */
+const numberKey = (m: string): string => m.replace(/[^0-9]/g, "");
+
+/** Pure. The first capitalised name or multi-digit number in `point` that
+ *  `docText` does not contain; null when there is none. A key point is the
+ *  model's reading of a document, and a name or number the document lacks is a
+ *  claim it did not make ("President Biden issued" a notice Trump signed,
+ *  2026-09-19). Lenient where language is: a sentence's first word, a
+ *  possessive, each part of a hyphenated name, and a demonym ("Indian" for
+ *  "India", "Ukrainian" for "Ukraine") are all read as the document would
+ *  write them. */
 export function unsupportedInDoc(point: string, docText: string): string | null {
-  const hay = normQuote(docText).replace(/[^a-z0-9 ]+/g, " ");
-  const digits = docText.replace(/[^0-9]+/g, " ");
-  for (const m of point.match(/\d[\d,.]*\d/g) ?? []) {
-    const n = m.replace(/[^0-9]/g, "");
-    if (n.length >= 2 && !digits.includes(n)) return m;
+  const hay = ` ${plainWords(docText)} `;
+  const numbers = new Set((docText.match(/\d[\d,.]*\d|\d/g) ?? []).map(numberKey));
+  for (const m of point.match(/\d[\d,.]*\d|\d/g) ?? []) {
+    const n = numberKey(m);
+    if (n.length >= 2 && !numbers.has(n)) return m;
   }
-  const words = point.split(/[^A-Za-zÀ-ÿ'’.-]+/).filter((w) => w !== "");
-  for (const w of words.slice(1)) {
-    const bare = w.replace(/[^A-Za-zÀ-ÿ]/g, "");
-    if (bare.length < 3 || !/^[A-ZÀ-Þ]/.test(bare) || POINT_STOPWORDS.has(bare.toLowerCase())) continue;
-    if (!hay.includes(normQuote(bare).replace(/[^a-z0-9 ]+/g, ""))) return bare;
+  for (const sentence of point.split(/(?<=[.!?])\s+/)) {
+    const words = sentence.split(/[^A-Za-zÀ-ÿ'’.-]+/).filter((w) => w !== "");
+    for (const word of words.slice(1)) {
+      for (const part of word.replace(/['’]s$/i, "").split("-")) {
+        const bare = plainWords(part).replace(/[^a-z]/g, "");
+        if (bare.length < 3 || !/^[A-ZÀ-Þ]/.test(part.replace(/^[^A-Za-zÀ-ÿ]+/, "")) || POINT_STOPWORDS.has(bare)) continue;
+        const stem = bare.replace(/(ian|ean|ese|an|i|n|s)$/, "");
+        if (hay.includes(bare) || (stem.length >= 4 && hay.includes(stem))) continue;
+        return part.replace(/[^A-Za-zÀ-ÿ]/g, "");
+      }
+    }
   }
   return null;
 }
@@ -412,18 +428,42 @@ export async function openDoc(pick: Pick, datagod: DatagodClient): Promise<Opene
       // HTML and XML full texts answer 200: the first that serves, in order,
       // with the govinfo PDF last.
       const d = await dg(`/federal-register/${encodeURIComponent(ref)}`);
+      // The record's own facts head the text: a presidential document's body
+      // never names its signer, so a note saying who signed it had nothing to
+      // be checked against (2026-09-19). DataGod's record carries no signer;
+      // the Register's API does.
+      let president = "";
+      if (s(d.type) === "Presidential Document") {
+        try {
+          const res = await fetchDoc(`https://www.federalregister.gov/api/v1/documents/${encodeURIComponent(ref)}.json?fields[]=president`, 30_000);
+          president = s(((await res.json()) as { president?: { name?: string } }).president?.name);
+        } catch (err: unknown) {
+          // Not fatal to the document — and said in its header, where the notes and the trace read it.
+          president = `(signer unknown: the Register's API did not answer — ${String(err).slice(0, 160)})`;
+        }
+      }
+      const agencies = ((d.agencies ?? []) as { name?: string }[]).map((a) => s(a.name)).filter((x) => x !== "").join("; ");
+      const number = s(d.executive_order_number) !== "" ? ` No. ${s(d.executive_order_number)}` : s(d.proclamation_number) !== "" ? ` No. ${s(d.proclamation_number)}` : "";
+      const meta = [
+        `${s(d.citation)} — ${s(d.type)}${s(d.subtype) === "" ? "" : `, ${s(d.subtype)}${number}`}`,
+        president === "" ? "" : `Signed by ${president}${s(d.signing_date) === "" ? "" : ` on ${s(d.signing_date)}`}`,
+        `Published ${s(d.publication_date)}${agencies === "" ? "" : ` — ${agencies}`}`,
+        s(d.abstract) === "" ? "" : `Abstract: ${s(d.abstract)}`,
+      ]
+        .filter((x) => x !== "")
+        .join("\n");
       const failures: string[] = [];
       for (const [field, kind] of [["body_html_url", "full text (HTML)"], ["full_text_xml_url", "full text (XML)"], ["raw_text_url", "full text"]] as const) {
         if (s(d[field]) === "") continue;
         try {
-          return { title: s(d.title), date: s(d.publication_date), url: s(d.html_url), kind, text: await webText(s(d[field])) };
+          return { title: s(d.title), date: s(d.publication_date), url: s(d.html_url), kind, text: `${meta}\n\n${await webText(s(d[field]))}` };
         } catch (err: unknown) {
           failures.push(String(err));
         }
       }
       if (s(d.pdf_url) !== "") {
         const pdf = await pdfText(s(d.pdf_url));
-        return { title: s(d.title), date: s(d.publication_date), url: s(d.html_url), kind: pdf.label, text: pdf.text };
+        return { title: s(d.title), date: s(d.publication_date), url: s(d.html_url), kind: pdf.label, text: `${meta}\n\n${pdf.text}` };
       }
       throw new Error(`Federal Register ${ref}: no full text served — ${failures.join("; ")}`);
     }

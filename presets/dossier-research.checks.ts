@@ -57,6 +57,14 @@ const DOC = "Continuation of the National Emergency. Donald J. Trump signed this
 ok(unsupportedInDoc("President Biden issued the notice on April 15, 2026.", DOC) === "Biden", "unsupportedInDoc: a name the document lacks is caught", String(unsupportedInDoc("President Biden issued the notice", DOC)));
 ok(unsupportedInDoc("The notice, signed by Donald Trump in 2026, extends the Russian sanctions program.", DOC) === null, "unsupportedInDoc: a point the document supports passes", String(unsupportedInDoc("The notice, signed by Donald Trump in 2026, extends the Russian sanctions program.", DOC)));
 ok(unsupportedInDoc("It was signed on April 17, 2025.", DOC) === "17", "unsupportedInDoc: a number the document lacks is caught (the first one)", String(unsupportedInDoc("It was signed on April 17, 2025.", DOC)));
+const DOC2 = "United States-India trade rose 4.5 percent. The duties on India apply to Russian crude; Ukraine's exports were exempt.";
+for (const [point, why] of [
+  ["Trade between the United States-India partners rose 4.5 percent.", "a hyphenated name and a decimal"],
+  ["Indian refiners buy Russian crude. However, Ukrainian grain is exempt.", "demonyms and a second sentence's first word"],
+  ["The duties fall on India's imports.", "a possessive"],
+] as const) {
+  ok(unsupportedInDoc(point, DOC2) === null, `unsupportedInDoc: passes ${why}`, String(unsupportedInDoc(point, DOC2)));
+}
 
 if (failed > 0) {
   console.log(`dossier-research checks: ${failed} FAILED`);
