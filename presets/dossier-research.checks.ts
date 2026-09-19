@@ -1,6 +1,6 @@
 /** Dossier research, the pure parts: the catalogue parsers, the call checker,
  *  and split-never-cut. Run: npx tsx presets/dossier-research.checks.ts */
-import { groupsUnder, itemCount, normQuote, parseEndpoints, parseGuide, partBudget, refListed, splitText, unsupportedInDoc, validCall } from "./dossier-research";
+import { budgetSpent, groupsUnder, itemCount, normQuote, parseEndpoints, parseGuide, partBudget, refListed, splitText, unsupportedInDoc, validCall } from "./dossier-research";
 
 let failed = 0;
 const ok = (cond: boolean, msg: string, detail = ""): void => {
@@ -90,6 +90,15 @@ for (const abbr of ["Pres.", "Sec.", "Amb."]) {
   ok(unsupportedInDoc(`The talks were led by ${abbr} Biden.`, DOC5) === "Biden", `unsupportedInDoc: ${abbr} keeps the name after it checked`, String(unsupportedInDoc(`The talks were led by ${abbr} Biden.`, DOC5)));
 }
 ok(unsupportedInDoc("The talks raised 1.5bn.", DOC5) === null, "unsupportedInDoc: 1.5bn reads as 1.5 billion", String(unsupportedInDoc("The talks raised 1.5bn.", DOC5)));
+
+// The wall-clock budget. Nothing bounded the dossier before, and a run that
+// spent 43 minutes on three documents was killed by the desk's 90-minute
+// wrapper and published nothing (2026-09-19).
+const DEADLINE = 1_000_000;
+ok(budgetSpent(DEADLINE, DEADLINE - 1) === "", "budgetSpent: a millisecond left is time enough to start one more");
+ok(budgetSpent(DEADLINE, DEADLINE) !== "", "budgetSpent: the deadline itself is spent");
+ok(budgetSpent(DEADLINE, DEADLINE + 60_000) !== "", "budgetSpent: past it stays spent");
+ok(/budget is spent/.test(budgetSpent(DEADLINE, DEADLINE)), "budgetSpent: says why, for the log", budgetSpent(DEADLINE, DEADLINE));
 
 if (failed > 0) {
   console.log(`dossier-research checks: ${failed} FAILED`);

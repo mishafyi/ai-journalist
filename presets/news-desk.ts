@@ -32,7 +32,7 @@ import {
 } from "../research";
 import { z } from "zod";
 import type { DatagodClient } from "../clients/datagod";
-import { DOSSIER_MODEL, loadCatalogue, researchOne, researchText } from "./dossier-research";
+import { DOSSIER_MODEL, RESEARCH_BUDGET_MS, budgetSpent, loadCatalogue, researchOne, researchText } from "./dossier-research";
 import type { OpenedDoc, PrincipalResearch } from "./dossier-research";
 import { fetchCoverage, fetchTrendingStories, resolveCoverageUrl, GN_US } from "../sources/google-news";
 import type { Coverage } from "../sources/google-news";
@@ -297,6 +297,8 @@ export async function researchPrincipals(args: {
   storyText: string;
   datagod?: DatagodClient;
   fetchImpl?: typeof fetch;
+  /** The dossier's whole wall-clock budget; RESEARCH_BUDGET_MS by default. */
+  budgetMs?: number;
   log?: (line: string) => void;
 }): Promise<DossierEntry[]> {
   if (args.datagod === undefined) return args.principals.map((p) => ({ ...p, research: "", detail: null }));
@@ -313,7 +315,19 @@ export async function researchPrincipals(args: {
   const opened = new Map<string, { id: string; doc: OpenedDoc }>();
   let docNo = 0;
   const entries: DossierEntry[] = [];
+  // ONE budget for the whole dossier, not one per principal: the desk's own
+  // wrapper kills a run at 90 minutes, and an unbounded dossier took the
+  // article down with it (see RESEARCH_BUDGET_MS). A principal reached after
+  // the budget is spent keeps an empty entry, exactly as a failed one does.
+  const budgetMs = args.budgetMs ?? RESEARCH_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
   for (const principal of args.principals) {
+    const spent = budgetSpent(deadline, Date.now());
+    if (spent !== "") {
+      args.log?.(`dossier: ${spent} (${Math.round(budgetMs / 60_000)} min) — "${principal.name}" is not researched`);
+      entries.push({ ...principal, research: "", detail: null });
+      continue;
+    }
     try {
       const detail = await researchOne({
         llm: args.llm,
@@ -324,6 +338,7 @@ export async function researchPrincipals(args: {
         storyText: args.storyText,
         opened,
         nextDocId: () => `D${(docNo += 1)}`,
+        deadline,
         ...(args.log === undefined ? {} : { log: args.log }),
       });
       entries.push({ ...principal, research: researchText(detail), detail });

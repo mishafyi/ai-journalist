@@ -46,6 +46,26 @@ export const TOP_SOURCES = 6;
 export const MIN_SCORE = 3;
 /** Documents opened per principal. */
 export const MAX_DOCS = 8;
+/** The dossier's whole wall-clock budget, across every principal.
+ *
+ *  Nothing used to bound it — only a 30-second timeout on a single fetch — and
+ *  a slow dossier cost the WHOLE ARTICLE: the loop wraps a desk run in 90
+ *  minutes, so on 2026-09-19 a run spent 43 of them opening three documents
+ *  for one principal, was killed, and published nothing. The dossier is
+ *  background, not the story; when the budget is spent it hands back the notes
+ *  it has and the desk goes on writing.
+ *
+ *  This is the default: `researchPrincipals` takes a `budgetMs` for a caller
+ *  that knows better. Core is env-free, so the knob belongs to whoever runs
+ *  it, not here. */
+export const RESEARCH_BUDGET_MS = 15 * 60_000;
+
+/** Pure. "" while there is time for another piece of work, else why there is
+ *  not — the clock is an argument so the budget is testable without waiting. */
+export function budgetSpent(deadline: number, now: number): string {
+  if (now < deadline) return "";
+  return "the dossier's time budget is spent";
+}
 /** OCR runs this many pages at once. */
 const OCR_CONCURRENCY = 4;
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36";
@@ -661,6 +681,9 @@ export async function researchOne(args: {
    *  reads the same text under the same id. Mutated: new documents are added. */
   opened: Map<string, { id: string; doc: OpenedDoc }>;
   nextDocId: () => string;
+  /** Epoch ms after which no further document is opened and no further notes
+   *  call is made. What has been read already is still returned. */
+  deadline: number;
   log?: (line: string) => void;
 }): Promise<PrincipalResearch> {
   const { llm, datagod, catalogue, principal: p, headline, storyText } = args;
@@ -784,6 +807,13 @@ export async function researchOne(args: {
   });
   const docs: { id: string; pick: Pick; doc: OpenedDoc }[] = [];
   for (const pick of unique.slice(0, MAX_DOCS)) {
+    // Opening is where the time goes — a catalogue record can be hundreds of
+    // thousands of characters, and a scan is OCR'd page by page.
+    const noTimeToOpen = budgetSpent(args.deadline, Date.now());
+    if (noTimeToOpen !== "") {
+      log(`dossier: ${p.name} — ${noTimeToOpen}; ${unique.length - docs.length} document(s) not opened`);
+      break;
+    }
     const key = pickKey(pick);
     const again = args.opened.get(key);
     if (again !== undefined) {
@@ -825,7 +855,17 @@ export async function researchOne(args: {
   const summaries: string[] = [];
   const noteByDoc = new Map<string, { relevant: boolean; keyPoints: string[]; quotes: string[] }>();
   const noteByRec = new Map<string, string[]>();
-  for (const group of groupsUnder(items, notesBudget)) {
+  const groups = groupsUnder(items, notesBudget);
+  let groupNo = 0;
+  for (const group of groups) {
+    groupNo += 1;
+    // A document opened but never read is worth nothing, so the budget is
+    // checked here too: better a short dossier than a killed run.
+    const noTimeToRead = budgetSpent(args.deadline, Date.now());
+    if (noTimeToRead !== "") {
+      log(`dossier: ${p.name} — ${noTimeToRead}; ${groups.length - groupNo + 1} of ${groups.length} notes call(s) not made`);
+      break;
+    }
     const notes = await ask(NotesSchema, "dossier_notes", NOTES_RULES, `${notesHead}DOCUMENTS AND RECORDS, in full:\n\n${group.join("\n\n=====\n\n")}\n\n${notesTail}`, 0.3);
     if (notes.summary.trim() !== "") summaries.push(notes.summary.trim());
     for (const n of notes.documents) {
