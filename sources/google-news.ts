@@ -187,12 +187,14 @@ export async function parseTopicStories(xml: string): Promise<TrendingStory[]> {
       const outlet = sourceOutlet(item.source);
       const headline = stripOutletSuffix(item.title ?? "", outlet);
       const parsed = parseCoverage(item.content ?? "");
+      const link = item.link ?? "";
       return {
         rank: i + 1,
         headline,
         leadOutlet: outlet,
         sourceUrl: sourceHomeUrl(item.source),
-        coverage: parsed.length > 0 ? parsed : [{ headline, outlet }],
+        coverage: parsed.length > 0 ? parsed : [{ headline, outlet, ...(link === "" ? {} : { link }) }],
+        ...(link === "" ? {} : { link }),
       };
     })
     .filter((story) => story.headline !== "");
