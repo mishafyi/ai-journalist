@@ -147,9 +147,9 @@ function themeHead(deps: GateDeps): string {
  *  edit (lorien-times scripts/podcast/run-podcast.mjs) mirrors them — edit both. */
 export const EDIT_RULES: readonly string[] = [
   "Rewrite passive sentences in the active voice, and turn nominalizations back into verbs.",
-  "Trim adjective pile-ups, and cut editorializing.",
-  "Cut throat-clearing and clichés.",
-  "Rewrite fact-lists as narrative.",
+  "Trim adjective pile-ups to the one adjective that does the work, and cut editorializing words so the facts carry the judgment.",
+  "Cut throat-clearing openings (\"It is worth noting that\", \"In today's world\") and clichés, and start each sentence on its point.",
+  "Rewrite fact-lists as narrative, linking each fact to the next by cause, sequence or contrast instead of listing them.",
   "State each statistic, sentence, and company list ONCE, at its strongest spot; cut the repeats, and rephrase later references instead of restating the number.",
   "Thin stat pile-ups: where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table.",
   "Recast raw figures the pictorial way: round unless precision is the point; prefer ratios — \"one in four\" over \"24.7%\"; give an incomprehensibly large number one visualizable equivalent.",
@@ -158,7 +158,7 @@ export const EDIT_RULES: readonly string[] = [
   "Alternate the general and the concrete to keep the piece MOVING: a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row.",
   "Break up stacked citations: where a stretch hides behind them, surface once and draw the prudent conclusion plainly in one sentence.",
   "Attribute with \"said\", and use \"according to\" at most twice in the whole piece.",
-  "Vary sentence length. Land conclusions and key points in short declarative sentences, so they hit with certainty. Carry explanation, ambiguity and complex reasoning in longer sentences, where the qualifications fit. Never write three sentences of the same length in a row.",
+  "Vary sentence length: land conclusions and key points in short declarative sentences, carry explanation and complex reasoning in longer ones, and never write three sentences of the same length in a row.",
   "Vary section-header shapes: mix plain noun phrases, claims, and the occasional question; never let every H2 share one construction — e.g. the \"Topic — Subtitle\" em-dash pattern on every header.",
   "Cut ONLY what these edits name — line-fat, repetition, filler — and never cut whole paragraphs or sections for brevity's sake.",
   "Keep every markdown link and the H1 exactly as the draft has them.",
@@ -169,7 +169,7 @@ export async function runEdit(draft: string, deps: GateDeps): Promise<string> {
   const keep =
     deps.editKeep === undefined || deps.editKeep.length === 0
       ? []
-      : [`KEEP each of these by name, exactly as the draft writes it — the edit is thrown away if one drops out: ${deps.editKeep.map((k) => `"${k}"`).join(", ")}. Rephrase around them; never cut or paraphrase them.`];
+      : [`KEEP each of these by name, exactly as the draft writes it, and rephrase around them rather than cutting or paraphrasing them, because the edit is thrown away if one drops out: ${deps.editKeep.map((k) => `"${k}"`).join(", ")}.`];
   const rules = [...EDIT_RULES, ...keep].map((r, i) => `${i + 1}. ${r}`).join("\n");
   const prompt = `Line-edit this draft for publication. Apply the newspaper self-edit pass:
 ${rules}
