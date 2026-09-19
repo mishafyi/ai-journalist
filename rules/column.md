@@ -12,3 +12,4 @@
 12. Use THE DOSSIER where it sharpens the argument: its documents and connections in the body, its hypotheses in the verdict; name principals as given.
 13. Follow READABILITY.
 14. Write within LENGTH.
+15. Open your reply with two lines, then the column: "HEADLINE: " and a working headline that follows HEADLINE RULES, and "DEK: " and a working dek that follows DEK RULES.

@@ -134,22 +134,33 @@ async function composeChecks(): Promise<void> {
     llm, persona: PERSONAS.historian, storyHeadline: "h", evidenceBlock: "…",
     outletNames: ["Wire", "Beacon"],
     parallel: { event: "Panic of 1907", era: "1907", actors: ["J.P. Morgan"], claimedSimilarity: "s", wikipediaTitle: "t", wikipediaUrl: "u", extract: "e", score: 1 },
-    echoes: [], wordCap: 600, maxAttempts: 3,
+    echoes: [], wires: ["h"], maxChars: 70, wordCap: 600, maxAttempts: 3,
   });
   ok("compose: contract failure retries once then returns the passing column",
-    out === GOOD_BODY && prompts.length === 2 && (prompts[1] ?? "").includes("at least 2 outlets"),
+    out.column === GOOD_BODY && out.headline === null && prompts.length === 2 && (prompts[1] ?? "").includes("at least 2 outlets"),
     `calls=${prompts.length}`);
   ok("compose: the retry REVISES the previous draft (draft included, revise instruction)",
     (prompts[1] ?? "").includes("YOUR PREVIOUS DRAFT") && (prompts[1] ?? "").includes("the wires") &&
       (prompts[1] ?? "").includes("Revise the draft: fix only these points"),
     (prompts[1] ?? "").slice(0, 120));
 
+  const withLines = await composeAuthorVersion({
+    llm: { async complete(): Promise<string> { return `HEADLINE: Morgan's rescue is the only precedent that counts\nDEK: The lender acted, and the columnist says it must again.\n\n${GOOD_BODY}`; } } as unknown as LlmClient,
+    persona: PERSONAS.historian, storyHeadline: "h", evidenceBlock: "…",
+    outletNames: ["Wire", "Beacon"],
+    parallel: { event: "Panic of 1907", era: "1907", actors: ["J.P. Morgan"], claimedSimilarity: "s", wikipediaTitle: "t", wikipediaUrl: "u", extract: "e", score: 1 },
+    echoes: [], wires: ["h"], maxChars: 70, wordCap: 600, maxAttempts: 1,
+  });
+  ok("compose: the working headline and dek come off the top; the contract reads the column",
+    withLines.headline === "Morgan's rescue is the only precedent that counts" && withLines.dek === "The lender acted, and the columnist says it must again." && withLines.column === GOOD_BODY,
+    JSON.stringify({ ...withLines, column: withLines.column.slice(0, 50) }));
+
   let threw = "";
   try {
     await composeAuthorVersion({
       llm: { async complete(): Promise<string> { return "too short"; } } as unknown as LlmClient,
       persona: PERSONAS.historian, storyHeadline: "h", evidenceBlock: "…",
-      outletNames: ["Wire", "Beacon"], parallel: null, echoes: [], wordCap: 600, maxAttempts: 2,
+      outletNames: ["Wire", "Beacon"], parallel: null, echoes: [], wires: ["h"], maxChars: 70, wordCap: 600, maxAttempts: 2,
     });
   } catch (err: unknown) {
     threw = String(err);

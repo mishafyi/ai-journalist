@@ -156,7 +156,7 @@ ok(
 ok(dossierRecord({ dossier: [], connections, hypotheses }) === "", "no principals → no block");
 
 const persona = { name: "Test Writer", method: "m", priors: "p", voice: "v" } as PersonaProfile;
-const shared = { llm, persona, storyHeadline: headline, evidenceBlock: ARTICLE, outletNames: ["Reuters", "AP"], parallel: null, echoes: [], wordCap: 1500, maxAttempts: 1 };
+const shared = { llm, persona, storyHeadline: headline, evidenceBlock: ARTICLE, outletNames: ["Reuters", "AP"], parallel: null, echoes: [], wires: [headline], maxChars: 70, wordCap: 1500, maxAttempts: 1 };
 prompts.length = 0;
 await composeAuthorVersion({ ...shared, dossier: block });
 ok(prompts[0]?.includes("THE DESK'S DOSSIER") === true, "the column prompt carries the dossier block when one exists");

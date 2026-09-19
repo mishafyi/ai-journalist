@@ -431,9 +431,8 @@ export interface PersonaProfile {
   method: string;
   priors: string;
   voice: string;
-  /** Reader-facing one-liner rendered under the column header. Always
-   *  presented with an explicit AI-persona marker — invented bios must never
-   *  read as real humans. */
+  /** The long biography that drives the columnist's voice: prompt material,
+   *  never printed. */
   bio?: string;
   /** How this person writes, beyond the voice: a numbered Markdown list,
    *  usually read from a rules file, that rides in every model call once the

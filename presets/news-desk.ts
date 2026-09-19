@@ -449,6 +449,28 @@ const PRINCIPAL_RULES = readRules("dossier-principals");
 const CONNECTION_RULES = readRules("dossier-connections");
 const HYPOTHESIS_RULES = readRules("dossier-hypotheses");
 
+/** Pure. The "HEADLINE:" and "DEK:" lines a column or the Audit opens its
+ *  reply with, and the column after them. A missing line is null. */
+export function splitHeadlineLines(text: string): { headline: string | null; dek: string | null; column: string } {
+  let headline: string | null = null;
+  let dek: string | null = null;
+  const lines = text.split("\n");
+  const labelled = /^\**\s*(HEADLINE|DEK)\s*\**\s*:/i;
+  // A hand-off line ("Here is the audited column:") before the labels goes with them.
+  const first = lines.findIndex((l) => labelled.test(l.trim()));
+  let i = first !== -1 && lines.slice(0, first).filter((l) => l.trim() !== "").length <= 2 ? first : 0;
+  for (; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    if (line === "") continue;
+    const m = line.match(/^\**\s*(HEADLINE|DEK)\s*\**\s*:\s*\**\s*(.+?)\s*\**$/i);
+    if (m === null) break;
+    const value = m[2].replace(/^["“]|["”]$/g, "").trim();
+    if (m[1].toUpperCase() === "HEADLINE") headline = value;
+    else dek = value;
+  }
+  return { headline, dek, column: lines.slice(i).join("\n").trim() };
+}
+
 export async function composeAuthorVersion(args: {
   llm: LlmClient;
   persona: PersonaProfile;
@@ -462,17 +484,21 @@ export async function composeAuthorVersion(args: {
   /** The desk's dossier (dossierRecord) — the people behind the story, their
    *  connections and where it goes next. Empty = none. */
   dossier?: string;
+  /** Every headline the story's coverage printed: the working headline may
+   *  not reuse one. */
+  wires: readonly string[];
+  maxChars: number;
   wordCap: number;
   maxAttempts: number;
   model?: string;
   log?: (line: string) => void;
-}): Promise<string> {
+}): Promise<{ column: string; headline: string | null; dek: string | null }> {
   const { persona } = args;
   const parallel = args.parallel !== null && args.parallel.event.trim() !== "" ? args.parallel : null;
   // The desk's standing tests and the column's rules live in the SYSTEM
   // prompt, with who the columnist is — they are how this paper writes; the
   // story's material is the user turn.
-  const system = `You are ${persona.name}, an opinion columnist writing your complete column on today's story.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography: ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}\n\nTHE DESK'S STANDING TESTS:\n${STANDING_TESTS}\n\nRULES:\n${COLUMN_RULES}\n\nREADABILITY:\n${READABILITY_RULES}`;
+  const system = `You are ${persona.name}, an opinion columnist writing your complete column on today's story.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography: ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}\n\nTHE DESK'S STANDING TESTS:\n${STANDING_TESTS}\n\nRULES:\n${COLUMN_RULES}\n\nREADABILITY:\n${READABILITY_RULES}\n\nHEADLINE RULES:\n${HEADLINE_RULES}\n\nDEK RULES:\n${DEK_RULES}`;
   const parallelData =
     parallel === null
       ? `none. Required sentence: "${NO_PARALLEL_PHRASE}"`
@@ -482,7 +508,7 @@ export async function composeAuthorVersion(args: {
       ? "none"
       : args.echoes.map((e, i) => `${i + 1}. ${e.event} (${e.era}) — ${e.claimedSimilarity}\n   Record: ${e.extract}`).join("\n");
   const target = `${Math.round(args.wordCap * 0.7)}-${Math.round(args.wordCap * 0.85)}`;
-  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE:\n${args.evidenceBlock}\n\nOUTLETS: ${args.outletNames.join(", ")}\n\nTHE PARALLEL:\n${parallelData}\n\nRECENT ECHOES:\n${echoData}\n\nTHE DOSSIER:\n${args.dossier === undefined || args.dossier === "" ? "none" : args.dossier}\n\nLENGTH: ${target} words, hard cap ${args.wordCap}\n\nWrite your complete column now.`;
+  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE:\n${args.evidenceBlock}\n\nOUTLETS: ${args.outletNames.join(", ")}\n\nTHE PARALLEL:\n${parallelData}\n\nRECENT ECHOES:\n${echoData}\n\nTHE DOSSIER:\n${args.dossier === undefined || args.dossier === "" ? "none" : args.dossier}\n\nLENGTH: ${target} words, hard cap ${args.wordCap}\n\nMAX CHARACTERS: ${args.maxChars}\n\nTHE WIRES:\n${args.wires.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\nWrite your complete column now.`;
 
   // Retry = REVISE the previous draft, never regenerate: full rewrites under
   // failure feedback oscillate (live 2026-07-23 — each attempt satisfied the
@@ -501,14 +527,15 @@ export async function composeAuthorVersion(args: {
       temperature: 0.4,
       ...(args.model === undefined ? {} : { model: args.model }),
     });
-    const verdict = checkAuthorVersionContract(version, {
+    const parts = splitHeadlineLines(version);
+    const verdict = checkAuthorVersionContract(parts.column, {
       outletNames: args.outletNames,
       parallelEvent: parallel === null ? null : parallel.event,
       echoEvents: args.echoes.map((e) => e.event),
       wordCap: args.wordCap,
       writerName: persona.name,
     });
-    if (verdict.ok) return version;
+    if (verdict.ok) return parts;
     lastFailures = verdict.failures;
     lastDraft = version;
     args.log?.(`author version (${persona.name}) attempt ${attempt}/${args.maxAttempts} failed contract: ${verdict.failures.join(" | ")}`);
@@ -516,7 +543,7 @@ export async function composeAuthorVersion(args: {
   throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
 }
 
-/** The Audit is the last read before the Headline Desk and always runs on the
+/** The Audit is the last read before print and always runs on the
  *  Flash models, the strongest free tier (20 requests a day per key each), in
  *  this order on every key and never on Flash-Lite or Gemma (operator,
  *  2026-09-19: "final pass with expensive LLM"). With every Flash model spent
@@ -636,12 +663,14 @@ export async function pickVoice(args: {
 /** The Audit Pass (operator, 2026-09-19), the last read before the Headline
  *  Desk, on the Flash models. It holds the column to its own voice (the Voice
  *  Pick's columnist, which the voiced client carries), makes the parallel, the
- *  echoes and the dossier's connections hang together, and applies the paper's
- *  universal rule, READABILITY_RULE. It adds nothing: every fact must already
- *  be in the draft, and the original news story is shown only to check the
- *  draft against. What it returns prints, with no contract check and no length
- *  band; only a thrown call keeps the draft, so the desk's hot path grows no
- *  new failure mode. */
+ *  echoes and the dossier's connections hang together, applies the paper's
+ *  universal rules (READABILITY_RULES), and polishes the column's working
+ *  headline and dek (operator, 2026-09-19: "specific voice editor step would
+ *  just polish it"). It adds nothing: every fact must already be in the draft,
+ *  and the original news story is shown only to check the draft against. The
+ *  column it returns prints, with no contract check and no length band; only a
+ *  thrown call keeps the draft, so the desk's hot path grows no new failure
+ *  mode. The headline and dek are checked by the caller. */
 export async function auditColumn(args: {
   /** The voiced client (withVoice): the Audit reads who wrote the column. */
   llm: LlmClient;
@@ -654,8 +683,14 @@ export async function auditColumn(args: {
   dossier: string;
   /** The original news story (originalStoryOf). "" = none. */
   originalStory: string;
+  /** The column's working headline and dek; null = the Audit writes one. */
+  headline: string | null;
+  dek: string | null;
+  /** Every headline the story's coverage printed, never to be reused. */
+  wires: readonly string[];
+  maxChars: number;
   log?: (line: string) => void;
-}): Promise<string> {
+}): Promise<{ column: string; headline: string | null; dek: string | null }> {
   const words = args.body.trim().split(/\s+/).length;
   const parallel =
     args.parallel === null
@@ -672,6 +707,21 @@ ${AUDIT_RULES}
 
 READABILITY:
 ${READABILITY_RULES}
+
+HEADLINE RULES:
+${HEADLINE_RULES}
+
+DEK RULES:
+${DEK_RULES}
+
+WORKING HEADLINE: ${args.headline ?? "none"}
+
+WORKING DEK: ${args.dek ?? "none"}
+
+MAX CHARACTERS: ${args.maxChars}
+
+THE WIRES:
+${args.wires.map((w, i) => `${i + 1}. ${w}`).join("\n")}
 
 NAMES TO KEEP: ${args.keep.length === 0 ? "none" : args.keep.map((k) => `"${k}"`).join(", ")}
 
@@ -691,12 +741,12 @@ DRAFT:
 ${args.body}`;
   try {
     const raw = await args.llm.complete({ prompt, model: AUDIT_MODEL, temperature: AUDIT_TEMPERATURE });
-    const audited = stripPreambleAndFence(raw).trim();
-    args.log?.(`news-desk: Audit kept (${words} → ${audited.split(/\s+/).length} words)`);
+    const audited = splitHeadlineLines(stripPreambleAndFence(raw).trim());
+    args.log?.(`news-desk: Audit kept (${words} → ${audited.column.split(/\s+/).length} words)`);
     return audited;
   } catch (err: unknown) {
     args.log?.(`news-desk: Audit failed (best-effort, the column prints as written): ${String(err)}`);
-    return args.body;
+    return { column: args.body, headline: null, dek: null };
   }
 }
 
@@ -1125,6 +1175,23 @@ function unsupportedClaims(text: string, hay: string, hayDigits: string, hayName
   return failures;
 }
 
+/** The first candidate that passes its check, logging each refusal; null
+ *  when none holds. */
+export function firstValid(
+  candidates: readonly (string | null)[],
+  check: (candidate: string) => string[],
+  label: string,
+  log: ((line: string) => void) | undefined,
+): string | null {
+  for (const candidate of candidates) {
+    if (candidate === null || candidate.trim() === "") continue;
+    const failures = check(candidate);
+    if (failures.length === 0) return candidate;
+    log?.(`news-desk: ${label} "${candidate}" refused — ${failures.join("; ")}`);
+  }
+  return null;
+}
+
 /** The dek's contract: one sentence under the headline, asserting nothing the
  *  column lacks and never naming the columnist. No length cap — the prompt
  *  asks for 20–35 words and nothing is cut (operator, 2026-09-19). */
@@ -1232,9 +1299,9 @@ export function isEnglishHeadline(headline: string): boolean {
 
 /** Longest headline in the SERP limit, chosen from what real outlets printed.
  *
- *  Since 2026-08-28 this is the FALLBACK, not the title: `composeHeadline`
- *  writes the column's own headline and falls back here when the result cannot
- *  be verified against the column. The rule below was written for a desk that
+ *  This is the FALLBACK, not the title: the column writes its own headline and
+ *  the Audit polishes it, and the desk falls back here when neither can be
+ *  verified against the column. The rule below was written for a desk that
  *  retold the news; the desk now files signed op-eds, and printing someone
  *  else's headline over an original argument was both a duplicate-content
  *  signal and a misattribution. The property it protected — the title asserts
@@ -1297,84 +1364,6 @@ export function pickHeadline(story: TrendingStory, maxChars: number): string | n
   )[0];
 }
 
-/** The column's own headline, written from the column.
- *
- *  The desk already demands that every CHAPTER heading inside a column be
- *  original and drawn from what that chapter says; this applies the same rule
- *  to the one heading readers actually see. EVERY headline the cluster
- *  printed is passed in as context to argue against, never to copy (operator,
- *  2026-08-30: all qualified outlets' headlines, not just the chosen one) —
- *  `validateHeadline` rejects an echo of any of them, and rejects any name,
- *  number or quotation that neither the column nor a wire carries.
- *
- *  Returns null when nothing survived validation, and the caller keeps the
- *  verbatim headline: the worst case of this whole mechanism is the behaviour
- *  the paper had before it. */
-export async function composeHeadline(args: {
-  llm: LlmClient;
-  persona: PersonaProfile;
-  body: string;
-  sourceHeadlines: readonly string[];
-  maxChars: number;
-  maxAttempts: number;
-  log?: (line: string) => void;
-}): Promise<{ headline: string | null; dek: string | null }> {
-  const system = `You write the headline and the dek for a signed opinion column.\n\nHEADLINE RULES:\n${HEADLINE_RULES}\n\nDEK RULES:\n${DEK_RULES}`;
-  const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
-    { role: "system", content: system },
-    {
-      role: "user",
-      content:
-        `COLUMNIST: ${args.persona.name}\n\nMAX CHARACTERS: ${args.maxChars}\n\nTHE WIRES:\n${args.sourceHeadlines.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
-        `THE COLUMN:\n${args.body}`,
-    },
-  ];
-
-  // The first valid headline and the first valid dek are kept; a retry
-  // revises only the part that failed.
-  let headline: string | null = null;
-  let dek: string | null = null;
-  for (let attempt = 1; attempt <= args.maxAttempts && (headline === null || dek === null); attempt += 1) {
-    try {
-      const out = await args.llm.completeStructured({
-        messages,
-        schema: z.object({ headline: z.string().min(20).max(160), dek: z.string() }),
-        schemaName: "column_headline",
-        temperature: 0.4,
-      });
-      const problems: string[] = [];
-      if (headline === null) {
-        const candidate = stripFurniture(out.headline);
-        const failures = validateHeadline(candidate, {
-          body: args.body,
-          sourceHeadline: args.sourceHeadlines,
-          personaName: args.persona.name,
-          maxChars: args.maxChars,
-        });
-        if (failures.length === 0) headline = candidate;
-        else problems.push(`the headline fails: ${failures.join("; ")}`);
-      }
-      if (dek === null) {
-        const candidate = out.dek.trim();
-        const failures = validateDek(candidate, { body: args.body, sourceHeadline: args.sourceHeadlines, personaName: args.persona.name });
-        if (failures.length === 0) dek = candidate;
-        else problems.push(`the dek fails: ${failures.join("; ")}`);
-      }
-      if (problems.length === 0) break;
-      args.log?.(`news-desk: headline attempt ${attempt} rejected — ${problems.join(" | ")}`);
-      // Revise, don't regenerate — same shape as the column's contract retry.
-      messages.push({ role: "assistant", content: JSON.stringify(out) });
-      messages.push({
-        role: "user",
-        content: `${problems.join(". ")}. Fix every point${headline !== null ? " in the dek; keep the headline" : dek !== null ? " in the headline; keep the dek" : ""} and write both again.`,
-      });
-    } catch (err: unknown) {
-      args.log?.(`news-desk: headline attempt ${attempt} failed: ${String(err)}`);
-    }
-  }
-  return { headline, dek };
-}
-
 /** An English headline translated from a foreign-only cluster — the fallback
  *  `pickHeadline` cannot supply when no outlet wrote one in English.
  *
@@ -1432,7 +1421,7 @@ export async function translateHeadline(args: {
         : ["not written in English"];
       if (failures.length === 0) return candidate;
       args.log?.(`news-desk: headline translation attempt ${attempt} rejected — ${failures.join("; ")}`);
-      // Revise, don't regenerate — same shape as composeHeadline's retry.
+      // Revise, don't regenerate — same shape as the column's contract retry.
       messages.push({ role: "assistant", content: out.headline });
       messages.push({
         role: "user",
@@ -2012,12 +2001,11 @@ export function createNewsDesk(opts: {
           log?.(
             `parallels: first field ${judgedBest === null ? "empty" : `peaked at ${judgedBest.score.toFixed(0)}`} — one broader re-propose`,
           );
-          const avoid = candidates.map((c) => c.event).join("; ");
           const retryCandidates = await proposeParallels({
             llm,
             storySummary: `${story.headline}\n${evidence}`,
             count: knobs.parallelCount,
-            correctiveContext: `Prior candidates scored poorly or failed verification: ${avoid}. Propose DIFFERENT precedents whose causal mechanism matches the story — other eras, other domains.`,
+            rejected: candidates.map((c) => c.event),
           });
           const field2 = await researchField(dropRecent(retryCandidates), knobs.parallelCount);
           field = [...field, ...field2];
@@ -2202,7 +2190,20 @@ export function createNewsDesk(opts: {
 
           const columnist = voice;
           const authorWordCap = evidenceWordCap(contributing.length, evidence.length, opts.authorVersions?.wordCap ?? 1100);
-          const rawBody = await composeAuthorVersion({
+          // Every headline the cluster printed (operator, 2026-08-30: "feed all
+          // headlines from qualified sources"): the column's headline may not
+          // reuse one, and the checks refuse an echo of any.
+          const wires = [
+            ...new Set(
+              [story.headline, ...story.coverage.map((c) => c.headline)]
+                .map((h) => stripFurniture(h))
+                .filter((h) => h.length >= 10),
+            ),
+          ];
+          // The column opens with a working headline and dek (operator,
+          // 2026-09-19: "we already should have working headline as we start
+          // working on the piece").
+          const draft = await composeAuthorVersion({
             llm,
             persona: columnist,
             storyHeadline: story.headline,
@@ -2211,6 +2212,8 @@ export function createNewsDesk(opts: {
             parallel,
             echoes,
             dossier: dossierText,
+            wires,
+            maxChars: SERP_TITLE_CHARS,
             wordCap: authorWordCap,
             maxAttempts: knobs.analysisAttempts,
             log,
@@ -2223,18 +2226,19 @@ export function createNewsDesk(opts: {
               /\*\*\s*(?:the\s+)?(?:bottom line|in sum|the upshot|in conclusion|the takeaway)\s*:?\s*\*\*\s*[—–-]?\s*/gi,
               "",
             );
-          const body = stripVerdictLabel(rawBody);
+          const body = stripVerdictLabel(draft.column);
           // The Audit LAST, in the columnist's own voice: one read for voice,
-          // coherence and readability replaces the justice lens and the
-          // Editor, which each rewrote the column in a voice of their own
-          // (operator, 2026-09-19).
-          const finalBody = await auditColumn({
+          // coherence and readability, and the headline and dek polished in the
+          // same read (operator, 2026-09-19: "specific voice editor step would
+          // just polish it"). The names it keeps are the outlets and the
+          // parallel; an echo that does not hold may go.
+          const audited = await auditColumn({
             llm,
             body,
             keep: protectedNames(body, {
               outletNames,
               parallelEvent: parallel === null ? null : parallel.event,
-              echoEvents: echoes.map((e) => e.event),
+              echoEvents: [],
             }),
             parallel,
             echoes,
@@ -2243,75 +2247,67 @@ export function createNewsDesk(opts: {
               pages.filter((p) => contributing.some((c) => c.url === p.url)),
               story.leadOutlet,
             ),
+            headline: draft.headline,
+            dek: draft.dek,
+            wires,
+            maxChars: SERP_TITLE_CHARS,
             log,
           });
           // What prints: the headline, the dek and their checks read this, not
           // the pre-Audit draft (operator, 2026-09-19).
-          const printed = stripVerdictLabel(finalBody);
+          const printed = stripVerdictLabel(audited.column);
           const content = `${printed}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);
-          // One take per story → the headline alone is the slug, capped at a
-          // WORD boundary (a raw 70-char slice shipped ".../criminal-co").
-          // `title` is the chosen verbatim headline; `telemetry.topic` below
-          // stays the GN headline, because the covered-story ledger is keyed
-          // to what the feed said and must keep matching next run.
-          const englishWire = pickHeadline(story, SERP_TITLE_CHARS);
-          // Foreign-only cluster → translate the wires (operator, 2026-08-30:
-          // "if something happened in a foreign country we must definitely
-          // translate"). The translation is validated against the column like
-          // any printed title; only when THAT also fails does the story drop —
-          // previously an unconditional drop that discarded a fully composed
-          // column, 578 times in 14 days of run logs.
-          const sourceHeadline =
-            englishWire ??
-            (await translateHeadline({
-              llm,
-              story,
-              body: printed,
-              personaName: columnist.name,
-              maxChars: SERP_TITLE_CHARS,
-              maxAttempts: 2,
-              log,
-            }));
-          if (sourceHeadline === null) {
+          // The Audit's headline and dek, else the column's working ones: the
+          // first that asserts nothing the printed column lacks.
+          const headline = firstValid(
+            [audited.headline, draft.headline].map((h) => (h === null ? null : stripFurniture(h))),
+            (h) => validateHeadline(h, { body: printed, sourceHeadline: wires, personaName: columnist.name, maxChars: SERP_TITLE_CHARS }),
+            "headline",
+            log,
+          );
+          const dek = firstValid(
+            [audited.dek, draft.dek],
+            (d) => validateDek(d, { body: printed, sourceHeadline: wires, personaName: columnist.name }),
+            "dek",
+            log,
+          );
+          // Neither headline holds → the verbatim English wire; a foreign-only
+          // cluster → a validated translation of the wires (operator,
+          // 2026-08-30: "if something happened in a foreign country we must
+          // definitely translate"); neither → the story drops.
+          const englishWire = headline === null ? pickHeadline(story, SERP_TITLE_CHARS) : null;
+          const translated =
+            headline === null && englishWire === null
+              ? await translateHeadline({
+                  llm,
+                  story,
+                  body: printed,
+                  personaName: columnist.name,
+                  maxChars: SERP_TITLE_CHARS,
+                  maxAttempts: 2,
+                  log,
+                })
+              : null;
+          const title = headline ?? englishWire ?? translated;
+          if (title === null) {
             log?.(
-              `news-desk: "${story.headline}" — no English headline in the cluster and no translation validated — next story`,
+              `news-desk: "${story.headline}" — no headline held, no English wire, and no translation validated — next story`,
             );
             continue;
           }
-          if (englishWire === null) {
-            log?.(`news-desk: no English wire headline — using validated translation: "${sourceHeadline}"`);
-          }
-          // The column argues its own thesis, so it gets its own headline; the
-          // wire headline stays as the fallback when nothing validates. The
-          // compose context is EVERY headline the cluster printed (operator,
-          // 2026-08-30: "feed all headlines from qualified sources") — Google
-          // News only clusters publishers it has admitted, the same doctrine
-          // translateHeadline trusts — with the chosen wire/translation first.
-          const wires = [
-            ...new Set(
-              [sourceHeadline, story.headline, ...story.coverage.map((c) => c.headline)]
-                .map((h) => stripFurniture(h))
-                .filter((h) => h.length >= 10),
-            ),
-          ];
-          const composed = await composeHeadline({
-            llm,
-            persona: columnist,
-            body: printed,
-            sourceHeadlines: wires,
-            maxChars: SERP_TITLE_CHARS,
-            maxAttempts: 2,
-            log,
-          });
-          if (composed.headline === null) log?.(`news-desk: headline unverified — keeping the wire headline`);
-          if (composed.dek === null) log?.(`news-desk: dek unverified — the column's first paragraph, whole, stands in`);
-          const title = composed.headline ?? sourceHeadline;
-          // The whole title, never cut (operator, 2026-09-19: "don't cut anything during publish").
+          if (englishWire !== null) log?.(`news-desk: headline unverified — printing the wire headline: "${englishWire}"`);
+          if (translated !== null) log?.(`news-desk: headline unverified, no English wire headline — using validated translation: "${translated}"`);
+          if (dek === null) log?.(`news-desk: dek unverified — the column's first paragraph, whole, stands in`);
+          // One take per story → the headline alone is the slug. `title` is
+          // what prints; `telemetry.topic` below stays the GN headline, because
+          // the covered-story ledger is keyed to what the feed said and must
+          // keep matching next run. The whole title, never cut (operator,
+          // 2026-09-19: "don't cut anything during publish").
           const slug = internals.slugify(title);
           const article: GeneratedArticle = {
             title,
-            description: composed.dek ?? dekFrom(printed),
+            description: dek ?? dekFrom(printed),
             category: "news",
             tags: [...tags],
             keywords: [],

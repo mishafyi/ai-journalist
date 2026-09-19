@@ -579,8 +579,8 @@ async function orchestrationChecks(): Promise<void> {
   // TRANSLATION (operator, 2026-08-30: "if something happened in a foreign
   // country we must definitely translate"). pickHeadline yields no verbatim
   // title; translateHeadline reads the whole cluster and its output is held
-  // to validateHeadline against the column; composeHeadline (whose structured
-  // call the fixture leaves unhandled → null) falls back to that translation.
+  // to validateHeadline against the column; the column's and the Audit's
+  // headlines (the fixture writes none) fall back to that translation.
   const PAGES5: Record<string, string> = {
     "https://wire5.example/tassi": REAL("Wire"),
     "https://beacon5.example/tassi": REAL("Beacon"),
@@ -663,7 +663,7 @@ async function orchestrationChecks(): Promise<void> {
     evidenceWordCap(9, 60000, 1500) === 1500, String(evidenceWordCap(9, 60000, 1500)));
 
   // The fallback dek is never cut (operator, 2026-09-19).
-  const { composeHeadline, dekFrom, validateDek } = await import("./news-desk");
+  const { dekFrom, firstValid, splitHeadlineLines, validateDek } = await import("./news-desk");
   const longPara = "They want you looking at the scandal. " + "x".repeat(200);
   ok("dekFrom: the first prose paragraph, whole",
     dekFrom(`## A heading\n\n${longPara}\n\nNext paragraph.`) === longPara, dekFrom(longPara));
@@ -694,29 +694,21 @@ async function orchestrationChecks(): Promise<void> {
   ok("validateDek: a double-quoted phrase the column lacks is refused",
     validateDek(`Riyadh calls it "a war of necessity" while the Houthis hold the chokepoint and Donald Trump weighs his options in Washington.`, { body: MBS_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).some((f) => f.startsWith("quotation not in the column")),
     "");
-  const replies = [
-    { headline: "Jerome Powell finally chose credibility at the Federal Reserve", dek: `${GOOD_DEK}, as Christine Lagarde did` },
-    { headline: "ignored on the retry", dek: GOOD_DEK },
-  ];
-  const asked: string[] = [];
-  const composed = await composeHeadline({
-    llm: {
-      complete: async (): Promise<string> => "",
-      completeStructured: async <T,>(a: { messages: { content: string }[] }): Promise<T> => {
-        asked.push(a.messages[a.messages.length - 1].content);
-        return replies[asked.length - 1] as unknown as T;
-      },
-    } as unknown as LlmClient,
-    persona: { ...PERSONAS.historian, name: "Test Writer" },
-    body: DEK_COLUMN,
-    sourceHeadlines: ["Fed raises rates"],
-    maxChars: 70,
-    maxAttempts: 2,
-  });
-  ok("composeHeadline: keeps the valid headline and revises only the failing dek",
-    composed.headline === "Jerome Powell finally chose credibility at the Federal Reserve" && composed.dek === GOOD_DEK &&
-      asked.length === 2 && asked[1].includes("the dek fails") && asked[1].includes("keep the headline"),
-    JSON.stringify({ composed, asked }));
+  // The column opens with a working headline and dek, and the Audit polishes
+  // them; the first that asserts nothing the column lacks prints.
+  const split = splitHeadlineLines('Here is the draft:\n\n**HEADLINE:** "Jerome Powell finally chose credibility"\nDEK: The Federal Reserve raised rates.\n\n## A chapter\n\nBody.');
+  ok("splitHeadlineLines: the labelled lines, bold and quotes stripped, a hand-off line dropped",
+    split.headline === "Jerome Powell finally chose credibility" && split.dek === "The Federal Reserve raised rates." && split.column === "## A chapter\n\nBody.",
+    JSON.stringify(split));
+  ok("splitHeadlineLines: a reply with no labels is all column",
+    JSON.stringify(splitHeadlineLines("## A chapter\n\nBody.")) === JSON.stringify({ headline: null, dek: null, column: "## A chapter\n\nBody." }),
+    JSON.stringify(splitHeadlineLines("## A chapter\n\nBody.")));
+  const refusals: string[] = [];
+  const checkDek = (d: string): string[] => validateDek(d, { body: DEK_COLUMN, sourceHeadline: [], personaName: "Test Writer" });
+  ok("firstValid: the first candidate that holds, each refusal logged",
+    firstValid([`${GOOD_DEK} while Christine Lagarde watched`, null, GOOD_DEK], checkDek, "dek", (l) => refusals.push(l)) === GOOD_DEK && refusals.length === 1 && refusals[0].includes("Lagarde"),
+    refusals.join(" | "));
+  ok("firstValid: null when nothing holds", firstValid([null, `${GOOD_DEK} while Christine Lagarde watched`], checkDek, "dek", undefined) === null, "");
   ok("fredChartUrl renders a QuickChart line config for a real series",
     chart !== null && chart.startsWith("https://quickchart.io/chart?") &&
       decodeURIComponent(chart).includes(FRED_TITLES.UNRATE) && decodeURIComponent(chart).includes("#e4572e"),
@@ -982,20 +974,25 @@ async function auditChecks(): Promise<void> {
       throw new Error("unused");
     },
   });
-  const args = { body: DRAFT, keep: KEEP, parallel: PARALLEL, echoes: [], dossier: DOSSIER, originalStory: ORIGINAL };
+  const WORKING = "The bank chose credibility over flexibility";
+  const args = { body: DRAFT, keep: KEEP, parallel: PARALLEL, echoes: [], dossier: DOSSIER, originalStory: ORIGINAL, headline: WORKING, dek: null, wires: ["Central bank raises rates"], maxChars: 70 };
 
   const POLISHED = DRAFT.replace("plain, and the argument follows", "unmistakable, and the argument follows");
-  ok("an audit ships", (await auditColumn({ ...args, llm: stubLlm(async () => POLISHED) })) === POLISHED, "the audited version was not kept");
+  ok("an audit ships", (await auditColumn({ ...args, llm: stubLlm(async () => POLISHED) })).column === POLISHED, "the audited version was not kept");
+  const polishedWithLines = await auditColumn({ ...args, llm: stubLlm(async () => `Here is the audited column:\n\nHEADLINE: The chair bet on credibility\nDEK: The bank raised rates again.\n\n${POLISHED}`) });
+  ok("the Audit's headline and dek come back parsed, the column without them",
+    polishedWithLines.headline === "The chair bet on credibility" && polishedWithLines.dek === "The bank raised rates again." && polishedWithLines.column === POLISHED,
+    JSON.stringify({ ...polishedWithLines, column: polishedWithLines.column.slice(0, 60) }));
   ok("a whole-body code fence is stripped",
-    (await auditColumn({ ...args, llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``) })) === POLISHED,
+    (await auditColumn({ ...args, llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``) })).column === POLISHED,
     "the fenced audit was not unwrapped and kept");
   const ONE_OUTLET = POLISHED.split("Beacon").join("Bacon");
   ok("an audit ships even when it drops a name: no contract check",
-    (await auditColumn({ ...args, llm: stubLlm(async () => ONE_OUTLET) })) === ONE_OUTLET, "the audit was held to the contract");
+    (await auditColumn({ ...args, llm: stubLlm(async () => ONE_OUTLET) })).column === ONE_OUTLET, "the audit was held to the contract");
   const keptLogs: string[] = [];
   const SHREDDED = DRAFT.split(FILLER.repeat(8)).join(FILLER);
   ok("a much shorter audit still ships: no length band",
-    (await auditColumn({ ...args, llm: stubLlm(async () => SHREDDED), log: (l: string) => keptLogs.push(l) })) === SHREDDED && keptLogs.some((l) => l.includes("Audit kept")),
+    (await auditColumn({ ...args, llm: stubLlm(async () => SHREDDED), log: (l: string) => keptLogs.push(l) })).column === SHREDDED && keptLogs.some((l) => l.includes("Audit kept")),
     keptLogs.join(" | "));
 
   let seen: { prompt: string; model?: string; temperature?: number } = { prompt: "" };
@@ -1019,6 +1016,9 @@ async function auditChecks(): Promise<void> {
     seen.prompt.slice(0, 400));
   ok("the Audit is told the names to keep",
     seen.prompt.includes('NAMES TO KEEP: "Wire", "Beacon", "Panic of 1907"'), seen.prompt.slice(0, 1200));
+  ok("the Audit reads the working headline, the wires and the headline and dek rules",
+    seen.prompt.includes(`WORKING HEADLINE: ${WORKING}`) && seen.prompt.includes("WORKING DEK: none") && seen.prompt.includes("1. Central bank raises rates") && seen.prompt.includes(readRules("headline")) && seen.prompt.includes(readRules("dek")),
+    seen.prompt.slice(0, 2000));
   ok("the Audit reads the parallel's record, the dossier and the original story, before the draft",
     [PARALLEL.extract, DOSSIER, ORIGINAL].every((t) => seen.prompt.includes(t) && seen.prompt.indexOf(t) < seen.prompt.indexOf("DRAFT:")),
     seen.prompt.slice(-900));
@@ -1044,7 +1044,7 @@ async function auditChecks(): Promise<void> {
         throw new Error("model died");
       }),
       log: (l: string) => throwLogs.push(l),
-    })) === DRAFT && throwLogs.some((l) => l.includes("Audit failed")),
+    })).column === DRAFT && throwLogs.some((l) => l.includes("Audit failed")),
     throwLogs.join(" | "));
 
   if (failures > 0) {

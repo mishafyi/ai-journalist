@@ -89,8 +89,6 @@ function stepForLlm(entry: LlmTrace): string {
       return "09-parallel-judge";
     case "story_tags":
       return "06-story-tags";
-    case "column_headline":
-      return "16-headline";
     case "wire_headline_translation":
       return "17-headline-translation";
     case "voice_pick":

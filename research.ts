@@ -561,12 +561,12 @@ export function createResearchStack(opts: ResearchStackOpts): ResearchStack {
 // once), so full content is always processed, never truncated.
 // ───────────────────────────────────────────────────────────────────────────
 
+const FACTS_RULES = readRules("facts");
+
 /** Standalone chunk-and-extract core — EXPORTED separately because Phase 2's
  *  news desk extracts from RESOLVED URLs (not search hits); burying this in
  *  the search-driven closure would force a re-implementation there.
  *  Returns the extracted bullet blocks, [] when every chunk replied NONE. */
-const FACTS_RULES = readRules("facts");
-
 export async function extractEvidence(args: {
   llm: LlmClient;
   topic: string;

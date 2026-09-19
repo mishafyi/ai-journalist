@@ -47,9 +47,9 @@ export async function proposeParallels(args: {
   storySummary: string;
   count: number;
   model?: string;
-  /** Verified encyclopedia text from a failed round — the re-propose prompt
-   *  tells the model its memory conflicted and THIS record wins. */
-  correctiveContext?: string;
+  /** The events a first round proposed that scored poorly or failed
+   *  verification — the re-propose names none of them. */
+  rejected?: readonly string[];
   /** Bound proposals to recent history: subjects from roughly the past N
    *  years — an earlier act by a person at the centre of the story, an
    *  earlier chapter of the same relationship, a comparable recent event
@@ -61,7 +61,7 @@ export async function proposeParallels(args: {
       { role: "system", content: `You are a careful historian.\n\nRULES:\n${PRECEDENT_RULES}` },
       {
         role: "user",
-        content: `STORY:\n${args.storySummary}\n\nCOUNT: ${args.count}\nWINDOW: ${args.windowYears === undefined ? "any era" : `the past ${args.windowYears} years only`}${args.correctiveContext === undefined ? "" : `\n\nVERIFIED RECORD:\n${args.correctiveContext}`}`,
+        content: `STORY:\n${args.storySummary}\n\nCOUNT: ${args.count}\nWINDOW: ${args.windowYears === undefined ? "any era" : `the past ${args.windowYears} years only`}${args.rejected === undefined || args.rejected.length === 0 ? "" : `\n\nREJECTED: ${args.rejected.join("; ")}`}`,
       },
     ],
     schema: z.object({ candidates: z.array(ParallelCandidate).min(1) }),

@@ -3,4 +3,4 @@
 3. Use only events with a standard Wikipedia article, named by its article title; never a description.
 4. For each give era (a year or period), event (the title), actors (one to six principal parties) and claimedSimilarity (one sentence: the dynamic that matches).
 5. Never invent an event.
-6. When VERIFIED RECORD is given, your earlier candidates conflicted with it: propose candidates whose era, actors and facts match the record.
+6. When REJECTED is given, propose none of those events; choose others from different eras or domains whose mechanism matches the story.
