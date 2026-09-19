@@ -28,7 +28,7 @@ async function main(): Promise<void> {
     return new Response(nextBody, { status: nextStatus });
   }) as typeof fetch;
 
-  const dg = createDatagod({ apiUrl: "http://mock:8000/", apiKey: "k123", fetchImpl });
+  const dg = createDatagod({ apiUrl: "http://mock:8000/", apiKey: "k123", fetchImpl, retryDelayMs: 0 });
 
   const data = await dg.get("/fred/GDP", { limit: 6, sort_order: "desc" });
   ok("envelope unwrapped to data payload",
@@ -47,6 +47,19 @@ async function main(): Promise<void> {
     threwHttp = String(err).includes("HTTP 502") && String(err).includes("/treasury/debt");
   }
   ok("HTTP error throws with path + status + body context", threwHttp, "http path");
+  ok("a gateway error is tried three times before it throws", calls.length >= 4 && calls.slice(-3).every((c) => c.url.endsWith("/treasury/debt")), String(calls.length));
+
+  // A 404 is ours to fix: thrown at once, never retried.
+  const before404 = calls.length;
+  nextStatus = 404;
+  nextBody = "no such series";
+  let threw404 = false;
+  try {
+    await dg.get("/fred/NOPE");
+  } catch (err: unknown) {
+    threw404 = String(err).includes("HTTP 404");
+  }
+  ok("a 404 throws after one call, no retry", threw404 && calls.length === before404 + 1, String(calls.length - before404));
 
   nextStatus = 200;
   nextBody = JSON.stringify({

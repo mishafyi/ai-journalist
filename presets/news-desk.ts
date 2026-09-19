@@ -33,6 +33,8 @@ import {
 import { createRunContext } from "../run-context";
 import { z } from "zod";
 import type { DatagodClient } from "../clients/datagod";
+import { DOSSIER_MODEL, loadCatalogue, researchOne, researchText } from "./dossier-research";
+import type { OpenedDoc, PrincipalResearch } from "./dossier-research";
 import { fetchCoverage, fetchTrendingStories, resolveCoverageUrl, GN_US } from "../sources/google-news";
 import type { Coverage } from "../sources/google-news";
 import type { TrendingStory } from "../sources/google-news";
@@ -195,24 +197,38 @@ export type Principal = z.infer<typeof PrincipalsSchema>["principals"][number];
 export const ConnectionsSchema = z.object({
   connections: z.array(
     z.object({
-      // .length(2) stays: a connection BETWEEN things is a pair by definition,
-      // and a one-sided one is meaningless rather than merely untidy.
-      between: z.array(z.string().min(1)).length(2),
-      claim: z.string().min(1),
-      basis: z.string().min(1),
+      between: z.array(z.string().min(1)).min(2),
+      connection: z.string().min(1),
+      why_it_matters: z.string().min(1),
+      /** True when the source articles already say it — such a connection is dropped. */
+      in_story: z.boolean(),
+      rests_on: z.string().min(1),
     }),
   ),
 });
 export type Connection = z.infer<typeof ConnectionsSchema>["connections"][number];
 
+// No minimum: an empty list is an answer, and it must not throw away the
+// principals and connections already researched (it did, 2026-09-19).
 export const HypothesesSchema = z.object({
-  hypotheses: z.array(z.object({ scenario: z.string().min(1), restsOn: z.string().min(1) })).min(1),
+  hypotheses: z.array(
+    z.object({
+      hypothesis: z.string().min(1),
+      timeframe: z.string(),
+      precedent: z.string(),
+      precedent_outcome: z.string(),
+      why_it_applies: z.string(),
+      how_it_differs: z.string(),
+      would_be_wrong_if: z.string(),
+      rests_on: z.string(),
+    }),
+  ),
 });
 export type Hypothesis = z.infer<typeof HypothesesSchema>["hypotheses"][number];
 
 /** Shape a dossier: drop empty entries and keep the counts the prompts ask for
- *  (6 principals, 8 connections, 5 hypotheses). No field is cut short — the
- *  column reads every word the model wrote (operator, 2026-09-19). */
+ *  (6 principals, 5 hypotheses). No field is cut short — the column reads every
+ *  word the model wrote (operator, 2026-09-19). */
 export function shapeDossier<T extends { principals?: Principal[]; connections?: Connection[]; hypotheses?: Hypothesis[] }>(
   d: T,
 ): T {
@@ -222,29 +238,36 @@ export function shapeDossier<T extends { principals?: Principal[]; connections?:
       .slice(0, 6);
   }
   if (d.connections) {
-    d.connections = d.connections
-      .filter((c) => c.claim.trim() !== "" && c.between.every((b) => b.trim() !== ""))
-      .slice(0, 8);
+    d.connections = d.connections.filter((c) => c.connection.trim() !== "" && c.between.every((b) => b.trim() !== ""));
   }
   if (d.hypotheses) {
     d.hypotheses = d.hypotheses
-      .filter((h) => h.scenario.trim() !== "")
+      .filter((h) => h.hypothesis.trim() !== "")
       .slice(0, 5);
   }
   return d;
 }
 
 export interface DossierEntry extends Principal {
-  background: string;
-  /** Where the background came from — provenance for the trace and the prompt. */
-  source: "wikipedia" | "model";
+  /** What the documents read in full say about this principal (`researchText`);
+   *  "" when nothing was found. */
+  research: string;
+  /** The research as it went — scores, searches, documents — for the trace;
+   *  null when it could not run. */
+  detail: PrincipalResearch | null;
+}
+
+/** Pure. The source articles as every dossier prompt reads them: each page's
+ *  outlet, title and URL, then its whole scraped text. */
+export function sourceArticles(pages: readonly { outlet: string; title: string; url: string; content: string }[]): string {
+  return pages.map((p) => `SOURCE: ${p.outlet} — ${p.title} — ${p.url}\n\n${p.content}`).join("\n\n———\n\n");
 }
 
 /** The story's principals — the actors it actually turns on, most central first. */
 export async function namePrincipals(args: {
   llm: LlmClient;
   headline: string;
-  evidence: string;
+  storyText: string;
   model?: string;
 }): Promise<Principal[]> {
   const out = await args.llm.completeStructured({
@@ -254,7 +277,7 @@ export async function namePrincipals(args: {
         content:
           "You identify the principals of a news story — the people, organisations and countries the story actually turns on. Name each exactly as the coverage names them, and say in one clause what role each plays in THIS story. Up to six, most central first.",
       },
-      { role: "user", content: `STORY: ${args.headline}\n\nEVIDENCE:\n${args.evidence}` },
+      { role: "user", content: `STORY: ${args.headline}\n\nTHE SOURCE ARTICLES:\n\n${args.storyText}` },
     ],
     schema: PrincipalsSchema,
     schemaName: "story_principals",
@@ -264,99 +287,101 @@ export async function namePrincipals(args: {
   return shapeDossier(out).principals ?? [];
 }
 
-/** Background per principal: the encyclopedia summary when DataGod has one,
- *  otherwise nothing on file — the next call then draws on what the model
- *  itself knows, and the entry says so. */
+/** Research per principal, from documents read in full (./dossier-research):
+ *  every DataGod source scored, the best searched, the documents worth reading
+ *  opened whole, notes with verified quotes. A principal whose research fails
+ *  keeps an empty entry and the rest go on. Without DataGod, nothing is on file. */
 export async function researchPrincipals(args: {
+  llm: LlmClient;
   principals: readonly Principal[];
+  headline: string;
+  storyText: string;
   datagod?: DatagodClient;
+  fetchImpl?: typeof fetch;
   log?: (line: string) => void;
 }): Promise<DossierEntry[]> {
+  if (args.datagod === undefined) return args.principals.map((p) => ({ ...p, research: "", detail: null }));
+  const datagod = args.datagod;
+  const catalogue = await loadCatalogue({ datagod, ...(args.fetchImpl === undefined ? {} : { fetchImpl: args.fetchImpl }), ...(args.log === undefined ? {} : { log: args.log }) });
+  const opened = new Map<string, { id: string; doc: OpenedDoc }>();
+  let docNo = 0;
   const entries: DossierEntry[] = [];
   for (const principal of args.principals) {
-    let background = "";
-    let source: DossierEntry["source"] = "model";
-    if (args.datagod !== undefined) {
-      try {
-        const data = (await args.datagod.get(`/wikipedia/summary/${encodeURIComponent(principal.name)}`, {})) as {
-          extract?: string;
-          summary?: string;
-          description?: string;
-        };
-        const text = data.extract ?? data.summary ?? data.description ?? "";
-        if (text.trim() !== "") {
-          background = text.trim();
-          source = "wikipedia";
-        }
-      } catch (err: unknown) {
-        args.log?.(`dossier: background lookup for "${principal.name}" failed (continuing on the model's own knowledge): ${String(err)}`);
-      }
+    try {
+      const detail = await researchOne({
+        llm: args.llm,
+        datagod,
+        catalogue,
+        principal,
+        headline: args.headline,
+        storyText: args.storyText,
+        opened,
+        nextDocId: () => `D${(docNo += 1)}`,
+        ...(args.log === undefined ? {} : { log: args.log }),
+      });
+      entries.push({ ...principal, research: researchText(detail), detail });
+    } catch (err: unknown) {
+      args.log?.(`dossier: research on "${principal.name}" failed (the entry stays empty): ${String(err)}`);
+      entries.push({ ...principal, research: "", detail: null });
     }
-    entries.push({ ...principal, background, source });
   }
   return entries;
 }
 
-function principalsText(entries: readonly DossierEntry[]): string {
+/** Pure. The research on every principal, as the connections, hypotheses and
+ *  column prompts read it. */
+export function principalsText(entries: readonly DossierEntry[]): string {
   return entries
-    .map(
-      (e, i) =>
-        `${i + 1}. ${e.name} (${e.kind}; ${e.role})\n   Background${e.source === "wikipedia" ? "" : " (nothing on file — use what you know of them)"}: ${e.background === "" ? "—" : e.background}`,
-    )
-    .join("\n");
+    .map((e) => `## ${e.name} (${e.kind}; in the story: ${e.role})\n${e.research === "" ? "(nothing found in the documents)" : e.research}`)
+    .join("\n\n");
 }
 
-/** Connections between the principals worth a columnist's attention. */
+const dossierContext = (storyText: string, dossier: readonly DossierEntry[]): string =>
+  `TODAY'S STORY — the source articles:\n\n${storyText}\n\nRESEARCH ON THE PRINCIPALS — from documents read in full:\n\n${principalsText(dossier)}`;
+
+/** The connections the source articles do not tell — the non-obvious ones
+ *  above all. One the model marks as already in the articles is dropped. */
 export async function findConnections(args: {
   llm: LlmClient;
-  headline: string;
-  evidence: string;
+  storyText: string;
   dossier: readonly DossierEntry[];
   model?: string;
 }): Promise<Connection[]> {
   const out = await args.llm.completeStructured({
     messages: [
       {
-        role: "system",
-        content:
-          "You research the people behind a news story for a newspaper's desk. Given the story, its principals and their backgrounds, find the connections between them worth a columnist's attention: shared history, prior dealings, allegiances and rivalries, money, family, the earlier chapter of the same relationship. Be specific and concrete — each connection names two principals, says what links them, and says where that comes from (a background, the story itself, or what is widely known about them).",
-      },
-      {
         role: "user",
-        content: `STORY: ${args.headline}\n\nTHE STORY'S EVIDENCE:\n${args.evidence}\n\nPRINCIPALS AND BACKGROUNDS:\n${principalsText(args.dossier)}`,
+        content:
+          `${dossierContext(args.storyText, args.dossier)}\n\nFind the connections between these people, organisations, countries and events — above all the NON-OBVIOUS ones the source articles do not tell: shared history, money, prior clashes or alliances, a pattern this event continues, interests behind the stated positions, and how today's event fits into something larger. Leave out anything the articles already say. ` +
+          `For each: what it links, the connection, why it matters for this story, in_story (true only if the articles already say it), and rests_on — the document ids it comes from ([D3], [R2]) or the well-established history it rests on, named. Never present speculation as fact.\n\n` +
+          `Return JSON: {"connections": [{"between", "connection", "why_it_matters", "in_story", "rests_on"}]}`,
       },
     ],
     schema: ConnectionsSchema,
     schemaName: "story_connections",
-    temperature: 0.3,
+    temperature: 0.5,
     ...(args.model === undefined ? {} : { model: args.model }),
   });
-  return shapeDossier(out).connections ?? [];
+  return (shapeDossier(out).connections ?? []).filter((c) => !c.in_story);
 }
 
-/** What the future holds: plausible next chapters, each naming what it rests on. */
+/** What happens next: 3–5 falsifiable developments, each grounded in a named,
+ *  dated historical precedent. */
 export async function projectHypotheses(args: {
   llm: LlmClient;
-  headline: string;
-  evidence: string;
+  storyText: string;
   dossier: readonly DossierEntry[];
   connections: readonly Connection[];
   model?: string;
 }): Promise<Hypothesis[]> {
-  const connectionsText =
-    args.connections.length === 0
-      ? "(none found)"
-      : args.connections.map((c) => `- ${c.between[0]} ↔ ${c.between[1]}: ${c.claim} (basis: ${c.basis})`).join("\n");
   const out = await args.llm.completeStructured({
     messages: [
       {
-        role: "system",
-        content:
-          "You are the desk's forecaster. Given a story, the backgrounds of its principals and the connections between them, say what the future holds: the plausible ways this story develops next. Each hypothesis is a concrete scenario and says which connection, background or pattern it rests on. These are hypotheses, not findings — they need no proof, but they grow out of the material rather than floating free of it.",
-      },
-      {
         role: "user",
-        content: `STORY: ${args.headline}\n\nTHE STORY'S EVIDENCE:\n${args.evidence}\n\nPRINCIPALS AND BACKGROUNDS:\n${principalsText(args.dossier)}\n\nCONNECTIONS BETWEEN THEM:\n${connectionsText}`,
+        content:
+          `${dossierContext(args.storyText, args.dossier)}\n\nTHE CONNECTIONS:\n${args.connections.length === 0 ? "(none found)" : args.connections.map((c) => `- ${c.between.join(" / ")}: ${c.connection} (matters because ${c.why_it_matters}; rests on ${c.rests_on})`).join("\n")}\n\n` +
+          `What happens next? Give 3 to 5 hypotheses. Each is a concrete, falsifiable next development with a rough timeframe, grounded in a HISTORICAL PRECEDENT — a comparable past situation, named and dated: what happened then, why today's case is like it, how it differs, and what would prove the hypothesis wrong. Build them from the background, the connections and today's events above; rests_on names the document ids and connections each draws on.\n\n` +
+          `Return JSON: {"hypotheses": [{"hypothesis", "timeframe", "precedent", "precedent_outcome", "why_it_applies", "how_it_differs", "would_be_wrong_if", "rests_on"}]}`,
       },
     ],
     schema: HypothesesSchema,
@@ -377,12 +402,17 @@ export function dossierBlock(args: {
   const connections =
     args.connections.length === 0
       ? ""
-      : `\nCONNECTIONS BETWEEN THEM:\n${args.connections.map((c) => `- ${c.between[0]} ↔ ${c.between[1]}: ${c.claim} (${c.basis})`).join("\n")}`;
+      : `\n\nCONNECTIONS THE SOURCE ARTICLES DO NOT TELL:\n${args.connections.map((c) => `- ${c.between.join(" / ")}: ${c.connection} — why it matters: ${c.why_it_matters} (rests on: ${c.rests_on})`).join("\n")}`;
   const hypotheses =
     args.hypotheses.length === 0
       ? ""
-      : `\nWHERE THIS GOES NEXT — the desk's hypotheses:\n${args.hypotheses.map((h) => `- ${h.scenario} (rests on: ${h.restsOn})`).join("\n")}`;
-  return `THE DESK'S DOSSIER — the people behind the story, researched:\nPRINCIPALS:\n${principalsText(args.dossier)}${connections}${hypotheses}\nWeave this into the column: the connections where they sharpen the argument — a reader should feel the column knows the players — and the hypotheses shaping your verdict: say where this goes and why, as a columnist does. Name the principals as given above.`;
+      : `\n\nWHERE THIS GOES NEXT — the desk's hypotheses:\n${args.hypotheses
+          .map(
+            (h) =>
+              `- ${h.hypothesis} (${h.timeframe}). Precedent: ${h.precedent} — ${h.precedent_outcome}. Why it applies: ${h.why_it_applies}. How it differs: ${h.how_it_differs}. Wrong if: ${h.would_be_wrong_if}. (Rests on: ${h.rests_on})`,
+          )
+          .join("\n")}`;
+  return `THE DESK'S DOSSIER — the people behind the story, researched from documents read in full:\n\n${principalsText(args.dossier)}${connections}${hypotheses}\n\nWeave this into the column: the documents and connections where they sharpen the argument — a reader should feel the column knows the players — and the hypotheses shaping your verdict: say where this goes and why, as a columnist does. Name the principals as given above.`;
 }
 
 export async function composeAuthorVersion(args: {
@@ -2117,17 +2147,29 @@ export function createNewsDesk(opts: {
           }
 
           // The people dossier — best-effort, like the lead image: a stage that
-          // fails must not cost the article.
+          // fails must not cost the article. Every call reads the source
+          // articles whole, never the evidence bullets (operator, 2026-09-18),
+          // and the research reads documents in full (./dossier-research).
           let dossierText = "";
           try {
-            const principals = await namePrincipals({ llm, headline: story.headline, evidence });
+            const storyText = sourceArticles(pages.filter((pg) => contributing.some((c) => c.url === pg.url)));
+            const principals = await namePrincipals({ llm, headline: story.headline, storyText, model: DOSSIER_MODEL });
             recordArtifact?.("principals", JSON.stringify(principals, null, 2));
-            const entries = await researchPrincipals({ principals, ...(opts.datagod === undefined ? {} : { datagod: opts.datagod }), log });
-            const connections = await findConnections({ llm, headline: story.headline, evidence, dossier: entries });
-            const hypotheses = await projectHypotheses({ llm, headline: story.headline, evidence, dossier: entries, connections });
-            recordArtifact?.("dossier", JSON.stringify({ principals: entries, connections, hypotheses }, null, 2));
+            const entries = await researchPrincipals({
+              llm,
+              principals,
+              headline: story.headline,
+              storyText,
+              ...(opts.datagod === undefined ? {} : { datagod: opts.datagod }),
+              log,
+            });
+            for (const e of entries) recordArtifact?.(`research: ${e.name}`, JSON.stringify(e.detail, null, 2));
+            const connections = await findConnections({ llm, storyText, dossier: entries, model: DOSSIER_MODEL });
+            const hypotheses = await projectHypotheses({ llm, storyText, dossier: entries, connections, model: DOSSIER_MODEL });
+            recordArtifact?.("dossier", JSON.stringify({ principals: entries.map(({ detail, ...e }) => e), connections, hypotheses }, null, 2));
             dossierText = dossierBlock({ dossier: entries, connections, hypotheses });
-            log?.(`news-desk: dossier — ${entries.length} principals (${entries.filter((e) => e.source === "wikipedia").length} with encyclopedia background), ${connections.length} connections, ${hypotheses.length} hypotheses`);
+            const docsRead = entries.reduce((n, e) => n + (e.detail?.documents.length ?? 0), 0);
+            log?.(`news-desk: dossier — ${entries.length} principals, ${docsRead} documents read in full, ${connections.length} connections, ${hypotheses.length} hypotheses`);
           } catch (err: unknown) {
             log?.(`news-desk: dossier failed (best-effort, the column runs without it): ${String(err)}`);
           }
