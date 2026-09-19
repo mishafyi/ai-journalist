@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, LINE_EDIT_MODEL, LINE_EDIT_TEMPERATURE, PERSONAS, SERP_TITLE_CHARS, applyEditorialLens, protectedNames, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, lineEditAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, EDITOR_MODEL, EDITOR_TEMPERATURE, PERSONAS, SERP_TITLE_CHARS, applyEditorialLens, protectedNames, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, editAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import { proposeParallels } from "../parallels";
@@ -301,7 +301,7 @@ async function orchestrationChecks(): Promise<void> {
     !prompts.some((p) => p.includes("fact-checker reviewing")) &&
       !artifacts.some((a) => a.label.startsWith("fact-check-audit: ") || a.label.startsWith("claim-check: ")),
     artifacts.map((a) => a.label).join(","));
-  ok("the author version is line-edited (Pass 6 wired into the desk)",
+  ok("the author version goes through the Editor (Pass 6 wired into the desk)",
     prompts.some((p) => p.startsWith("Line-edit this draft")),
     "no Line-edit prompt was sent");
   ok("stage artifacts recorded under the stable labels",
@@ -825,10 +825,10 @@ async function orchestrationChecks(): Promise<void> {
   process.stdout.write("news-desk (part 2) checks: all green\n");
 }
 
-/** lineEditAuthorVersion never weakens the gate: the edit ships only inside
+/** editAuthorVersion never weakens the gate: the edit ships only inside
  *  the 70–130% band AND still passing the contract; anything else — including
  *  a thrown edit call — keeps the draft. */
-async function lineEditChecks(): Promise<void> {
+async function editorChecks(): Promise<void> {
   let failures = 0;
   const ok = (name: string, cond: boolean, detail: string): void => {
     if (cond) process.stdout.write(`PASS ${name}\n`);
@@ -865,13 +865,13 @@ async function lineEditChecks(): Promise<void> {
 
   const POLISHED = DRAFT.replace("plain, and the argument follows", "unmistakable, and the argument follows");
   ok("a contract-passing, in-band edit ships",
-    (await lineEditAuthorVersion({ llm: stubLlm(async () => POLISHED), body: DRAFT, contract: CONTRACT })) === POLISHED,
+    (await editAuthorVersion({ llm: stubLlm(async () => POLISHED), body: DRAFT, contract: CONTRACT })) === POLISHED,
     "the edited version was not kept");
   ok("a whole-body code fence is stripped before judging",
-    (await lineEditAuthorVersion({ llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``), body: DRAFT, contract: CONTRACT })) === POLISHED,
+    (await editAuthorVersion({ llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``), body: DRAFT, contract: CONTRACT })) === POLISHED,
     "the fenced edit was not unwrapped and kept");
   ok("an edit that breaks the contract keeps the draft",
-    (await lineEditAuthorVersion({
+    (await editAuthorVersion({
       llm: stubLlm(async () => POLISHED.split("Beacon").join("Bacon")),
       body: DRAFT,
       contract: CONTRACT,
@@ -880,7 +880,7 @@ async function lineEditChecks(): Promise<void> {
   const bandLogs: string[] = [];
   const SHREDDED = DRAFT.split(FILLER.repeat(8)).join(FILLER);
   ok("a shredded edit is rejected by the length band, draft kept",
-    (await lineEditAuthorVersion({
+    (await editAuthorVersion({
       llm: stubLlm(async () => SHREDDED),
       body: DRAFT,
       contract: CONTRACT,
@@ -890,7 +890,7 @@ async function lineEditChecks(): Promise<void> {
   // The edit is the paper's last read: the best Gemini model, pinned, warmer
   // than runEdit's default, told the names its gate will check.
   let seen: { prompt: string; model?: string; temperature?: number } = { prompt: "" };
-  await lineEditAuthorVersion({
+  await editAuthorVersion({
     llm: {
       complete: async (a: { prompt: string; model?: string; temperature?: number }): Promise<string> => {
         seen = a;
@@ -903,10 +903,10 @@ async function lineEditChecks(): Promise<void> {
     body: DRAFT,
     contract: CONTRACT,
   });
-  ok("the line edit runs on the pinned best model, at its own temperature",
-    seen.model === LINE_EDIT_MODEL && LINE_EDIT_MODEL === "gemini-3.5-flash-lite" && seen.temperature === LINE_EDIT_TEMPERATURE && LINE_EDIT_TEMPERATURE === 0.7,
+  ok("the Editor runs on the pinned best model, at its own temperature",
+    seen.model === EDITOR_MODEL && EDITOR_MODEL === "gemini-3.5-flash-lite" && seen.temperature === EDITOR_TEMPERATURE && EDITOR_TEMPERATURE === 0.7,
     `${seen.model} @ ${seen.temperature}`);
-  ok("the line edit is told to keep the names its gate checks",
+  ok("the Editor is told to keep the names its gate checks",
     ['"Wire"', '"Beacon"', '"Panic of 1907"'].every((n) => seen.prompt.includes(n)) && seen.prompt.includes("thrown away if one drops out"),
     seen.prompt.slice(-400));
   ok("protectedNames: only what the draft carries, as it writes it",
@@ -919,21 +919,21 @@ async function lineEditChecks(): Promise<void> {
 
   const throwLogs: string[] = [];
   ok("a thrown edit call keeps the draft (best-effort)",
-    (await lineEditAuthorVersion({
+    (await editAuthorVersion({
       llm: stubLlm(async () => {
         throw new Error("model died");
       }),
       body: DRAFT,
       contract: CONTRACT,
       log: (l) => throwLogs.push(l),
-    })) === DRAFT && throwLogs.some((l) => l.includes("line edit failed")),
+    })) === DRAFT && throwLogs.some((l) => l.includes("Editor failed")),
     throwLogs.join(" | "));
 
   if (failures > 0) {
     process.exitCode = 1;
     return;
   }
-  process.stdout.write("news-desk line-edit checks: all green\n");
+  process.stdout.write("news-desk Editor checks: all green\n");
 }
 
 /** translateHeadline holds a translation to the printed-title standard:
@@ -1086,7 +1086,7 @@ async function lensAndEchoChecks(): Promise<void> {
 }
 
 orchestrationChecks()
-  .then(() => lineEditChecks())
+  .then(() => editorChecks())
   .then(() => translateHeadlineChecks())
   .then(() => lensAndEchoChecks())
   .catch((err: unknown) => {

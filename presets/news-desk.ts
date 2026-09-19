@@ -488,18 +488,18 @@ export async function composeAuthorVersion(args: {
   throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
 }
 
-/** The line edit is the last read before print: a Gemini model, never Gemma
+/** The Editor is the last read before print: a Gemini model, never Gemma
  *  (operator, 2026-09-18) — Flash-Lite, the operator's pick for the desk's
  *  editorial calls (500 requests a day per key, against Flash's 20). Pinned,
  *  the rotation tries it on every key and on no other model; when all
  *  refuse, the edit throws and the draft ships. */
-export const LINE_EDIT_MODEL = "gemini-3.5-flash-lite";
+export const EDITOR_MODEL = "gemini-3.5-flash-lite";
 /** Warmer than runEdit's 0.5 (operator, 2026-09-18). */
-export const LINE_EDIT_TEMPERATURE = 0.7;
+export const EDITOR_TEMPERATURE = 0.7;
 
 /** Pure. The names the contract checks that THIS draft carries — its outlets,
  *  the parallel, the echoes — in the form the draft writes them: what the
- *  line edit is told to keep. An event may be named without its leading
+ *  Editor is told to keep. An event may be named without its leading
  *  "The", as namesEvent allows. */
 export function protectedNames(
   body: string,
@@ -513,7 +513,7 @@ export function protectedNames(
   ];
 }
 
-/** Pass 6 for the desk: line-edit a contract-passing author version (the
+/** Pass 6 for the desk, the Editor: line-edits a contract-passing author version (the
  *  newspaper self-edit pass, gates.runEdit) without ever weakening the gate.
  *  It is the LAST read before print, for every columnist — after the lens,
  *  so a lens rewrite is edited too (operator, 2026-09-18).
@@ -522,9 +522,9 @@ export function protectedNames(
  *  edit call — keeps the draft, so the desk's hot path grows no new failure
  *  mode. The word floor injected into the prompt is the DRAFT's own size
  *  (never below the contract's 300), not runEdit's feature default of 1200:
- *  without a number near the real size the editor shreds a piece (43–54%
+ *  without a number near the real size the Editor shreds a piece (43–54%
  *  keeps, 2026-07-08), and 1200 would tell a 700-word column to pad. */
-export async function lineEditAuthorVersion(args: {
+export async function editAuthorVersion(args: {
   llm: LlmClient;
   body: string;
   contract: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[]; wordCap: number; writerName: string };
@@ -534,11 +534,11 @@ export async function lineEditAuthorVersion(args: {
   try {
     const raw = await runEdit(args.body, {
       llm: args.llm,
-      model: LINE_EDIT_MODEL,
-      editTemperature: LINE_EDIT_TEMPERATURE,
+      model: EDITOR_MODEL,
+      editTemperature: EDITOR_TEMPERATURE,
       editKeep: protectedNames(args.body, args.contract),
       withRetry: async (_label, fn) => fn(),
-      ctx: createRunContext("news-desk-line-edit"),
+      ctx: createRunContext("news-desk-editor"),
       gatherExemplars: () => [],
       fetchPriorTitles: async () => [],
       embedDedupSurvivors: async () => null,
@@ -549,24 +549,24 @@ export async function lineEditAuthorVersion(args: {
       editWordFloor: Math.max(300, Math.round(words * 0.85)),
     });
     const edited = stripPreambleAndFence(raw).trim();
-    if (lengthSafe("author-line-edit", args.body, edited) !== edited) {
-      args.log?.("news-desk: line edit rejected (outside the 70-130% length band) — keeping the draft");
+    if (lengthSafe("author-editor", args.body, edited) !== edited) {
+      args.log?.("news-desk: Editor rejected (outside the 70-130% length band) — keeping the draft");
       return args.body;
     }
     const verdict = checkAuthorVersionContract(edited, args.contract);
     if (!verdict.ok) {
-      args.log?.(`news-desk: line edit rejected (broke the contract: ${verdict.failures.join(" | ")}) — keeping the draft`);
+      args.log?.(`news-desk: Editor rejected (broke the contract: ${verdict.failures.join(" | ")}) — keeping the draft`);
       return args.body;
     }
-    args.log?.(`news-desk: line edit kept (${words} → ${edited.split(/\s+/).length} words)`);
+    args.log?.(`news-desk: Editor kept (${words} → ${edited.split(/\s+/).length} words)`);
     return edited;
   } catch (err: unknown) {
-    args.log?.(`news-desk: line edit failed (best-effort, keeping the draft): ${String(err)}`);
+    args.log?.(`news-desk: Editor failed (best-effort, keeping the draft): ${String(err)}`);
     return args.body;
   }
 }
 
-/** The persona's standing editorial lens, read before the line edit — the
+/** The persona's standing editorial lens, read before the Editor — the
  *  last pass for every columnist since 2026-09-18. Operator, 2026-08-30:
  *  "some articles should evoke a sense of justice … select a few authors …
  *  the whole voice of the article pushed through this lens as final
@@ -2089,7 +2089,7 @@ export function createNewsDesk(opts: {
             );
           const body = stripVerdictLabel(rawBody);
           // Pass 6, reintroduced 2026-08-30: the desk shipped columns
-          // un-line-edited since the 07-21 cutover, and it read like it.
+          // unedited since the 07-21 cutover, and it read like it.
           const authorContract = {
             outletNames,
             parallelEvent: parallel === null ? null : parallel.event,
@@ -2100,7 +2100,7 @@ export function createNewsDesk(opts: {
           // The lens (operator, 2026-08-30): a persona with a standing lens
           // gives the piece a read through it — judged per story, most
           // stories pass untouched — under the same band + contract guard as
-          // the line edit, so a lens can color the paper but never break it.
+          // the Editor, so a lens can color the paper but never break it.
           const lensBody = await applyEditorialLens({
             llm,
             body,
@@ -2108,9 +2108,9 @@ export function createNewsDesk(opts: {
             contract: authorContract,
             log,
           });
-          // The line edit LAST, for every columnist, so what prints is what
+          // The Editor LAST, for every columnist, so what prints is what
           // the editor read (operator, 2026-09-18).
-          const finalBody = await lineEditAuthorVersion({
+          const finalBody = await editAuthorVersion({
             llm,
             body: lensBody,
             contract: authorContract,

@@ -107,7 +107,7 @@ function stepForLlm(entry: LlmTrace): string {
   }
   if (system.startsWith("You extract evidence for a news article")) return "05-evidence-extraction";
   if (system.includes("writing your COMPLETE column")) return "12-column";
-  if (user.startsWith("Line-edit this draft for publication")) return "13-line-edit";
+  if (user.startsWith("Line-edit this draft for publication")) return "13-editor";
   if (system.includes("standing editorial lens, and THIS story carries it")) return "15-lens-rewrite";
   if (user.startsWith("You are a fact-checker reviewing a PUBLISHED article")) return "19-fact-check-audit";
   return "99-unclassified";

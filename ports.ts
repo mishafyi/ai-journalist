@@ -434,8 +434,8 @@ export interface PersonaProfile {
    *  read as real humans. */
   bio?: string;
   /** Standing editorial lens for a FEW personas (news-desk
-   *  applyEditorialLens): judged per story after the line edit and applied
-   *  as the final read only when the story genuinely carries it — most
+   *  applyEditorialLens): judged per story before the Editor and applied
+   *  only when the story genuinely carries it — most
    *  stories, and most personas, pass through untouched. */
   lens?: string;
 }

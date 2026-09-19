@@ -459,7 +459,7 @@ async function main(): Promise<void> {
       capturedFactGuardPrompt.lastIndexOf("RESEARCH DATA"),
   );
   ok(
-    "line-edit teaches pictorial numbers",
+    "the Editor teaches pictorial numbers",
     capturedEditPrompt.includes("one in four"),
   );
   ok(

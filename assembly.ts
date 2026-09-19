@@ -2,8 +2,8 @@
  * Phase 3 — Assemble + editor tie-together.
  *
  * assemble    — pure: stitch the per-section markdowns under the H1 title.
- * tieTogether — the existing two editor passes (runEdit line-edit → runFinalEdit
- *               managing-editor), which smooth transitions, kill cross-section
+ * tieTogether — the existing two editor passes (runEdit, the Editor → runFinalEdit,
+ *               the managing editor), which smooth transitions, kill cross-section
  *               repetition, and enforce one voice/arc. Mirrors the current
  *               runPipeline sequence (3605-3608) exactly, including the
  *               empty-article guard. These passes legitimately restructure

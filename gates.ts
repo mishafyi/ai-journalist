@@ -1,7 +1,7 @@
 /**
  * ai-journalist — the surgical gate / edit passes that run AFTER assembly, on the
- * finished article: the two editor reads (runEdit line-edit, runFinalEdit
- * managing-editor — also injected into assembly.ts's tieTogether), fact-guard,
+ * finished article: the two editor reads (runEdit, the Editor; runFinalEdit, the
+ * managing editor — also injected into assembly.ts's tieTogether), fact-guard,
  * the informational fact-check audit, the headline pass (with its full title-gate
  * suite), and SEO metadata derivation.
  *
@@ -164,7 +164,7 @@ export const EDIT_RULES: readonly string[] = [
   "Keep every markdown link and the H1 exactly as the draft has them.",
 ];
 
-/** Pass 6 — line-edit the draft (the journalist self-edit pass). */
+/** Pass 6 — the Editor: line-edits the draft (the journalist self-edit pass). */
 export async function runEdit(draft: string, deps: GateDeps): Promise<string> {
   const keep =
     deps.editKeep === undefined || deps.editKeep.length === 0
@@ -191,7 +191,7 @@ ${draft}`;
 }
 
 /**
- * Pass 7 — managing-editor final read. Not line-editing (that was Pass 6): a
+ * Pass 7 — managing-editor final read. Not line-editing (that was Pass 6, the Editor): a
  * whole-piece pass for impact + integrity — does the lede land, does the kicker
  * land, does the spine hold, are AI tells/hype gone, is everything grounded.
  */
