@@ -706,6 +706,9 @@ async function orchestrationChecks(): Promise<void> {
   ok("sentenceCase: acronyms and hyphenated names keep their capitals",
     sentenceCase("US Batteries Stay Home as Saudi-Led Coalition Stalls", RIYADH) === "US batteries stay home as Saudi-led coalition stalls",
     sentenceCase("US Batteries Stay Home as Saudi-Led Coalition Stalls", RIYADH));
+  ok("sentenceCase: a name the column only opens sentences with keeps its capital",
+    sentenceCase("Why Ghodsi Is Right About the Security Market", "Ghodsi told the hosts security is the real market. Ghodsi runs Databricks.") === "Why Ghodsi is right about the security market",
+    sentenceCase("Why Ghodsi Is Right About the Security Market", "Ghodsi told the hosts security is the real market. Ghodsi runs Databricks."));
   ok("sentenceCase: a sentence-case headline is left alone",
     sentenceCase("Mohammed bin Salman's reliance on Trump is a fantasy", RIYADH) === "Mohammed bin Salman's reliance on Trump is a fantasy", "");
 
@@ -749,7 +752,7 @@ async function orchestrationChecks(): Promise<void> {
     "category gate");
   ok("wikipedia play: entity → encoded summary path, and carries the no-encyclopedia evidence label",
     play("wikipedia_summary")?.request({ query: "Cap Ferret" })?.path === "/wikipedia/summary/Cap%20Ferret" &&
-      (play("wikipedia_summary")?.evidenceLabel ?? "").includes("NEVER cite"),
+      (play("wikipedia_summary")?.evidenceLabel ?? "").startsWith("REFERENCE BACKGROUND") && !/wikipedia|encyclop/i.test(play("wikipedia_summary")?.evidenceLabel ?? ""),
     JSON.stringify(play("wikipedia_summary")?.request({ query: "Cap Ferret" })));
   const edgar = DATA_PLAYS.find((pl) => pl.id === "edgar_filings");
   ok("edgar_filings play maps a ticker to the regulator profile path",

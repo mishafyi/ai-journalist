@@ -895,8 +895,7 @@ export const DATA_PLAYS: readonly DataPlay[] = [
     id: "wikipedia_summary",
     useFor:
       "Stable background on ONE central entity the coverage assumes the reader knows (a person, organization, place or treaty): grounds names, dates and roles. query = the entity's name.",
-    evidenceLabel:
-      "REFERENCE BACKGROUND (for your own grounding of names, dates and roles — NEVER cite or mention an encyclopedia in the column)",
+    evidenceLabel: "REFERENCE BACKGROUND (for grounding names, dates and roles; never cited)",
     request: (p) =>
       p.query !== undefined && p.query.trim().length >= 2 && p.query.length <= 80
         ? { path: `/wikipedia/summary/${encodeURIComponent(p.query.trim())}`, params: {} }
@@ -1057,8 +1056,10 @@ export async function gatherPrimaryData(args: {
         }
       }
       blocks.push(
+        // A labelled play prints no id: "[wikipedia_summary]" put the
+        // encyclopedia's name in front of the column (rules/column.md 10).
         play.evidenceLabel !== undefined
-          ? `${play.evidenceLabel} [${play.id}]:\n${parts.join("\n")}`
+          ? `${play.evidenceLabel}:\n${parts.join("\n")}`
           : `PRIMARY DATA (${play.id} — authoritative source; PREFER these figures over any outlet re-tell):\n${parts.join("\n")}`,
       );
       args.recordArtifact?.(`datagod:${play.id}`, `${req.path} ${JSON.stringify(req.params)}\n${parts.join("\n")}`);
@@ -1187,16 +1188,24 @@ export function sentenceCase(headline: string, column: string): string {
   const words = headline.split(" ");
   const rest = words.slice(1).filter((w) => /[A-Za-z]/.test(w));
   if (rest.filter((w) => /^["“‘(]?[A-Z]/.test(w)).length * 2 < rest.length) return headline;
+  // A name is a word the column capitalises mid-sentence, or one it
+  // capitalises only at a sentence start and never writes in lower case.
   const names = new Set<string>();
+  const openers = new Set<string>();
+  const lower = new Set<string>();
   const bare = (w: string): string => w.replace(/['’]s$/, "").replace(/[^A-Za-z]/g, "").toLowerCase();
   for (const line of column.split("\n")) {
     if (/^\s*#/.test(line)) continue;
     for (const sentence of line.split(/(?<=[.!?])\s+/)) {
-      for (const w of sentence.split(/\s+/).slice(1)) {
-        for (const part of w.split("-")) if (/^["“‘(]?[A-Z]/.test(part)) names.add(bare(part));
-      }
+      sentence.split(/\s+/).forEach((w, i) => {
+        for (const part of w.split("-")) {
+          if (!/^["“‘(]?[A-Z]/.test(part)) lower.add(bare(part));
+          else (i === 0 ? openers : names).add(bare(part));
+        }
+      });
     }
   }
+  for (const w of openers) if (!lower.has(w)) names.add(w);
   const keep = (part: string): boolean =>
     !/^["“‘(]?[A-Z]/.test(part) || /^[^a-z]*[A-Z]{2,}[^a-z]*$/.test(part) || /[a-z][A-Z]/.test(part) || names.has(bare(part));
   return [
