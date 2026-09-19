@@ -223,6 +223,7 @@ export interface LlmClient {
   complete(args: {
     system?: string;
     prompt: string;
+    /** One model id, or several comma-separated, tried in that order; absent = the client's own list. */
     model?: string;
     temperature?: number;
   }): Promise<string>;
@@ -240,6 +241,7 @@ export interface LlmClient {
     messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
     schema: ZodType<T>;
     schemaName: string;
+    /** One model id, or several comma-separated, tried in that order; absent = the client's own list. */
     model?: string;
     temperature?: number;
   }): Promise<T>;

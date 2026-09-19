@@ -126,6 +126,16 @@ async function main(): Promise<void> {
   ok("an explicitly named model never rotates to another",
     asked.length > 0 && asked.every((m) => m === "pinned-model"), asked.join(">"));
 
+  // A pinned LIST is tried in its own order and never leaves it (the Editor
+  // names the Flash models: operator, 2026-09-19).
+  asked = [];
+  await createRotation(models, 1)("complete", "flash-a, flash-b", async (m) => {
+    asked.push(m);
+    throw rateLimited(0);
+  }).catch(() => undefined);
+  ok("a pinned list is tried in order and never leaves it",
+    asked[0] === "flash-a" && asked.includes("flash-b") && asked.every((m) => m === "flash-a" || m === "flash-b"), asked.join(">"));
+
   // When everything is cooling it waits for the SOONEST expiry and then
   // succeeds, rather than failing while a model is seconds from ready.
   let attempt = 0;

@@ -129,6 +129,10 @@ export interface GateDeps {
    *  editor paraphrased them away and 154 of 254 desk edits were thrown out
    *  (2026-09-11 to 09-18). */
   editKeep?: readonly string[];
+  /** The original news story the draft was written from, shown to runEdit as
+   *  reference — the Editor checks names, numbers and quotes against it and
+   *  adds nothing from it (operator, 2026-09-19). Absent = no reference. */
+  editContext?: string;
 }
 
 /** Strip a whole-body code fence (```lang\n…\n```) that wraps the ENTIRE text. */
@@ -168,13 +172,16 @@ export async function runEdit(draft: string, deps: GateDeps): Promise<string> {
   const keep =
     deps.editKeep === undefined || deps.editKeep.length === 0
       ? []
-      : [`KEEP each of these by name, exactly as the draft writes it, and rephrase around them rather than cutting or paraphrasing them, because the edit is thrown away if one drops out: ${deps.editKeep.map((k) => `"${k}"`).join(", ")}.`];
+      : [`KEEP each of these by name, exactly as the draft writes it, and rephrase around them rather than cutting or paraphrasing them: ${deps.editKeep.map((k) => `"${k}"`).join(", ")}.`];
   const rules = [...EDIT_RULES, ...keep].map((r, i) => `${i + 1}. ${r}`).join("\n");
   const prompt = `Line-edit this draft for publication. Apply the newspaper self-edit pass:
 ${rules}
 
 Output ONLY the edited markdown article, nothing else.
-
+${deps.editContext === undefined ? "" : `
+THE ORIGINAL NEWS STORY (reference only: check the draft's names, numbers and quotes against it; add nothing from it):
+${deps.editContext}
+`}
 DRAFT:
 ${draft}`;
   return deps.withRetry(

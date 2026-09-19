@@ -273,7 +273,8 @@ export function createRotation(
       (promptTokens ?? 0) > BIG_PROMPT_TOKENS
         ? [...models].sort((a, b) => Number(isBigBudget(b)) - Number(isBigBudget(a)))
         : models;
-    const candidateModels = pinned === undefined ? ordered : [pinned];
+    // A pinned call names one model, or several comma-separated, tried in that order.
+    const candidateModels = pinned === undefined ? ordered : pinned.split(",").map((m) => m.trim()).filter((m) => m !== "");
     if (candidateModels.length === 0) throw new Error("gemini: no models configured");
     if (keyCount === 0) throw new Error("gemini: no api keys configured");
     const start = cursor;

@@ -1,4 +1,4 @@
-import { DATA_PLAYS, FRED_TITLES, EDITOR_MODEL, EDITOR_TEMPERATURE, PERSONAS, SERP_TITLE_CHARS, applyEditorialLens, protectedNames, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, editAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, EDITOR_MODEL, EDITOR_TEMPERATURE, originalStoryOf, PERSONAS, SERP_TITLE_CHARS, applyEditorialLens, protectedNames, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, editAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import { proposeParallels } from "../parallels";
@@ -825,9 +825,9 @@ async function orchestrationChecks(): Promise<void> {
   process.stdout.write("news-desk (part 2) checks: all green\n");
 }
 
-/** editAuthorVersion never weakens the gate: the edit ships only inside
- *  the 70–130% band AND still passing the contract; anything else — including
- *  a thrown edit call — keeps the draft. */
+/** editAuthorVersion: the edit ships inside the 70–130% band — there is no
+ *  contract check (operator, 2026-09-19) — on the Flash models, with the
+ *  original news story as reference; a thrown call keeps the draft. */
 async function editorChecks(): Promise<void> {
   let failures = 0;
   const ok = (name: string, cond: boolean, detail: string): void => {
@@ -856,6 +856,7 @@ async function editorChecks(): Promise<void> {
     wordCap: 700,
     writerName: "Test Writer",
   };
+  const ORIGINAL = "Wire — Rates rise (https://wire.test/rates)\n\nThe policy rate rose fifty basis points to a twenty-year high.";
   const stubLlm = (reply: () => Promise<string>) => ({
     complete: async (): Promise<string> => reply(),
     completeStructured: async <T,>(): Promise<T> => {
@@ -864,19 +865,21 @@ async function editorChecks(): Promise<void> {
   });
 
   const POLISHED = DRAFT.replace("plain, and the argument follows", "unmistakable, and the argument follows");
-  ok("a contract-passing, in-band edit ships",
-    (await editAuthorVersion({ llm: stubLlm(async () => POLISHED), body: DRAFT, contract: CONTRACT })) === POLISHED,
+  ok("an in-band edit ships",
+    (await editAuthorVersion({ llm: stubLlm(async () => POLISHED), body: DRAFT, contract: CONTRACT, originalStory: ORIGINAL })) === POLISHED,
     "the edited version was not kept");
   ok("a whole-body code fence is stripped before judging",
-    (await editAuthorVersion({ llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``), body: DRAFT, contract: CONTRACT })) === POLISHED,
+    (await editAuthorVersion({ llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``), body: DRAFT, contract: CONTRACT, originalStory: ORIGINAL })) === POLISHED,
     "the fenced edit was not unwrapped and kept");
-  ok("an edit that breaks the contract keeps the draft",
+  const ONE_OUTLET = POLISHED.split("Beacon").join("Bacon");
+  ok("an in-band edit ships even when it drops a name: no contract check",
     (await editAuthorVersion({
-      llm: stubLlm(async () => POLISHED.split("Beacon").join("Bacon")),
+      llm: stubLlm(async () => ONE_OUTLET),
       body: DRAFT,
       contract: CONTRACT,
-    })) === DRAFT,
-    "a one-outlet edit shipped");
+      originalStory: ORIGINAL,
+    })) === ONE_OUTLET,
+    "the edit was held to the contract");
   const bandLogs: string[] = [];
   const SHREDDED = DRAFT.split(FILLER.repeat(8)).join(FILLER);
   ok("a shredded edit is rejected by the length band, draft kept",
@@ -884,11 +887,12 @@ async function editorChecks(): Promise<void> {
       llm: stubLlm(async () => SHREDDED),
       body: DRAFT,
       contract: CONTRACT,
+      originalStory: ORIGINAL,
       log: (l) => bandLogs.push(l),
     })) === DRAFT && bandLogs.some((l) => l.includes("outside the 70-130% length band")),
     bandLogs.join(" | "));
-  // The edit is the paper's last read: the best Gemini model, pinned, warmer
-  // than runEdit's default, told the names its gate will check.
+  // The edit is the paper's last read: the Flash models only, warmer than
+  // runEdit's default, told the names to keep, reading the original story.
   let seen: { prompt: string; model?: string; temperature?: number } = { prompt: "" };
   await editAuthorVersion({
     llm: {
@@ -902,12 +906,23 @@ async function editorChecks(): Promise<void> {
     },
     body: DRAFT,
     contract: CONTRACT,
+    originalStory: ORIGINAL,
   });
-  ok("the Editor runs on the pinned best model, at its own temperature",
-    seen.model === EDITOR_MODEL && EDITOR_MODEL === "gemini-3.5-flash-lite" && seen.temperature === EDITOR_TEMPERATURE && EDITOR_TEMPERATURE === 0.7,
+  ok("the Editor runs on the Flash models only, at its own temperature",
+    seen.model === EDITOR_MODEL && EDITOR_MODEL.split(",")[0] === "gemini-3.8-flash" && !/lite|gemma/.test(EDITOR_MODEL) && seen.temperature === EDITOR_TEMPERATURE && EDITOR_TEMPERATURE === 0.7,
     `${seen.model} @ ${seen.temperature}`);
-  ok("the Editor is told to keep the names its gate checks",
-    ['"Wire"', '"Beacon"', '"Panic of 1907"'].every((n) => seen.prompt.includes(n)) && seen.prompt.includes("thrown away if one drops out"),
+  ok("the Editor reads the original news story",
+    seen.prompt.includes("THE ORIGINAL NEWS STORY") && seen.prompt.includes(ORIGINAL) && seen.prompt.indexOf(ORIGINAL) < seen.prompt.indexOf("DRAFT:"),
+    seen.prompt.slice(-600));
+  const PAGES = [
+    { outlet: "BBC", title: "b", url: "https://bbc.test/b", content: "bbc text" },
+    { outlet: "AP News", title: "a", url: "https://ap.test/a", content: "ap text" },
+  ];
+  ok("originalStoryOf: the lead outlet's own page, matched loosely by name",
+    originalStoryOf(PAGES, "apnews.com").includes("ap text") && originalStoryOf(PAGES, "Reuters").includes("bbc text") && originalStoryOf([], "BBC") === "",
+    "");
+  ok("the Editor is told to keep the story's names",
+    ['"Wire"', '"Beacon"', '"Panic of 1907"'].every((n) => seen.prompt.includes(n)) && !seen.prompt.includes("thrown away"),
     seen.prompt.slice(-400));
   ok("protectedNames: only what the draft carries, as it writes it",
     JSON.stringify(protectedNames("Wire and the Guardian report; it echoes Dust Bowl summers.", {
@@ -925,6 +940,7 @@ async function editorChecks(): Promise<void> {
       }),
       body: DRAFT,
       contract: CONTRACT,
+      originalStory: ORIGINAL,
       log: (l) => throwLogs.push(l),
     })) === DRAFT && throwLogs.some((l) => l.includes("Editor failed")),
     throwLogs.join(" | "));

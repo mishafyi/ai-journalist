@@ -484,14 +484,27 @@ export async function composeAuthorVersion(args: {
   throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
 }
 
-/** The Editor is the last read before print: a Gemini model, never Gemma
- *  (operator, 2026-09-18) — Flash-Lite, the operator's pick for the desk's
- *  editorial calls (500 requests a day per key, against Flash's 20). Pinned,
- *  the rotation tries it on every key and on no other model; when all
- *  refuse, the edit throws and the draft ships. */
-export const EDITOR_MODEL = "gemini-3.5-flash-lite";
+/** The Editor is the last read before print and always runs on the Flash
+ *  models, the strongest free tier (20 requests a day per key each), in this
+ *  order on every key and never on Flash-Lite or Gemma (operator, 2026-09-19:
+ *  "always use for editor the expensive model"). With every Flash model spent
+ *  the call throws and the unedited column prints. */
+export const EDITOR_MODEL = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview";
 /** Warmer than runEdit's 0.5 (operator, 2026-09-18). */
 export const EDITOR_TEMPERATURE = 0.7;
+
+/** Pure. The original news story for the Editor: the lead outlet's own article
+ *  when the desk scraped it, else the first page that fed the evidence —
+ *  `outlet — title (url)` and the page's whole text. "" with no page. */
+export function originalStoryOf(
+  pages: readonly { outlet: string; title: string; url: string; content: string }[],
+  leadOutlet: string,
+): string {
+  const key = (s: string): string =>
+    s.toLowerCase().replace(/^the\s+/, "").replace(/^www\./, "").replace(/\.(com|co\.uk|org|net)$/, "").replace(/[^a-z0-9]/g, "");
+  const page = pages.find((p) => key(p.outlet) === key(leadOutlet)) ?? pages[0];
+  return page === undefined ? "" : `${page.outlet} — ${page.title} (${page.url})\n\n${page.content}`;
+}
 
 /** Pure. The names the contract checks that THIS draft carries — its outlets,
  *  the parallel, the echoes — in the form the draft writes them: what the
@@ -513,17 +526,19 @@ export function protectedNames(
  *  newspaper self-edit pass, gates.runEdit) without ever weakening the gate.
  *  It is the LAST read before print, for every columnist — after the lens,
  *  so a lens rewrite is edited too (operator, 2026-09-18).
- *  The edited text ships only when it stays inside lengthSafe's 70–130% band
- *  AND still passes checkAuthorVersionContract; any rejection — or a thrown
- *  edit call — keeps the draft, so the desk's hot path grows no new failure
- *  mode. The word floor injected into the prompt is the DRAFT's own size
+ *  It reads the original news story as reference. The edited text ships when
+ *  it stays inside lengthSafe's 70–130% band — no contract check (operator,
+ *  2026-09-19); a longer or shorter edit, or a thrown call, keeps the draft,
+ *  so the desk's hot path grows no new failure mode. The word floor injected into the prompt is the DRAFT's own size
  *  (never below the contract's 300), not runEdit's feature default of 1200:
  *  without a number near the real size the Editor shreds a piece (43–54%
  *  keeps, 2026-07-08), and 1200 would tell a 700-word column to pad. */
 export async function editAuthorVersion(args: {
   llm: LlmClient;
   body: string;
-  contract: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[]; wordCap: number; writerName: string };
+  contract: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[] };
+  /** The original news story (`originalStoryOf`), shown as reference. */
+  originalStory: string;
   log?: (line: string) => void;
 }): Promise<string> {
   const words = args.body.trim().split(/\s+/).length;
@@ -533,6 +548,7 @@ export async function editAuthorVersion(args: {
       model: EDITOR_MODEL,
       editTemperature: EDITOR_TEMPERATURE,
       editKeep: protectedNames(args.body, args.contract),
+      ...(args.originalStory === "" ? {} : { editContext: args.originalStory }),
       withRetry: async (_label, fn) => fn(),
       ctx: createRunContext("news-desk-editor"),
       gatherExemplars: () => [],
@@ -547,11 +563,6 @@ export async function editAuthorVersion(args: {
     const edited = stripPreambleAndFence(raw).trim();
     if (lengthSafe("author-editor", args.body, edited) !== edited) {
       args.log?.("news-desk: Editor rejected (outside the 70-130% length band) — keeping the draft");
-      return args.body;
-    }
-    const verdict = checkAuthorVersionContract(edited, args.contract);
-    if (!verdict.ok) {
-      args.log?.(`news-desk: Editor rejected (broke the contract: ${verdict.failures.join(" | ")}) — keeping the draft`);
       return args.body;
     }
     args.log?.(`news-desk: Editor kept (${words} → ${edited.split(/\s+/).length} words)`);
@@ -2111,6 +2122,10 @@ export function createNewsDesk(opts: {
             llm,
             body: lensBody,
             contract: authorContract,
+            originalStory: originalStoryOf(
+              pages.filter((p) => contributing.some((c) => c.url === p.url)),
+              story.leadOutlet,
+            ),
             log,
           });
           const content = `${stripVerdictLabel(finalBody)}${chartMarkdown}`;
