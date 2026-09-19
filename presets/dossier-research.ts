@@ -292,7 +292,9 @@ const POINT_STOPWORDS = new Set(
     "president senator secretary representative congress house senate federal register department state states united " +
     "government administration act order executive national office agency court january february march april may june " +
     "july august september october november december monday tuesday wednesday thursday friday saturday sunday document " +
-    "notice proclamation rule report article section part"
+    "notice proclamation rule report article section part " +
+    // Title abbreviations: "Sen. Lindsey Graham" in a document that writes "Senator".
+    "mr mrs ms dr st jr sr gen sen rep gov lt col capt prof rev hon pres sec amb"
   ).split(" "),
 );
 
@@ -326,8 +328,11 @@ const DEMONYMS: Readonly<Record<string, readonly string[]>> = {
   greek: ["greece"], turkish: ["turkey", "turkiye"], polish: ["poland"], danish: ["denmark"], swedish: ["sweden"],
   finnish: ["finland"], norwegian: ["norway"], filipino: ["philippines"], thai: ["thailand"], emirati: ["emirates"],
   kuwaiti: ["kuwait"], iraqi: ["iraq"], yemeni: ["yemen"], israeli: ["israel"], pakistani: ["pakistan"], afghan: ["afghanistan"],
-  saudi: ["saudi arabia"], kiwi: ["new zealand"],
+  saudi: ["saudi arabia"], kiwi: ["new zealand"], peruvian: ["peru"], argentine: ["argentina"], burmese: ["myanmar", "burma"],
 };
+
+/** What a demonym adds to its country's name: India+n, Iran+ian, China→Chinese is the stem's job. */
+const DEMONYM_ENDING = /^(n|an|ian|ean|ese|i|s|ish)$/;
 
 /** Abbreviations whose full stop does not end a sentence: "Mr. Biden" is one sentence. */
 const SENTENCE_END = /(?<!\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|Gen|Sen|Rep|Gov|Lt|Col|Capt|Prof|Rev|Hon|No|U\.S|[A-Z]))[.!?]\s+(?=[A-Z"“])/;
@@ -346,18 +351,25 @@ export function unsupportedInDoc(point: string, docText: string): string | null 
   const hay = ` ${plainWords(docText)} `;
   const numbers = numberKeys(docText);
   for (const m of point.matchAll(/(\d[\d,.]*\d|\d)(\s+(thousand|million|billion|trillion))?/gi)) {
-    const keys = numberKeys(m[0]);
-    if (numberKey(m[1]).length >= 2 && ![...keys].some((k) => numbers.has(k))) return m[1];
+    // A scaled number is compared by its value alone ("1.5 billion" never
+    // passes on a document's "1.5 million"), and even a single digit counts.
+    const scale = m[3] === undefined ? undefined : SCALES[m[3].toLowerCase()];
+    if (scale !== undefined) {
+      const value = String(Math.round(Number(m[1].replace(/,/g, "")) * scale));
+      if (!numbers.has(value)) return m[0];
+    } else if (numberKey(m[1]).length >= 2 && !numbers.has(numberKey(m[1]))) return m[1];
   }
   const known = (bare: string): boolean => {
     if (docWords.has(bare)) return true;
-    // A demonym and its country either way round: "indian" for a document
-    // that says "india", "iran" for one that only says "iranian".
+    // A demonym and its country either way round — only when what is left over
+    // is a demonym's ending: "indian" for "india", "iran" for "iranian", but
+    // never "johnson" for "john" or "bush" for "bushels".
     // Or its stem does: "ukrainian" → "ukrain", found in "ukraine".
     const stem = bare.replace(/(ian|ean|ese|an|i|n|s)$/, "");
     for (const w of docWords) {
-      if (w.length >= 4 && bare.length >= 4 && (bare.startsWith(w) || w.startsWith(bare))) return true;
-      if (stem.length >= 4 && w.startsWith(stem)) return true;
+      if (w.length >= 4 && bare.length >= 4 && bare.startsWith(w) && DEMONYM_ENDING.test(bare.slice(w.length))) return true;
+      if (w.length >= 4 && bare.length >= 4 && w.startsWith(bare) && DEMONYM_ENDING.test(w.slice(bare.length))) return true;
+      if (stem.length >= 4 && stem !== bare && w.startsWith(stem) && w.length - stem.length <= 2) return true;
     }
     return (DEMONYMS[bare] ?? []).some((country) => hay.includes(` ${country} `));
   };

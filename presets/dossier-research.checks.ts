@@ -74,6 +74,14 @@ ok(unsupportedInDoc("The order was signed by Mr. Biden.", DOC3) === "Biden", "un
 ok(unsupportedInDoc("The order was signed by Donald J. Biden.", DOC3) === "Biden", "unsupportedInDoc: a middle initial does not end a sentence", String(unsupportedInDoc("The order was signed by Donald J. Biden.", DOC3)));
 ok(unsupportedInDoc("The duties total 1.5 billion dollars.", DOC3) === null, "unsupportedInDoc: 1.5 billion matches 1,500,000,000", String(unsupportedInDoc("The duties total 1.5 billion dollars.", DOC3)));
 
+const DOC4 = "Senator Lindsey Graham sold 400 bushels. John Carter's cart changed hands for 1.5 million dollars.";
+for (const [point, wrong] of [["The grain went to Mr. Bush.", "Bush"], ["The sale was approved by Johnson.", "Johnson"], ["President Chan approved the sale.", "Chan"]] as const) {
+  ok(unsupportedInDoc(point, DOC4) === wrong, `unsupportedInDoc: ${wrong} is not accepted on a word it merely starts`, String(unsupportedInDoc(point, DOC4)));
+}
+ok(unsupportedInDoc("It was sold by Sen. Lindsey Graham.", DOC4) === null, "unsupportedInDoc: a title abbreviation is not a name", String(unsupportedInDoc("It was sold by Sen. Lindsey Graham.", DOC4)));
+ok(unsupportedInDoc("The cart changed hands for 1.5 billion dollars.", DOC4) === "1.5 billion", "unsupportedInDoc: 1.5 billion does not pass on 1.5 million", String(unsupportedInDoc("The cart changed hands for 1.5 billion dollars.", DOC4)));
+ok(unsupportedInDoc("The cart changed hands for 3 billion dollars.", DOC4) === "3 billion", "unsupportedInDoc: a single-digit scaled number is checked", String(unsupportedInDoc("The cart changed hands for 3 billion dollars.", DOC4)));
+
 if (failed > 0) {
   console.log(`dossier-research checks: ${failed} FAILED`);
   process.exit(1);
