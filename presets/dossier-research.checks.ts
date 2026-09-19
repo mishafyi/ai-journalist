@@ -82,6 +82,15 @@ ok(unsupportedInDoc("It was sold by Sen. Lindsey Graham.", DOC4) === null, "unsu
 ok(unsupportedInDoc("The cart changed hands for 1.5 billion dollars.", DOC4) === "1.5 billion", "unsupportedInDoc: 1.5 billion does not pass on 1.5 million", String(unsupportedInDoc("The cart changed hands for 1.5 billion dollars.", DOC4)));
 ok(unsupportedInDoc("The cart changed hands for 3 billion dollars.", DOC4) === "3 billion", "unsupportedInDoc: a single-digit scaled number is checked", String(unsupportedInDoc("The cart changed hands for 3 billion dollars.", DOC4)));
 
+const DOC5 = "Talks between Germany, Belgium, Congo, Slovakia, Iceland, Uzbekistan, Kazakhstan, America, Russia and Iran raised 1.5 billion.";
+for (const demonym of ["German", "Belgian", "Congolese", "Slovak", "Icelandic", "Uzbek", "Kazakh", "Americans", "Russians", "Iranians"]) {
+  ok(unsupportedInDoc(`The talks included ${demonym} envoys.`, DOC5) === null, `unsupportedInDoc: ${demonym} matches its country`, String(unsupportedInDoc(`The talks included ${demonym} envoys.`, DOC5)));
+}
+for (const abbr of ["Pres.", "Sec.", "Amb."]) {
+  ok(unsupportedInDoc(`The talks were led by ${abbr} Biden.`, DOC5) === "Biden", `unsupportedInDoc: ${abbr} keeps the name after it checked`, String(unsupportedInDoc(`The talks were led by ${abbr} Biden.`, DOC5)));
+}
+ok(unsupportedInDoc("The talks raised 1.5bn.", DOC5) === null, "unsupportedInDoc: 1.5bn reads as 1.5 billion", String(unsupportedInDoc("The talks raised 1.5bn.", DOC5)));
+
 if (failed > 0) {
   console.log(`dossier-research checks: ${failed} FAILED`);
   process.exit(1);

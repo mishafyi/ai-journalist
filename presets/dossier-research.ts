@@ -305,14 +305,14 @@ const plainWords = (x: string): string =>
 /** Pure. A number as compared: its digits alone ("4.5" and "4,5" are "45"). */
 const numberKey = (m: string): string => m.replace(/[^0-9]/g, "");
 
-const SCALES: Readonly<Record<string, number>> = { thousand: 1e3, million: 1e6, billion: 1e9, trillion: 1e12 };
+const SCALES: Readonly<Record<string, number>> = { thousand: 1e3, million: 1e6, mn: 1e6, billion: 1e9, bn: 1e9, trillion: 1e12, tn: 1e12 };
 
 /** Pure. Every number `text` writes, as digit keys: each numeral's digits, and
  *  a numeral with a scale word also as its full value ("1.5 billion" is also
  *  "1500000000"). */
 function numberKeys(text: string): Set<string> {
   const keys = new Set<string>();
-  for (const m of text.matchAll(/(\d[\d,.]*\d|\d)(\s+(thousand|million|billion|trillion))?/gi)) {
+  for (const m of text.matchAll(/(\d[\d,.]*\d|\d)(\s*(thousand|million|billion|trillion|mn|bn|tn)\b)?/gi)) {
     keys.add(numberKey(m[1]));
     const scale = m[3] === undefined ? undefined : SCALES[m[3].toLowerCase()];
     const value = Number(m[1].replace(/,/g, ""));
@@ -328,14 +328,18 @@ const DEMONYMS: Readonly<Record<string, readonly string[]>> = {
   greek: ["greece"], turkish: ["turkey", "turkiye"], polish: ["poland"], danish: ["denmark"], swedish: ["sweden"],
   finnish: ["finland"], norwegian: ["norway"], filipino: ["philippines"], thai: ["thailand"], emirati: ["emirates"],
   kuwaiti: ["kuwait"], iraqi: ["iraq"], yemeni: ["yemen"], israeli: ["israel"], pakistani: ["pakistan"], afghan: ["afghanistan"],
-  saudi: ["saudi arabia"], kiwi: ["new zealand"], peruvian: ["peru"], argentine: ["argentina"], burmese: ["myanmar", "burma"],
+  saudi: ["saudi arabia"], kiwi: ["new zealand"], peruvian: ["peru"], argentine: ["argentina"], burmese: ["myanmar", "burma"], belgian: ["belgium"],
 };
 
-/** What a demonym adds to its country's name: India+n, Iran+ian, China→Chinese is the stem's job. */
-const DEMONYM_ENDING = /^(n|an|ian|ean|ese|i|s|ish)$/;
+/** What a demonym adds to its country's name (India+n, Iran+ian, Congo+lese,
+ *  Iceland+ic) — and what a country adds to its demonym (German+y,
+ *  Slovak+ia, Uzbek+istan, Kazakh+stan). Anything else left over is a
+ *  different word: "johnson" is not "john". */
+const DEMONYM_ENDING = /^(n|an|ian|ean|ese|lese|i|s|ish|ic)$/;
+const COUNTRY_ENDING = /^(y|ia|ium|o|a|e|istan|stan)$/;
 
 /** Abbreviations whose full stop does not end a sentence: "Mr. Biden" is one sentence. */
-const SENTENCE_END = /(?<!\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|Gen|Sen|Rep|Gov|Lt|Col|Capt|Prof|Rev|Hon|No|U\.S|[A-Z]))[.!?]\s+(?=[A-Z"“])/;
+const SENTENCE_END = /(?<!\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|Gen|Sen|Rep|Gov|Lt|Col|Capt|Prof|Rev|Hon|Pres|Sec|Amb|No|U\.S|[A-Z]))[.!?]\s+(?=[A-Z"“])/;
 
 /** Pure. The first capitalised name or multi-digit number in `point` that
  *  `docText` does not contain; null when there is none. A key point is the
@@ -350,7 +354,7 @@ export function unsupportedInDoc(point: string, docText: string): string | null 
   const docWords = new Set(plainWords(docText).split(" ").filter((w) => w !== ""));
   const hay = ` ${plainWords(docText)} `;
   const numbers = numberKeys(docText);
-  for (const m of point.matchAll(/(\d[\d,.]*\d|\d)(\s+(thousand|million|billion|trillion))?/gi)) {
+  for (const m of point.matchAll(/(\d[\d,.]*\d|\d)(\s*(thousand|million|billion|trillion|mn|bn|tn)\b)?/gi)) {
     // A scaled number is compared by its value alone ("1.5 billion" never
     // passes on a document's "1.5 million"), and even a single digit counts.
     const scale = m[3] === undefined ? undefined : SCALES[m[3].toLowerCase()];
@@ -359,7 +363,9 @@ export function unsupportedInDoc(point: string, docText: string): string | null 
       if (!numbers.has(value)) return m[0];
     } else if (numberKey(m[1]).length >= 2 && !numbers.has(numberKey(m[1]))) return m[1];
   }
-  const known = (bare: string): boolean => {
+  // A plural reads as its singular: "Americans" for a document's "America".
+  const known = (bare: string): boolean => knownOne(bare) || (bare.length > 4 && bare.endsWith("s") && knownOne(bare.slice(0, -1)));
+  const knownOne = (bare: string): boolean => {
     if (docWords.has(bare)) return true;
     // A demonym and its country either way round — only when what is left over
     // is a demonym's ending: "indian" for "india", "iran" for "iranian", but
@@ -368,7 +374,7 @@ export function unsupportedInDoc(point: string, docText: string): string | null 
     const stem = bare.replace(/(ian|ean|ese|an|i|n|s)$/, "");
     for (const w of docWords) {
       if (w.length >= 4 && bare.length >= 4 && bare.startsWith(w) && DEMONYM_ENDING.test(bare.slice(w.length))) return true;
-      if (w.length >= 4 && bare.length >= 4 && w.startsWith(bare) && DEMONYM_ENDING.test(w.slice(bare.length))) return true;
+      if (w.length >= 4 && bare.length >= 4 && w.startsWith(bare) && (DEMONYM_ENDING.test(w.slice(bare.length)) || COUNTRY_ENDING.test(w.slice(bare.length)))) return true;
       if (stem.length >= 4 && stem !== bare && w.startsWith(stem) && w.length - stem.length <= 2) return true;
     }
     return (DEMONYMS[bare] ?? []).some((country) => hay.includes(` ${country} `));
