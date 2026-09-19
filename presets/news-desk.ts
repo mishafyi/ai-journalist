@@ -861,7 +861,7 @@ export async function gatherPrimaryData(args: {
   datagod: DatagodClient;
   plays: readonly DataPlay[];
   storyHeadline: string;
-  evidenceHead: string;
+  evidence: string;
   model?: string;
   log?: (line: string) => void;
   recordArtifact?: (label: string, content: string) => void;
@@ -880,7 +880,7 @@ export async function gatherPrimaryData(args: {
         },
         {
           role: "user",
-          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS (excerpt):\n${args.evidenceHead}\n\nMENU:\n${menu}\n\nPick 0-2 plays. Field rules: seriesId is ONLY the bare code, exactly as written in the menu (e.g. "NY.GDP.MKTP.KD.ZG" or "NGDP_RPCH") — never a description, never inside query. For fred_series set seriesId; for worldbank_indicator and imf_weo set seriesId AND country (ISO code); for usaspending_search and wikipedia_summary set query; for eonet_events set query to the category word; for nasdaq_price and edgar_filings set ticker.`,
+          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS:\n${args.evidence}\n\nMENU:\n${menu}\n\nPick 0-2 plays. Field rules: seriesId is ONLY the bare code, exactly as written in the menu (e.g. "NY.GDP.MKTP.KD.ZG" or "NGDP_RPCH") — never a description, never inside query. For fred_series set seriesId; for worldbank_indicator and imf_weo set seriesId AND country (ISO code); for usaspending_search and wikipedia_summary set query; for eonet_events set query to the category word; for nasdaq_price and edgar_filings set ticker.`,
         },
       ],
       schema: DataPlayPick,
@@ -1746,7 +1746,7 @@ export function createNewsDesk(opts: {
             datagod: opts.datagod,
             plays: opts.dataPlays ?? DATA_PLAYS,
             storyHeadline: story.headline,
-            evidenceHead: evidence.slice(0, 1200),
+            evidence,
             ...(opts.log === undefined ? {} : { log: opts.log }),
             ...(recordArtifact === undefined ? {} : { recordArtifact }),
           });
@@ -1841,7 +1841,7 @@ export function createNewsDesk(opts: {
                 },
                 {
                   role: "user",
-                  content: `STORY:\n${story.headline}\n${evidence.slice(0, 1000)}\n\nCANDIDATES:\n${field
+                  content: `STORY:\n${story.headline}\n${evidence}\n\nCANDIDATES:\n${field
                     .map(
                       (f, i) =>
                         `${i + 1}. ${f.v.event} (${f.v.era})\nRECORD: ${f.v.extract.slice(0, 500)}\nWEB: ${f.webNotes || "(none)"}`,
@@ -1870,7 +1870,7 @@ export function createNewsDesk(opts: {
         };
         const candidates = await proposeParallels({
           llm,
-          storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
+          storySummary: `${story.headline}\n${evidence}`,
           count: knobs.parallelCount,
         });
         let field = await researchField(dropRecent(candidates), knobs.parallelCount);
@@ -1882,7 +1882,7 @@ export function createNewsDesk(opts: {
           const avoid = candidates.map((c) => c.event).join("; ");
           const retryCandidates = await proposeParallels({
             llm,
-            storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
+            storySummary: `${story.headline}\n${evidence}`,
             count: knobs.parallelCount,
             correctiveContext: `Prior candidates scored poorly or failed verification: ${avoid}. Propose DIFFERENT precedents whose causal mechanism matches the story — other eras, other domains.`.slice(0, 1200),
           });
@@ -1918,7 +1918,7 @@ export function createNewsDesk(opts: {
           try {
             const echoCandidates = await proposeParallels({
               llm,
-              storySummary: `${story.headline}\n${evidence.slice(0, 1500)}`,
+              storySummary: `${story.headline}\n${evidence}`,
               count: knobs.echoCount,
               windowYears: 20,
             });
@@ -1994,7 +1994,7 @@ export function createNewsDesk(opts: {
                 },
                 {
                   role: "user",
-                  content: `Story: ${story.headline}\n\nEvidence excerpt:\n${evidence.slice(0, 1200)}\n\nAlso choose the ONE section this story files under, from exactly this list: ${SECTIONS.join(", ")}.`,
+                  content: `Story: ${story.headline}\n\nEvidence:\n${evidence}\n\nAlso choose the ONE section this story files under, from exactly this list: ${SECTIONS.join(", ")}.`,
                 },
               ],
               // PERMISSIVE ON PURPOSE, then shaped in code below. The bounds
