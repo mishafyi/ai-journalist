@@ -526,10 +526,9 @@ export function protectedNames(
  *  newspaper self-edit pass, gates.runEdit) without ever weakening the gate.
  *  It is the LAST read before print, for every columnist — after the lens,
  *  so a lens rewrite is edited too (operator, 2026-09-18).
- *  It reads the original news story as reference. The edited text ships when
- *  it stays inside lengthSafe's 70–130% band — no contract check (operator,
- *  2026-09-19); a longer or shorter edit, or a thrown call, keeps the draft,
- *  so the desk's hot path grows no new failure mode. The word floor injected into the prompt is the DRAFT's own size
+ *  It reads the original news story as reference, and what it returns prints:
+ *  no contract check and no length band (operator, 2026-09-19). Only a thrown
+ *  call keeps the draft, so the desk's hot path grows no new failure mode. The word floor injected into the prompt is the DRAFT's own size
  *  (never below the contract's 300), not runEdit's feature default of 1200:
  *  without a number near the real size the Editor shreds a piece (43–54%
  *  keeps, 2026-07-08), and 1200 would tell a 700-word column to pad. */
@@ -561,10 +560,6 @@ export async function editAuthorVersion(args: {
       editWordFloor: Math.max(300, Math.round(words * 0.85)),
     });
     const edited = stripPreambleAndFence(raw).trim();
-    if (lengthSafe("author-editor", args.body, edited) !== edited) {
-      args.log?.("news-desk: Editor rejected (outside the 70-130% length band) — keeping the draft");
-      return args.body;
-    }
     args.log?.(`news-desk: Editor kept (${words} → ${edited.split(/\s+/).length} words)`);
     return edited;
   } catch (err: unknown) {
@@ -2186,9 +2181,8 @@ export function createNewsDesk(opts: {
           });
           if (composed === null) log?.(`news-desk: headline unverified — keeping the wire headline`);
           const title = composed ?? sourceHeadline;
-          const rawSlug = internals.slugify(title);
-          const slug =
-            rawSlug.length <= 70 ? rawSlug : rawSlug.slice(0, 70).replace(/-[^-]*$/, "").replace(/-+$/, "");
+          // The whole title, never cut (operator, 2026-09-19: "don't cut anything during publish").
+          const slug = internals.slugify(title);
           const article: GeneratedArticle = {
             title,
             description: dekFrom(body),

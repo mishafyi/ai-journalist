@@ -825,8 +825,8 @@ async function orchestrationChecks(): Promise<void> {
   process.stdout.write("news-desk (part 2) checks: all green\n");
 }
 
-/** editAuthorVersion: the edit ships inside the 70–130% band — there is no
- *  contract check (operator, 2026-09-19) — on the Flash models, with the
+/** editAuthorVersion: whatever the Editor returns ships — no contract check,
+ *  no length band (operator, 2026-09-19) — on the Flash models, with the
  *  original news story as reference; a thrown call keeps the draft. */
 async function editorChecks(): Promise<void> {
   let failures = 0;
@@ -865,14 +865,14 @@ async function editorChecks(): Promise<void> {
   });
 
   const POLISHED = DRAFT.replace("plain, and the argument follows", "unmistakable, and the argument follows");
-  ok("an in-band edit ships",
+  ok("an edit ships",
     (await editAuthorVersion({ llm: stubLlm(async () => POLISHED), body: DRAFT, contract: CONTRACT, originalStory: ORIGINAL })) === POLISHED,
     "the edited version was not kept");
   ok("a whole-body code fence is stripped before judging",
     (await editAuthorVersion({ llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``), body: DRAFT, contract: CONTRACT, originalStory: ORIGINAL })) === POLISHED,
     "the fenced edit was not unwrapped and kept");
   const ONE_OUTLET = POLISHED.split("Beacon").join("Bacon");
-  ok("an in-band edit ships even when it drops a name: no contract check",
+  ok("an edit ships even when it drops a name: no contract check",
     (await editAuthorVersion({
       llm: stubLlm(async () => ONE_OUTLET),
       body: DRAFT,
@@ -882,14 +882,14 @@ async function editorChecks(): Promise<void> {
     "the edit was held to the contract");
   const bandLogs: string[] = [];
   const SHREDDED = DRAFT.split(FILLER.repeat(8)).join(FILLER);
-  ok("a shredded edit is rejected by the length band, draft kept",
+  ok("a much shorter edit still ships: no length band",
     (await editAuthorVersion({
       llm: stubLlm(async () => SHREDDED),
       body: DRAFT,
       contract: CONTRACT,
       originalStory: ORIGINAL,
       log: (l) => bandLogs.push(l),
-    })) === DRAFT && bandLogs.some((l) => l.includes("outside the 70-130% length band")),
+    })) === SHREDDED && bandLogs.some((l) => l.includes("Editor kept")),
     bandLogs.join(" | "));
   // The edit is the paper's last read: the Flash models only, warmer than
   // runEdit's default, told the names to keep, reading the original story.
