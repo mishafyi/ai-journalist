@@ -1097,6 +1097,8 @@ function properNounsOf(text: string): Set<string> {
  *  and the wires (`hay`, normalised; `hayDigits`; `hayNames` with apostrophes
  *  and hyphens removed) do not carry — what a headline or a dek would assert
  *  on its own. */
+const QUOTATION = /["“]([^"”]{4,})["”]|(?<![A-Za-z])['‘]([^'’]{4,}?)['’](?![A-Za-z])/g;
+
 function unsupportedClaims(text: string, hay: string, hayDigits: string, hayNames: string): string[] {
   const failures: string[] = [];
   // A number is always a claim.
@@ -1107,14 +1109,18 @@ function unsupportedClaims(text: string, hay: string, hayDigits: string, hayName
   // A capitalised word that is not a stopword is a name, place or institution.
   const words = text.split(/[^A-Za-z0-9'’.-]+/).filter((w) => w !== "");
   words.slice(1).forEach((w) => {
-    const bare = w.replace(/[^A-Za-z]/g, "");
+    // A possessive is its name: "Salman's" checks as "Salman".
+    const bare = w.replace(/['’]s?$/, "").replace(/[^A-Za-z]/g, "");
     if (bare.length < 3 || !/^[A-Z]/.test(bare)) return;
     if (HEADLINE_STOPWORDS.has(bare.toLowerCase())) return;
     if (!hayNames.includes(norm(bare))) failures.push(`name not in the column: ${bare}`);
   });
-  // A quotation is the one thing a reader takes as verbatim.
-  for (const m of text.matchAll(/["“']([^"”']{4,})["”']/g)) {
-    if (!hay.includes(norm(m[1] ?? ""))) failures.push(`quotation not in the column: "${m[1]}"`);
+  // A quotation is the one thing a reader takes as verbatim. A single quote
+  // opens one only where no letter precedes it and closes one only where no
+  // letter follows it, so two possessives ("Riyadh's … Arabia's") are not a quote.
+  for (const m of text.matchAll(QUOTATION)) {
+    const quoted = m[1] ?? m[2] ?? "";
+    if (!hay.includes(norm(quoted))) failures.push(`quotation not in the column: "${quoted}"`);
   }
   return failures;
 }

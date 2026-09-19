@@ -678,6 +678,22 @@ async function orchestrationChecks(): Promise<void> {
   ok("validateDek: a name the column lacks is refused",
     validateDek(`${GOOD_DEK} while Christine Lagarde watched`, { body: DEK_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).some((f) => f.includes("Lagarde")),
     "");
+  // Production, 2026-09-19: both were refused, and the story printed the wire
+  // headline and the column's first paragraph instead.
+  const MBS_COLUMN = "Crown Prince Mohammed bin Salman bet on Donald Trump. Riyadh wants Washington to hold the line while Saudi Arabia avoids a ground war, and the Houthis hold the chokepoint.";
+  ok("validateHeadline: a possessive is its name (\"Salman's\" checks as Salman)",
+    validateHeadline("Mohammed bin Salman's reliance on Trump is a fantasy", { body: MBS_COLUMN, sourceHeadline: "Houthis accuse Saudi Arabia", personaName: "Test Writer", maxChars: 70 }).length === 0,
+    validateHeadline("Mohammed bin Salman's reliance on Trump is a fantasy", { body: MBS_COLUMN, sourceHeadline: "Houthis accuse Saudi Arabia", personaName: "Test Writer", maxChars: 70 }).join("; "));
+  const MBS_DEK = "Riyadh's attempt to outsource its security to Washington amid Houthi attacks reveals the failure of Saudi Arabia's strategic dependence on Donald Trump.";
+  ok("validateDek: two possessives are not a quotation",
+    validateDek(MBS_DEK, { body: MBS_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).length === 0,
+    validateDek(MBS_DEK, { body: MBS_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).join("; "));
+  ok("validateDek: a single-quoted phrase the column lacks is still a quotation",
+    validateDek(`Riyadh calls it 'a war of necessity' while the Houthis hold the chokepoint and Donald Trump weighs his options in Washington.`, { body: MBS_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).some((f) => f.startsWith("quotation not in the column")),
+    "");
+  ok("validateDek: a double-quoted phrase the column lacks is refused",
+    validateDek(`Riyadh calls it "a war of necessity" while the Houthis hold the chokepoint and Donald Trump weighs his options in Washington.`, { body: MBS_COLUMN, sourceHeadline: [], personaName: "Test Writer" }).some((f) => f.startsWith("quotation not in the column")),
+    "");
   const replies = [
     { headline: "Jerome Powell finally chose credibility at the Federal Reserve", dek: `${GOOD_DEK}, as Christine Lagarde did` },
     { headline: "ignored on the retry", dek: GOOD_DEK },
