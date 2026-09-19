@@ -66,6 +66,14 @@ for (const [point, why] of [
   ok(unsupportedInDoc(point, DOC2) === null, `unsupportedInDoc: passes ${why}`, String(unsupportedInDoc(point, DOC2)));
 }
 
+const DOC3 = "Duties on India, Korea, Syria, Cuba, Mali, Peru, Norway, Britain, France, Turkey, Greece and the Philippines total 1,500,000,000 dollars. Donald Trump signed it.";
+for (const demonym of ["Indian", "Korean", "Syrian", "Cuban", "Malian", "Peruvian", "Norwegian", "British", "French", "Turkish", "Greek", "Filipino"]) {
+  ok(unsupportedInDoc(`The duties hit ${demonym} exporters.`, DOC3) === null, `unsupportedInDoc: the demonym ${demonym} matches its country`, String(unsupportedInDoc(`The duties hit ${demonym} exporters.`, DOC3)));
+}
+ok(unsupportedInDoc("The order was signed by Mr. Biden.", DOC3) === "Biden", "unsupportedInDoc: 'Mr.' does not end a sentence, so Biden is checked", String(unsupportedInDoc("The order was signed by Mr. Biden.", DOC3)));
+ok(unsupportedInDoc("The order was signed by Donald J. Biden.", DOC3) === "Biden", "unsupportedInDoc: a middle initial does not end a sentence", String(unsupportedInDoc("The order was signed by Donald J. Biden.", DOC3)));
+ok(unsupportedInDoc("The duties total 1.5 billion dollars.", DOC3) === null, "unsupportedInDoc: 1.5 billion matches 1,500,000,000", String(unsupportedInDoc("The duties total 1.5 billion dollars.", DOC3)));
+
 if (failed > 0) {
   console.log(`dossier-research checks: ${failed} FAILED`);
   process.exit(1);

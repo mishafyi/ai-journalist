@@ -303,30 +303,71 @@ const plainWords = (x: string): string =>
 /** Pure. A number as compared: its digits alone ("4.5" and "4,5" are "45"). */
 const numberKey = (m: string): string => m.replace(/[^0-9]/g, "");
 
+const SCALES: Readonly<Record<string, number>> = { thousand: 1e3, million: 1e6, billion: 1e9, trillion: 1e12 };
+
+/** Pure. Every number `text` writes, as digit keys: each numeral's digits, and
+ *  a numeral with a scale word also as its full value ("1.5 billion" is also
+ *  "1500000000"). */
+function numberKeys(text: string): Set<string> {
+  const keys = new Set<string>();
+  for (const m of text.matchAll(/(\d[\d,.]*\d|\d)(\s+(thousand|million|billion|trillion))?/gi)) {
+    keys.add(numberKey(m[1]));
+    const scale = m[3] === undefined ? undefined : SCALES[m[3].toLowerCase()];
+    const value = Number(m[1].replace(/,/g, ""));
+    if (scale !== undefined && Number.isFinite(value)) keys.add(String(Math.round(value * scale)));
+  }
+  return keys;
+}
+
+/** Nationality words whose country is not their stem. */
+const DEMONYMS: Readonly<Record<string, readonly string[]>> = {
+  british: ["britain", "united kingdom"], english: ["england"], scottish: ["scotland"], welsh: ["wales"], irish: ["ireland"],
+  french: ["france"], dutch: ["netherlands", "holland"], swiss: ["switzerland"], spanish: ["spain"], portuguese: ["portugal"],
+  greek: ["greece"], turkish: ["turkey", "turkiye"], polish: ["poland"], danish: ["denmark"], swedish: ["sweden"],
+  finnish: ["finland"], norwegian: ["norway"], filipino: ["philippines"], thai: ["thailand"], emirati: ["emirates"],
+  kuwaiti: ["kuwait"], iraqi: ["iraq"], yemeni: ["yemen"], israeli: ["israel"], pakistani: ["pakistan"], afghan: ["afghanistan"],
+  saudi: ["saudi arabia"], kiwi: ["new zealand"],
+};
+
+/** Abbreviations whose full stop does not end a sentence: "Mr. Biden" is one sentence. */
+const SENTENCE_END = /(?<!\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|Gen|Sen|Rep|Gov|Lt|Col|Capt|Prof|Rev|Hon|No|U\.S|[A-Z]))[.!?]\s+(?=[A-Z"“])/;
+
 /** Pure. The first capitalised name or multi-digit number in `point` that
  *  `docText` does not contain; null when there is none. A key point is the
  *  model's reading of a document, and a name or number the document lacks is a
  *  claim it did not make ("President Biden issued" a notice Trump signed,
- *  2026-09-19). Lenient where language is: a sentence's first word, a
- *  possessive, each part of a hyphenated name, and a demonym ("Indian" for
- *  "India", "Ukrainian" for "Ukraine") are all read as the document would
- *  write them. */
+ *  2026-09-19). Names are matched as whole words, leniently where language is:
+ *  a sentence's first word (after a real sentence end, never "Mr." or "J."),
+ *  a possessive, each part of a hyphenated name, a demonym ("Indian" for a
+ *  document that says "India", "British" for "Britain"), accents; numbers by
+ *  their digits or their scaled value ("1.5 billion" = "1,500,000,000"). */
 export function unsupportedInDoc(point: string, docText: string): string | null {
+  const docWords = new Set(plainWords(docText).split(" ").filter((w) => w !== ""));
   const hay = ` ${plainWords(docText)} `;
-  const numbers = new Set((docText.match(/\d[\d,.]*\d|\d/g) ?? []).map(numberKey));
-  for (const m of point.match(/\d[\d,.]*\d|\d/g) ?? []) {
-    const n = numberKey(m);
-    if (n.length >= 2 && !numbers.has(n)) return m;
+  const numbers = numberKeys(docText);
+  for (const m of point.matchAll(/(\d[\d,.]*\d|\d)(\s+(thousand|million|billion|trillion))?/gi)) {
+    const keys = numberKeys(m[0]);
+    if (numberKey(m[1]).length >= 2 && ![...keys].some((k) => numbers.has(k))) return m[1];
   }
-  for (const sentence of point.split(/(?<=[.!?])\s+/)) {
+  const known = (bare: string): boolean => {
+    if (docWords.has(bare)) return true;
+    // A demonym and its country either way round: "indian" for a document
+    // that says "india", "iran" for one that only says "iranian".
+    // Or its stem does: "ukrainian" → "ukrain", found in "ukraine".
+    const stem = bare.replace(/(ian|ean|ese|an|i|n|s)$/, "");
+    for (const w of docWords) {
+      if (w.length >= 4 && bare.length >= 4 && (bare.startsWith(w) || w.startsWith(bare))) return true;
+      if (stem.length >= 4 && w.startsWith(stem)) return true;
+    }
+    return (DEMONYMS[bare] ?? []).some((country) => hay.includes(` ${country} `));
+  };
+  for (const sentence of point.split(SENTENCE_END)) {
     const words = sentence.split(/[^A-Za-zÀ-ÿ'’.-]+/).filter((w) => w !== "");
     for (const word of words.slice(1)) {
       for (const part of word.replace(/['’]s$/i, "").split("-")) {
         const bare = plainWords(part).replace(/[^a-z]/g, "");
         if (bare.length < 3 || !/^[A-ZÀ-Þ]/.test(part.replace(/^[^A-Za-zÀ-ÿ]+/, "")) || POINT_STOPWORDS.has(bare)) continue;
-        const stem = bare.replace(/(ian|ean|ese|an|i|n|s)$/, "");
-        if (hay.includes(bare) || (stem.length >= 4 && hay.includes(stem))) continue;
-        return part.replace(/[^A-Za-zÀ-ÿ]/g, "");
+        if (!known(bare)) return part.replace(/[^A-Za-zÀ-ÿ]/g, "");
       }
     }
   }
