@@ -1,6 +1,6 @@
 /** Dossier research, the pure parts: the catalogue parsers, the call checker,
  *  and split-never-cut. Run: npx tsx presets/dossier-research.checks.ts */
-import { groupsUnder, itemCount, normQuote, parseEndpoints, parseGuide, splitText, validCall } from "./dossier-research";
+import { groupsUnder, itemCount, normQuote, parseEndpoints, parseGuide, partBudget, refListed, splitText, unsupportedInDoc, validCall } from "./dossier-research";
 
 let failed = 0;
 const ok = (cond: boolean, msg: string, detail = ""): void => {
@@ -42,6 +42,21 @@ ok(groups.length === 2 && groups[0].length === 2 && groups[1][0].length === 100,
 
 ok(itemCount({ meta: {}, data: { results: [{ a: 1 }, { a: 2 }] } }) === 2 && itemCount({ results: [] }) === 0, "itemCount: the first non-empty list of objects");
 ok(normQuote("It’s  “Done”\n now") === normQuote("its done now"), "normQuote: quotes and spacing do not decide a match");
+ok(refListed("frus1964-68v34/213", '{"volume":"frus1964-68v34","doc":"d213"}'), "refListed: a FRUS ref given in two fields is found");
+ok(refListed("0001680247-26-000058:exhibit991.htm", '{"_id":"0001680247-26-000058:exhibit991.htm"}'), "refListed: an EDGAR id is found");
+ok(!refListed("2026-00002", '{"results":[{"document_number":"2026-19251"}]}'), "refListed: a document no search returned is not");
+ok(partBudget(-5) === 50_000 && partBudget(80_000) === 80_000, "partBudget: never under 50,000 characters");
+let threw = false;
+try {
+  splitText("abc", 0);
+} catch {
+  threw = true;
+}
+ok(threw, "splitText: a zero budget throws instead of spinning");
+const DOC = "Continuation of the National Emergency. Donald J. Trump signed this notice on April 15, 2026, under the Russian Harmful Foreign Activities Sanctions program.";
+ok(unsupportedInDoc("President Biden issued the notice on April 15, 2026.", DOC) === "Biden", "unsupportedInDoc: a name the document lacks is caught", String(unsupportedInDoc("President Biden issued the notice", DOC)));
+ok(unsupportedInDoc("The notice, signed by Donald Trump in 2026, extends the Russian sanctions program.", DOC) === null, "unsupportedInDoc: a point the document supports passes", String(unsupportedInDoc("The notice, signed by Donald Trump in 2026, extends the Russian sanctions program.", DOC)));
+ok(unsupportedInDoc("It was signed on April 17, 2025.", DOC) === "17", "unsupportedInDoc: a number the document lacks is caught (the first one)", String(unsupportedInDoc("It was signed on April 17, 2025.", DOC)));
 
 if (failed > 0) {
   console.log(`dossier-research checks: ${failed} FAILED`);

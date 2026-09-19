@@ -302,7 +302,15 @@ export async function researchPrincipals(args: {
 }): Promise<DossierEntry[]> {
   if (args.datagod === undefined) return args.principals.map((p) => ({ ...p, research: "", detail: null }));
   const datagod = args.datagod;
-  const catalogue = await loadCatalogue({ datagod, ...(args.fetchImpl === undefined ? {} : { fetchImpl: args.fetchImpl }), ...(args.log === undefined ? {} : { log: args.log }) });
+  let catalogue: Awaited<ReturnType<typeof loadCatalogue>>;
+  try {
+    catalogue = await loadCatalogue({ datagod, ...(args.fetchImpl === undefined ? {} : { fetchImpl: args.fetchImpl }), ...(args.log === undefined ? {} : { log: args.log }) });
+  } catch (err: unknown) {
+    // No catalogue, no research — but the principals stand, and the
+    // connections and hypotheses still run on the source articles.
+    args.log?.(`dossier: DataGod's catalogue could not be read (no research this run): ${String(err)}`);
+    return args.principals.map((p) => ({ ...p, research: "", detail: null }));
+  }
   const opened = new Map<string, { id: string; doc: OpenedDoc }>();
   let docNo = 0;
   const entries: DossierEntry[] = [];

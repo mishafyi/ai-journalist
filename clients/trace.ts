@@ -98,6 +98,14 @@ function stepForLlm(entry: LlmTrace): string {
       return "05b-data-plays";
     case "story_principals":
       return "05c-principals";
+    case "dossier_rate_sources":
+      return "05c1-dossier-rate-sources";
+    case "dossier_plan_searches":
+      return "05c2-dossier-plan-searches";
+    case "dossier_pick_documents":
+      return "05c3-dossier-pick-documents";
+    case "dossier_notes":
+      return "05c4-dossier-notes";
     case "story_connections":
       return "05d-connections";
     case "story_hypotheses":

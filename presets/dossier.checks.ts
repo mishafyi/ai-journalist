@@ -131,6 +131,16 @@ ok(structured.filter((c) => c.schemaName !== "dossier_plan_searches").every((c) 
 ok(structured.some((c) => c.schemaName === "dossier_notes" && c.content.includes(WIKI)), "the notes call reads the whole document");
 ok(structured.some((c) => c.schemaName === "dossier_rate_sources" && c.content.includes("### FRED") && !c.content.includes("### Health")), "every offered source is scored; a non-data source is not offered");
 
+const noCatalogue = await researchPrincipals({
+  llm,
+  principals,
+  headline,
+  storyText,
+  datagod,
+  fetchImpl: (async () => new Response("", { status: 503 })) as typeof fetch,
+});
+ok(noCatalogue.length === 2 && noCatalogue.every((e) => e.research === "" && e.detail === null), "an unreadable catalogue keeps every principal, with no research");
+
 const connections = await findConnections({ llm, storyText, dossier: entries });
 ok(connections.length === 1 && connections[0].between.includes("Venezuela"), "a connection the articles already carry is dropped");
 const hypotheses = await projectHypotheses({ llm, storyText, dossier: entries, connections });

@@ -184,10 +184,20 @@ export function parseEndpoints(csv: string): CatalogueRow[] {
  *  fails is marked UNAVAILABLE, so the plan knows not to browse it. */
 export async function loadCatalogue(args: { datagod: DatagodClient; fetchImpl?: typeof fetch; log?: (line: string) => void }): Promise<Catalogue> {
   const doFetch = args.fetchImpl ?? fetch;
+  // Three tries, 5 s apart: one slow answer from GitHub must not cost the dossier.
   const text = async (url: string): Promise<string> => {
-    const res = await doFetch(url, { signal: AbortSignal.timeout(30_000) });
-    if (!res.ok) throw new Error(`dossier: catalogue ${url} → HTTP ${res.status}`);
-    return res.text();
+    let last: unknown = new Error(`dossier: catalogue ${url}: no attempt made`);
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const res = await doFetch(url, { signal: AbortSignal.timeout(30_000) });
+        if (res.ok) return await res.text();
+        last = new Error(`dossier: catalogue ${url} → HTTP ${res.status}`);
+      } catch (err: unknown) {
+        last = err;
+      }
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 5_000));
+    }
+    throw last;
   };
   const [guide, csv] = await Promise.all([text(GUIDE_URL), text(ENDPOINTS_URL)]);
   const registries: Record<string, string> = {};
@@ -256,6 +266,7 @@ export function itemCount(data: unknown): number {
  *  line break where one falls in the second half of the part, never dropping a
  *  character: `parts.join("") === text`. */
 export function splitText(text: string, max: number): string[] {
+  if (!(max > 0)) throw new Error(`splitText: a part must hold at least one character (max ${max})`);
   if (text.length <= max) return [text];
   const parts: string[] = [];
   let at = 0;
@@ -272,6 +283,38 @@ export function splitText(text: string, max: number): string[] {
     at += cut;
   }
   return parts;
+}
+
+/** Capitalised words a key point may use that its document need not contain. */
+const POINT_STOPWORDS = new Set(
+  (
+    "the a an and or of in on for to with by from as at it its this that these those he she they his her their " +
+    "president senator secretary representative congress house senate federal register department state states united " +
+    "government administration act order executive national office agency court january february march april may june " +
+    "july august september october november december monday tuesday wednesday thursday friday saturday sunday document " +
+    "notice proclamation rule report article section part"
+  ).split(" "),
+);
+
+/** Pure. The first capitalised name (not opening the point) or multi-digit
+ *  number in `point` that `docText` does not contain; null when there is none.
+ *  A key point is the model's reading of a document, and a name or number the
+ *  document lacks is a claim it did not make ("President Biden issued" a
+ *  notice Trump signed, 2026-09-19). */
+export function unsupportedInDoc(point: string, docText: string): string | null {
+  const hay = normQuote(docText).replace(/[^a-z0-9 ]+/g, " ");
+  const digits = docText.replace(/[^0-9]+/g, " ");
+  for (const m of point.match(/\d[\d,.]*\d/g) ?? []) {
+    const n = m.replace(/[^0-9]/g, "");
+    if (n.length >= 2 && !digits.includes(n)) return m;
+  }
+  const words = point.split(/[^A-Za-zÀ-ÿ'’.-]+/).filter((w) => w !== "");
+  for (const w of words.slice(1)) {
+    const bare = w.replace(/[^A-Za-zÀ-ÿ]/g, "");
+    if (bare.length < 3 || !/^[A-ZÀ-Þ]/.test(bare) || POINT_STOPWORDS.has(bare.toLowerCase())) continue;
+    if (!hay.includes(normQuote(bare).replace(/[^a-z0-9 ]+/g, ""))) return bare;
+  }
+  return null;
 }
 
 /** Pure. Lowercase, quotes gone, whitespace single — for checking a quote against its document. */
@@ -495,6 +538,8 @@ export interface ResearchedDoc {
   /** Quotes found word for word in the document's text; `quotesDropped` were not. */
   quotes: string[];
   quotesDropped: number;
+  /** Key points naming a name or number the document lacks (`unsupportedInDoc`). */
+  pointsDropped: number;
 }
 export interface PrincipalResearch {
   summary: string;
@@ -542,7 +587,14 @@ export async function researchOne(args: {
       `\n\nReturn JSON: {"ratings": [{"source", "score", "why"}]} with one entry for EVERY source above, named exactly as its heading.`,
     0.2,
   );
-  const ratings = rated.ratings.filter((r) => catalogue.sources.some((s) => s.name === r.source)).sort((a, b) => b.score - a.score);
+  // One score per source — the highest the model gave it — for sources in the catalogue.
+  const bestBySource = new Map<string, { source: string; score: number; why: string }>();
+  for (const r of rated.ratings) {
+    if (!catalogue.sources.some((s) => s.name === r.source)) continue;
+    const prev = bestBySource.get(r.source);
+    if (prev === undefined || r.score > prev.score) bestBySource.set(r.source, r);
+  }
+  const ratings = [...bestBySource.values()].sort((a, b) => b.score - a.score);
   const top = ratings.filter((r) => r.score >= MIN_SCORE).slice(0, TOP_SOURCES);
   log(`dossier: ${p.name} — sources rated ${ratings.length}/${catalogue.sources.length}; top: ${top.map((r) => `${r.source} ${r.score}`).join(", ")}`);
 
@@ -600,11 +652,25 @@ export async function researchOne(args: {
   const pickTail =
     `\n\nPick up to ${MAX_DOCS} documents to read IN FULL for the dossier on ${p.name}, most interesting first: the ones most likely to tell a reader something about ${p.name} that today's story does not. Prefer documents whose full text can be read; a catalogue record is a title and a few fields. Only documents listed above, each once. ref is the document's id copied exactly as the results give it:\n${REF_RULES}\n\n` +
     `Return JSON: {"picks": [{"source", "ref", "cik", "title", "why"}]}`;
-  const listingTexts = docListings.map((l, i) => `[L${i + 1}] ${l.source} — ${l.call}\nOpening one returns: ${RETURNS[l.source] ?? "its record"}\n${JSON.stringify(l.data)}`);
+  const pickBudget = partBudget(CALL_BUDGET_CHARS - pickHead.length - pickTail.length);
+  const listingTexts = docListings.flatMap((l, i) => {
+    const header = `[L${i + 1}] ${l.source} — ${l.call}\nOpening one returns: ${RETURNS[l.source] ?? "its record"}`;
+    const parts = splitText(JSON.stringify(l.data), partBudget(pickBudget - header.length - 40));
+    return parts.map((part, n) => `${header}${parts.length > 1 ? ` — part ${n + 1} of ${parts.length}` : ""}\n${part}`);
+  });
+  const listed = docListings.map((l) => JSON.stringify(l.data)).join("\n");
   const picks: Pick[] = [...directPicks];
-  for (const group of groupsUnder(listingTexts, CALL_BUDGET_CHARS - pickHead.length - pickTail.length)) {
+  for (const group of groupsUnder(listingTexts, pickBudget)) {
     const picked = await ask(PicksSchema, "dossier_pick_documents", `${pickHead}${group.join("\n\n")}${pickTail}`, 0.2);
-    picks.push(...picked.picks.map((x) => ({ ...x, source: canonicalSource(x.source) })));
+    for (const x of picked.picks) {
+      // A pick is only a document the searches returned: its ref must appear in
+      // a listing (two EPA rules were opened for Russia from nowhere, 2026-09-19).
+      if (!refListed(x.ref, listed)) {
+        log(`dossier: ${p.name} — pick "${x.title}" (${x.source} ${x.ref}) is in no listing — skipped`);
+        continue;
+      }
+      picks.push({ ...x, source: canonicalSource(x.source) });
+    }
   }
 
   // D. open each in full
@@ -649,12 +715,12 @@ export async function researchOne(args: {
   const items: string[] = [];
   for (const d of docs) {
     const header = `[${d.id}] ${d.doc.title} — ${d.pick.source}${d.doc.date ? `, ${d.doc.date}` : ""} — ${d.doc.url} (${d.doc.kind}, ${d.doc.text.length.toLocaleString()} chars)`;
-    const parts = splitText(d.doc.text, CALL_BUDGET_CHARS - notesHead.length - notesTail.length - header.length - 200);
+    const parts = splitText(d.doc.text, partBudget(CALL_BUDGET_CHARS - notesHead.length - notesTail.length - header.length - 200));
     parts.forEach((part, i) => items.push(`${header}${parts.length > 1 ? ` — part ${i + 1} of ${parts.length}` : ""}\n${part}`));
   }
   for (const r of records) {
     const header = `[${r.id}] ${r.source} records — ${r.call}`;
-    const parts = splitText(r.json, CALL_BUDGET_CHARS - notesHead.length - notesTail.length - header.length - 200);
+    const parts = splitText(r.json, partBudget(CALL_BUDGET_CHARS - notesHead.length - notesTail.length - header.length - 200));
     parts.forEach((part, i) => items.push(`${header}${parts.length > 1 ? ` — part ${i + 1} of ${parts.length}` : ""}\n${part}`));
   }
   const summaries: string[] = [];
@@ -677,6 +743,7 @@ export async function researchOne(args: {
     const note = noteByDoc.get(d.id) ?? { relevant: false, keyPoints: [], quotes: [] };
     const text = normQuote(d.doc.text);
     const kept = note.quotes.filter((q) => text.includes(normQuote(q)));
+    const points = note.keyPoints.filter((k) => unsupportedInDoc(k, d.doc.text) === null);
     return {
       id: d.id,
       source: d.pick.source,
@@ -687,9 +754,10 @@ export async function researchOne(args: {
       chars: d.doc.text.length,
       why: d.pick.why,
       relevant: note.relevant,
-      keyPoints: note.keyPoints,
+      keyPoints: points,
       quotes: kept,
       quotesDropped: note.quotes.length - kept.length,
+      pointsDropped: note.keyPoints.length - points.length,
     };
   });
   return {
@@ -699,6 +767,26 @@ export async function researchOne(args: {
     ratings,
     searches,
   };
+}
+
+/** Pure. The room a part gets beside a prompt's fixed text — never under
+ *  50,000 characters, so a very long source-article block still leaves each
+ *  document part a real size (the call runs over the budget then; nothing is
+ *  cut to fit). */
+export function partBudget(room: number): number {
+  return Math.max(50_000, room);
+}
+
+/** Pure. Whether a picked `ref` appears in what the searches returned: every
+ *  part of it (split at "/" and ":") of three or more characters is found in
+ *  the listings, compared without case, dashes, underscores or spaces — so a
+ *  FRUS "frus1964-68v34/213" matches a listing that gives the volume and the
+ *  document number in separate fields. */
+export function refListed(ref: string, listed: string): boolean {
+  const key = (s: string): string => s.toLowerCase().replace(/[\s_\\-]+/g, "");
+  const hay = key(listed);
+  const parts = String(ref).split(/[/:]/).map(key).filter((x) => x.length >= 3);
+  return parts.length > 0 && parts.every((x) => hay.includes(x));
 }
 
 /** Pure. `items` packed, in order, into groups whose joined length stays under
