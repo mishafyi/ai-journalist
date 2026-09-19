@@ -143,13 +143,38 @@ function themeHead(deps: GateDeps): string {
   return deps.theme ? `MAIN THEME of this piece: ${deps.theme}\n\n` : "";
 }
 
+/** Pass 6's rules, printed numbered and in this order. The podcast desk's line
+ *  edit (lorien-times scripts/podcast/run-podcast.mjs) mirrors them — edit both. */
+export const EDIT_RULES: readonly string[] = [
+  "Kill passive voice and nominalizations.",
+  "Fix adjective pile-up and editorializing.",
+  "Cut throat-clearing and clichés.",
+  "Break fact-lists into narrative.",
+  "Cut repeated material (each statistic, sentence, and company list appears ONCE, at its strongest spot — rephrase later references instead of restating the number).",
+  "Thin stat pile-ups (where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table).",
+  "Recast raw figures the pictorial way (round unless precision is the point; prefer ratios — \"one in four\" over \"24.7%\"; give an incomprehensibly large number one visualizable equivalent).",
+  "Never let two number-heavy paragraphs sit adjacent.",
+  "Hunt abstract blobs and replace them with specific pictorial words (\"severe personnel problems\" → the actual thing: turnover; \"resource companies\" → oil rigs and mines).",
+  "Keep the piece MOVING by alternating the general and the concrete (a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row).",
+  "When a stretch hides behind stacked citations, surface once and draw the prudent conclusion plainly in one sentence.",
+  "Ensure \"said\" attribution with at most two \"according to\" in the whole piece.",
+  "Vary sentence length.",
+  "Vary section-header shapes (never let every H2 share one construction — e.g. the \"Topic — Subtitle\" em-dash pattern on every header; mix plain noun phrases, claims, and the occasional question).",
+  "Cut ONLY what these edits name — line-fat, repetition, filler — never whole paragraphs or sections for brevity's sake.",
+  "Keep every markdown link and the H1 intact.",
+];
+
 /** Pass 6 — line-edit the draft (the journalist self-edit pass). */
 export async function runEdit(draft: string, deps: GateDeps): Promise<string> {
-  const prompt = `Line-edit this draft for publication. Apply the newspaper self-edit pass: kill passive voice and nominalizations, fix adjective pile-up and editorializing, cut throat-clearing and clichés, break fact-lists into narrative, cut repeated material (each statistic, sentence, and company list appears ONCE, at its strongest spot — rephrase later references instead of restating the number), thin stat pile-ups (where a paragraph strings three or more figures, keep the anchor number and fold the rest into one summarizing clause — or, when the figures are comparable salaries or market forecasts, into a small markdown table), recast raw figures the pictorial way (round unless precision is the point; prefer ratios — "one in four" over "24.7%"; give an incomprehensibly large number one visualizable equivalent), never let two number-heavy paragraphs sit adjacent, hunt abstract blobs and replace them with specific pictorial words ("severe personnel problems" → the actual thing: turnover; "resource companies" → oil rigs and mines), keep the piece MOVING by alternating the general and the concrete (a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row), and when a stretch hides behind stacked citations, surface once and draw the prudent conclusion plainly in one sentence, ensure "said" attribution with at most two "according to" in the whole piece, vary sentence length, vary section-header shapes (never let every H2 share one construction — e.g. the "Topic — Subtitle" em-dash pattern on every header; mix plain noun phrases, claims, and the occasional question). Cut ONLY what these edits name — line-fat, repetition, filler — never whole paragraphs or sections for brevity's sake; this is a line edit, not a condensation, and the edited piece must remain a full-length feature of at least ${deps.editWordFloor ?? 1200} words (when the draft is already near that floor, tighten wording without net shortening). Keep every markdown link and the H1 intact.${
+  const keep =
     deps.editKeep === undefined || deps.editKeep.length === 0
-      ? ""
-      : ` KEEP each of these by name, exactly as the draft writes it — the edit is thrown away if one drops out: ${deps.editKeep.map((k) => `"${k}"`).join(", ")}. Rephrase around them; never cut or paraphrase them.`
-  } Output ONLY the edited markdown article, nothing else.
+      ? []
+      : [`KEEP each of these by name, exactly as the draft writes it — the edit is thrown away if one drops out: ${deps.editKeep.map((k) => `"${k}"`).join(", ")}. Rephrase around them; never cut or paraphrase them.`];
+  const rules = [...EDIT_RULES, ...keep].map((r, i) => `${i + 1}. ${r}`).join("\n");
+  const prompt = `Line-edit this draft for publication. Apply the newspaper self-edit pass:
+${rules}
+
+Output ONLY the edited markdown article, nothing else.
 
 DRAFT:
 ${draft}`;
