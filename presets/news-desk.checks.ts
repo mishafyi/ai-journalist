@@ -500,6 +500,75 @@ async function orchestrationChecks(): Promise<void> {
       post4.slug === CHOSEN_SLUG,
     post4.slug);
 
+  // Scenario 4b — Google's own cluster first (operator, 2026-09-19): the lead's
+  // link and each coverage link are decoded; the lead's article is scraped
+  // first, a paywalled host is skipped, a deny-tier host never admitted, and
+  // the index only fills in after.
+  const scraped4b: string[] = [];
+  const decoded4b: string[] = [];
+  const STUB_LEAD = "https://news.google.com/rss/articles/LEAD";
+  const STUB_B = "https://news.google.com/rss/articles/CLUSTERB";
+  const STUB_PAY = "https://news.google.com/rss/articles/PAYWALL";
+  const STUB_DENY = "https://news.google.com/rss/articles/CLUSTERDENY";
+  let published4b: GeneratedPost | null = null;
+  await createNewsDesk({
+    llm,
+    search: {
+      async search() {
+        return [];
+      },
+      async scrape(url: string): Promise<string> {
+        scraped4b.push(url);
+        const body = PAGES[url];
+        if (body === undefined) throw new Error(`no fixture page for ${url}`);
+        return body;
+      },
+    },
+    feeds: [],
+    persona: PERSONAS.historian,
+    brand,
+    sink: {
+      async publish(post) {
+        published4b = post;
+        return { url: `memory://${post.slug}`, status: "DRAFT" as const };
+      },
+    },
+    knobs: { ...knobs, minSources: 3 },
+    coveredTopics: async () => [{ title: STORY1 }],
+    trendingImpl: async () => [
+      trending[0],
+      {
+        ...trending[1],
+        leadOutlet: "Hunt A",
+        link: STUB_LEAD,
+        coverage: [
+          { headline: "Rate rise rocks markets", outlet: "Hunt B", link: STUB_B },
+          { headline: "Rates: the paywalled take", outlet: "Bloomberg", link: STUB_PAY },
+          { headline: "Rates explained", outlet: "Telegraph Online", link: STUB_DENY },
+        ],
+      },
+    ],
+    indexImpl: async () => [index[0]],
+    resolveUrlImpl: async (stub: string) => {
+      decoded4b.push(stub);
+      if (stub === STUB_LEAD) return "https://hunt-a.example/story";
+      if (stub === STUB_B) return "https://hunt-b.example/story";
+      if (stub === STUB_PAY) return "https://www.bloomberg.com/rates";
+      return "https://telegraph.com/rates";
+    },
+    internalsFactory,
+    parallelFetchImpl,
+  }).run();
+  ok("cluster: the lead's own article is scraped first, then the cluster, then the index",
+    scraped4b[0] === "https://hunt-a.example/story" && scraped4b[1] === "https://hunt-b.example/story" && scraped4b.includes(index[0].url),
+    JSON.stringify(scraped4b));
+  ok("cluster: a paywalled host is decoded but never scraped, and a deny-tier host never admitted",
+    decoded4b.includes(STUB_PAY) && !scraped4b.some((u) => u.includes("bloomberg.com") || u.includes("telegraph.com")),
+    JSON.stringify(scraped4b));
+  ok("cluster: the story publishes from the lead, the cluster and the index",
+    ((published4b as GeneratedPost | null)?.sources ?? []).some((c) => c.title.startsWith("Hunt A: ")),
+    JSON.stringify((published4b as GeneratedPost | null)?.sources ?? []));
+
   // Scenario 5 — a foreign-only cluster publishes under a validated
   // TRANSLATION (operator, 2026-08-30: "if something happened in a foreign
   // country we must definitely translate"). pickHeadline yields no verbatim

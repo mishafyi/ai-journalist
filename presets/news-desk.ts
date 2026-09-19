@@ -1505,6 +1505,30 @@ export function createNewsDesk(opts: {
         // (lead + coverage headlines) against ALL outlet indexes, keep the
         // best hit per outlet, drop blocked hosts, rank by score, cap pages.
         const probes = [story.headline, ...story.coverage.map((c) => c.headline)];
+        // Google's own cluster first (operator, 2026-09-19): the lead outlet's
+        // article and every other outlet Google News shows for the story, their
+        // links decoded to the publishers' URLs, lead first, one page per host.
+        // A blocked (paywalled) or deny-tier host is skipped: the lead stays the
+        // story's lead while the other sources carry the text.
+        const clustered: { item: OutletItem; score: number }[] = [];
+        for (const c of [{ outlet: story.leadOutlet, headline: story.headline, link: story.link }, ...story.coverage]) {
+          if (clustered.length >= knobs.pagesMax) break;
+          if (c.link === undefined || c.link === "") continue;
+          const url = await (opts.resolveUrlImpl ?? defaultResolveUrl)(c.link);
+          if (url === "") continue;
+          const host = hostOf(url);
+          if (clustered.some(({ item }) => hostOf(item.url) === host)) continue;
+          if (isBlockedHost(host, blockedHosts)) {
+            log?.(`news-desk: ${c.outlet} (${url}) — blocked host, not scraped; the story's other sources carry it`);
+            continue;
+          }
+          if (provenanceOf(host) === "deny") {
+            log?.(`news-desk: dropped ${c.outlet} (${url}) — deny-tier provenance`);
+            continue;
+          }
+          clustered.push({ item: { outlet: c.outlet, region: "", title: c.headline, url }, score: 1 });
+        }
+        const clusterHosts = new Set(clustered.map(({ item }) => hostOf(item.url)));
         const hits = await matcher.matchAny(probes, indexTitles, knobs.matchThreshold);
         const bestByOutlet = new Map<string, { item: OutletItem; score: number }>();
         for (const hit of hits) {
@@ -1512,8 +1536,9 @@ export function createNewsDesk(opts: {
           const prev = bestByOutlet.get(item.outlet);
           if (prev === undefined || hit.score > prev.score) bestByOutlet.set(item.outlet, { item, score: hit.score });
         }
-        const unblocked = [...bestByOutlet.values()].filter(({ item }) => {
+        const fromIndex = [...bestByOutlet.values()].filter(({ item }) => {
           const host = hostOf(item.url);
+          if (clusterHosts.has(host)) return false;
           const blocked = isBlockedHost(host, blockedHosts);
           if (blocked) log?.(`news-desk: dropped ${item.outlet} (${item.url}) — blocked host`);
           // Feeds are curated, but a feed can still link out to a deny-tier
@@ -1522,6 +1547,8 @@ export function createNewsDesk(opts: {
           if (denied) log?.(`news-desk: dropped ${item.outlet} (${item.url}) — deny-tier provenance`);
           return !blocked && !denied;
         });
+        // The cluster's pages lead (score 1 sorts them first); the index adds the rest.
+        const unblocked = [...clustered, ...fromIndex];
         // Source hunt (operator, 2026-07-25: "make sure we write news for every
         // trending news"): the outlet index is ten shallow RSS windows, so real
         // stories often match 0-2 of them — 61% of all rejections. When the

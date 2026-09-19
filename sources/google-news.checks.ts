@@ -43,6 +43,11 @@ async function main(): Promise<void> {
     stories[0].coverage.length === 2 && stories[0].coverage[1].headline === "Senate approves sweeping tariffs" &&
       stories[0].coverage[1].outlet === "CNN",
     JSON.stringify(stories[0].coverage));
+  ok("the lead's own Google News link is kept for decoding",
+    stories[0].link === "https://news.google.com/rss/articles/CBMiAAA?oc=5", String(stories[0].link));
+  ok("each coverage entry keeps its Google News link",
+    stories[0].coverage.every((c) => (c.link ?? "").startsWith("https://news.google.com/rss/articles/")),
+    JSON.stringify(stories[0].coverage));
   ok("single-link description (no <ol>) still yields one coverage entry",
     stories[1].coverage.length === 1 && stories[1].coverage[0].outlet === "AP News",
     JSON.stringify(stories[1].coverage));

@@ -27,6 +27,9 @@ export const GN_US: GnEdition = { hl: "en-US", gl: "US", ceid: "US:en" };
 export interface CoverageEntry {
   headline: string;
   outlet: string;
+  /** Google News's link for this outlet's article (a JS stub; `resolveCoverageUrl`
+   *  decodes it to the publisher's URL). Absent when the feed carries none. */
+  link?: string;
 }
 
 export interface TrendingStory {
@@ -42,6 +45,9 @@ export interface TrendingStory {
    *  only real host GN gives us — the item <link> is a JS stub. "" when the
    *  feed shape carries no source tag (top-stories items often don't). */
   sourceUrl?: string;
+  /** Google News's link for the lead outlet's article (a JS stub, decoded by
+   *  `resolveCoverageUrl`). Absent when the item carries none. */
+  link?: string;
 }
 
 export function googleNewsTopUrl(edition: GnEdition): string {
@@ -74,7 +80,8 @@ function parseCoverage(descriptionHtml: string): CoverageEntry[] {
   for (const el of items) {
     const headline = $(el).find("a").first().text().trim();
     const outlet = $(el).find("font").first().text().trim();
-    if (headline !== "") coverage.push({ headline, outlet });
+    const link = $(el).find("a").first().attr("href") ?? "";
+    if (headline !== "") coverage.push({ headline, outlet, ...(link === "" ? {} : { link }) });
   }
   return coverage;
 }
@@ -88,6 +95,7 @@ export async function parseTrending(xml: string): Promise<TrendingStory[]> {
       headline,
       leadOutlet,
       coverage: parseCoverage(item.content ?? ""),
+      ...(item.link === undefined || item.link === "" ? {} : { link: item.link }),
     };
   });
 }
