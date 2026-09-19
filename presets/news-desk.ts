@@ -185,9 +185,9 @@ export function checkAuthorVersionContract(
 // perfectly good.
 //
 // So the schemas keep only what is STRUCTURAL — the shape, the enum, the pair
-// — and the cosmetic limits are applied by `shapeDossier` below, which drops
-// or trims the offending entry and keeps everything else. A length is a
-// preference; the model getting the shape right is the correctness question.
+// — and `shapeDossier` below drops only empty entries and extra ones past the
+// counts the prompts ask for. No length is enforced at all: the column reads
+// every word the model wrote.
 export const PrincipalsSchema = z.object({
   principals: z
     .array(
@@ -219,29 +219,25 @@ export const HypothesesSchema = z.object({
 });
 export type Hypothesis = z.infer<typeof HypothesesSchema>["hypotheses"][number];
 
-/** Trim a dossier to the house limits, dropping only what cannot be salvaged.
- *  Everything here was a zod bound until 2026-09-08, when it became clear the
- *  bounds were discarding whole dossiers over one long sentence. */
-const trim = (v: string, max: number): string => (v.length <= max ? v : `${v.slice(0, max - 1).trimEnd()}…`);
+/** Shape a dossier: drop empty entries and keep the counts the prompts ask for
+ *  (6 principals, 8 connections, 5 hypotheses). No field is cut short — the
+ *  column reads every word the model wrote (operator, 2026-09-19). */
 export function shapeDossier<T extends { principals?: Principal[]; connections?: Connection[]; hypotheses?: Hypothesis[] }>(
   d: T,
 ): T {
   if (d.principals) {
     d.principals = d.principals
       .filter((p) => p.name.trim() !== "" && p.role.trim() !== "")
-      .map((p) => ({ ...p, name: trim(p.name, 80), role: trim(p.role, 200) }))
       .slice(0, 6);
   }
   if (d.connections) {
     d.connections = d.connections
       .filter((c) => c.claim.trim() !== "" && c.between.every((b) => b.trim() !== ""))
-      .map((c) => ({ ...c, claim: trim(c.claim, 400), basis: trim(c.basis, 200) }))
       .slice(0, 8);
   }
   if (d.hypotheses) {
     d.hypotheses = d.hypotheses
       .filter((h) => h.scenario.trim() !== "")
-      .map((h) => ({ ...h, scenario: trim(h.scenario, 400), restsOn: trim(h.restsOn, 200) }))
       .slice(0, 5);
   }
   return d;
@@ -431,7 +427,7 @@ export async function composeAuthorVersion(args: {
     args.echoes.length === 0
       ? ""
       : `\n\nVERIFIED RECENT ECHOES (the last twenty years — same internal fact-check rules as the background above: the record wins over your memory, and no encyclopedia is ever mentioned in the column):\n${args.echoes
-          .map((e, i) => `${i + 1}. ${e.event} (${e.era}) — ${e.claimedSimilarity}\n   Record: ${e.extract.slice(0, 400)}`)
+          .map((e, i) => `${i + 1}. ${e.event} (${e.era}) — ${e.claimedSimilarity}\n   Record: ${e.extract}`)
           .join("\n")}\nPepper these through the column as COLOR: five to ten sentences across the whole piece, never more than one or two in any single spot, spread across different chapters — each drawing the line between then and now (what this same person did before, the earlier chapter of this same relationship, the comparable event and how it ended). They season the argument; your central parallel above, when you have one, remains the spine. Name each echo you use by the name given above, and leave out any echo that does not serve your argument.`;
 
   // The desk's standing editorial tests live in the SYSTEM prompt, with who
@@ -907,13 +903,14 @@ export async function gatherPrimaryData(args: {
     }
     try {
       const data = await args.datagod.get(req.path, req.params);
-      const raw = JSON.stringify(data).slice(0, 20_000);
+      const raw = JSON.stringify(data);
       const parts = await extractEvidence({
         llm: args.llm,
         topic: args.storyHeadline,
         page: { url: req.path, title: `PRIMARY DATA ${play.id}`, content: raw },
-        chunkChars: 20_000,
-        maxChunksPerPage: 1,
+        // The whole payload, split into million-character parts, never cut.
+        chunkChars: 1_000_000,
+        maxChunksPerPage: Number.POSITIVE_INFINITY,
         ...(args.log === undefined ? {} : { log: args.log }),
       });
       if (parts.length === 0) {
@@ -1238,7 +1235,7 @@ export async function composeHeadline(args: {
       role: "user",
       content:
         `COLUMNIST: ${args.persona.name}\n\nWHAT THE WIRES CALLED IT (context only — do NOT reuse any of them):\n${args.sourceHeadlines.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
-        `THE COLUMN:\n${args.body.slice(0, 6000)}\n\nWrite the headline.`,
+        `THE COLUMN:\n${args.body}\n\nWrite the headline.`,
     },
   ];
 
@@ -1300,7 +1297,7 @@ export async function translateHeadline(args: {
         ...args.story.coverage.map((c) => `${c.outlet}: ${stripFurniture(c.headline)}`),
       ].filter((l) => l.split(": ").slice(1).join(": ").length >= 10),
     ),
-  ].slice(0, 8);
+  ];
   const system =
     `You translate news headlines. The world's press covered ONE story; their headlines are listed below in their original languages. Write the single ENGLISH headline this paper prints for that story.\n\nHARD RULES:\n` +
     `- A faithful, natural English news headline: report what the wires collectively report. No opinion of your own, no additions, no interpretation.\n` +
@@ -1313,7 +1310,7 @@ export async function translateHeadline(args: {
       role: "user",
       content:
         `THE WIRES' HEADLINES:\n${wires.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
-        `THE COLUMN (ground truth for names, numbers and spelling):\n${args.body.slice(0, 6000)}\n\nWrite the English headline.`,
+        `THE COLUMN (ground truth for names, numbers and spelling):\n${args.body}\n\nWrite the English headline.`,
     },
   ];
 
@@ -1810,7 +1807,7 @@ export function createNewsDesk(opts: {
               let webNotes = "";
               try {
                 const hits = await search.search(`${v.event} history mechanism significance`, { limit: 3 });
-                webNotes = hits.map((h) => `${h.title}: ${h.snippet}`).join("\n").slice(0, 900);
+                webNotes = hits.map((h) => `${h.title}: ${h.snippet}`).join("\n");
               } catch (err: unknown) {
                 log?.(`parallels: web research failed for "${v.event}" (record alone will serve): ${String(err)}`);
               }
@@ -1844,7 +1841,7 @@ export function createNewsDesk(opts: {
                   content: `STORY:\n${story.headline}\n${evidence}\n\nCANDIDATES:\n${field
                     .map(
                       (f, i) =>
-                        `${i + 1}. ${f.v.event} (${f.v.era})\nRECORD: ${f.v.extract.slice(0, 500)}\nWEB: ${f.webNotes || "(none)"}`,
+                        `${i + 1}. ${f.v.event} (${f.v.era})\nRECORD: ${f.v.extract}\nWEB: ${f.webNotes || "(none)"}`,
                     )
                     .join("\n\n")}`,
                 },
@@ -1884,7 +1881,7 @@ export function createNewsDesk(opts: {
             llm,
             storySummary: `${story.headline}\n${evidence}`,
             count: knobs.parallelCount,
-            correctiveContext: `Prior candidates scored poorly or failed verification: ${avoid}. Propose DIFFERENT precedents whose causal mechanism matches the story — other eras, other domains.`.slice(0, 1200),
+            correctiveContext: `Prior candidates scored poorly or failed verification: ${avoid}. Propose DIFFERENT precedents whose causal mechanism matches the story — other eras, other domains.`,
           });
           const field2 = await researchField(dropRecent(retryCandidates), knobs.parallelCount);
           field = [...field, ...field2];
