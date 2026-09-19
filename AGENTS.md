@@ -118,13 +118,21 @@ verifies a historical parallel, picks a lead image, and publishes.
 
 **One take per story (2026-07-24).** The desk used to publish the same story
 three times, once per columnist, off a neutral retell plus a labeled `Analysis`
-section. It now publishes exactly one column: the caller passes a single
-`persona`, and the columnist's own text *is* the article body. There is no
-neutral retell any more. Do not reintroduce one — a reader seeing the same
-headline three times was the bug this replaced. Which columnist writes is the
-CALLER's choice — a roster and a draw live in the adopter, not in the preset,
-so the preset stays deterministic and testable. See `examples/news-desk.ts`
-for the minimal wiring.
+section. It publishes exactly one column, and the columnist's own text *is* the
+article body. There is no neutral retell. Do not reintroduce one — a reader
+seeing the same headline three times was the bug this replaced. The caller
+passes a `roster`; the **Voice Pick** (`pickVoice`, operator 2026-09-19) hands
+the story to the columnist who fits it best, by fit alone, and every model call
+after it carries that columnist's method, voice and rules (`withVoice`). A
+roster of one skips the pick, which keeps the checks deterministic. The last
+pass is the **Audit** (`auditColumn`): voice, coherence of the parallel, echoes
+and dossier, readability, and nothing added. See `examples/news-desk.ts` for
+the minimal wiring.
+
+**Every rule a model gets lives in `rules/<step>.md`**, a short numbered list
+read whole by `readRules()`. A prompt is a role line, `RULES:` and the file,
+then its data. Edit a rule in its file; the prompt, the docs and the site's
+plain-node scripts all read the same file.
 
 **The author-version contract** (`checkAuthorVersionContract`) is a hard gate,
 not advice. A draft is rejected and re-attempted unless it:

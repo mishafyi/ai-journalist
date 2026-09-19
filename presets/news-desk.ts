@@ -4,7 +4,7 @@
  * Part 2 (createNewsDesk) orchestrates: trending → resolution → floors →
  * verified parallel → ONE columnist's fused column → publish.
  */
-import { mentionsName, namesEvent, NO_PARALLEL_PHRASE, runEdit } from "../gates";
+import { mentionsName, namesEvent, NO_PARALLEL_PHRASE } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
 import type { ImageSearchConfig } from "../sources/lead-image";
@@ -30,7 +30,6 @@ import {
   isTeaserContent,
   DEFAULT_BLOCKED_HOSTS,
 } from "../research";
-import { createRunContext } from "../run-context";
 import { z } from "zod";
 import type { DatagodClient } from "../clients/datagod";
 import { DOSSIER_MODEL, loadCatalogue, researchOne, researchText } from "./dossier-research";
@@ -42,7 +41,8 @@ import { createNewswire } from "../sources/newswire";
 import { provenanceOf } from "../sources/provenance";
 import type { OutletFeed, OutletItem } from "../sources/newswire";
 import { createDefaultInternals } from "./default";
-import { lengthSafe, stripPreambleAndFence } from "./text-defaults";
+import { stripPreambleAndFence } from "./text-defaults";
+import { readRules } from "../rules";
 
 
 /** The section taxonomy — modeled on the NYT / WSJ / Washington Post mastheads,
@@ -274,8 +274,7 @@ export async function namePrincipals(args: {
     messages: [
       {
         role: "system",
-        content:
-          "You identify the principals of a news story — the people, organisations and countries the story actually turns on. Name each exactly as the coverage names them, and say in one clause what role each plays in THIS story. Up to six, most central first.",
+        content: `You identify the principals of a news story.\n\nRULES:\n${PRINCIPAL_RULES}`,
       },
       { role: "user", content: `STORY: ${args.headline}\n\nTHE SOURCE ARTICLES:\n\n${args.storyText}` },
     ],
@@ -357,12 +356,10 @@ export async function findConnections(args: {
 }): Promise<Connection[]> {
   const out = await args.llm.completeStructured({
     messages: [
+      { role: "system", content: `You find the connections behind a news story.\n\nRULES:\n${CONNECTION_RULES}` },
       {
         role: "user",
-        content:
-          `${dossierContext(args.storyText, args.dossier)}\n\nFind the connections between these people, organisations, countries and events — above all the NON-OBVIOUS ones the source articles do not tell: shared history, money, prior clashes or alliances, a pattern this event continues, interests behind the stated positions, and how today's event fits into something larger. Leave out anything the articles already say. ` +
-          `For each: what it links, the connection, why it matters for this story, in_story (true only if the articles already say it), and rests_on — the document ids it comes from ([D3], [R2]) or the well-established history it rests on, named. Never present speculation as fact.\n\n` +
-          `Return JSON: {"connections": [{"between", "connection", "why_it_matters", "in_story", "rests_on"}]}`,
+        content: `${dossierContext(args.storyText, args.dossier)}\n\nReturn JSON: {"connections": [{"between", "connection", "why_it_matters", "in_story", "rests_on"}]}`,
       },
     ],
     schema: ConnectionsSchema,
@@ -384,11 +381,11 @@ export async function projectHypotheses(args: {
 }): Promise<Hypothesis[]> {
   const out = await args.llm.completeStructured({
     messages: [
+      { role: "system", content: `You project what happens next in a news story.\n\nRULES:\n${HYPOTHESIS_RULES}` },
       {
         role: "user",
         content:
-          `${dossierContext(args.storyText, args.dossier)}\n\nTHE CONNECTIONS:\n${args.connections.length === 0 ? "(none found)" : args.connections.map((c) => `- ${c.between.join(" / ")}: ${c.connection} (matters because ${c.why_it_matters}; rests on ${c.rests_on})`).join("\n")}\n\n` +
-          `What happens next? Give 3 to 5 hypotheses. Each is a concrete, falsifiable next development with a rough timeframe, grounded in a HISTORICAL PRECEDENT — a comparable past situation, named and dated: what happened then, why today's case is like it, how it differs, and what would prove the hypothesis wrong. Build them from the background, the connections and today's events above; rests_on names the document ids and connections each draws on.\n\n` +
+          `${dossierContext(args.storyText, args.dossier)}\n\nTHE CONNECTIONS:\n${args.connections.length === 0 ? "none" : args.connections.map((c) => `- ${c.between.join(" / ")}: ${c.connection} (matters because ${c.why_it_matters}; rests on ${c.rests_on})`).join("\n")}\n\n` +
           `Return JSON: {"hypotheses": [{"hypothesis", "timeframe", "precedent", "precedent_outcome", "why_it_applies", "how_it_differs", "would_be_wrong_if", "rests_on"}]}`,
       },
     ],
@@ -400,8 +397,10 @@ export async function projectHypotheses(args: {
   return shapeDossier(out).hypotheses ?? [];
 }
 
-/** The block the column prompt carries. Empty when there is nothing to carry. */
-export function dossierBlock(args: {
+/** The dossier as a record: the principals, the connections and the
+ *  hypotheses, with no instruction attached — what the Audit checks the
+ *  column's connections against. Empty when there is nothing on file. */
+export function dossierRecord(args: {
   dossier: readonly DossierEntry[];
   connections: readonly Connection[];
   hypotheses: readonly Hypothesis[];
@@ -420,8 +419,35 @@ export function dossierBlock(args: {
               `- ${h.hypothesis} (${h.timeframe}). Precedent: ${h.precedent} — ${h.precedent_outcome}. Why it applies: ${h.why_it_applies}. How it differs: ${h.how_it_differs}. Wrong if: ${h.would_be_wrong_if}. (Rests on: ${h.rests_on})`,
           )
           .join("\n")}`;
-  return `THE DESK'S DOSSIER — the people behind the story, researched from documents read in full:\n\n${principalsText(args.dossier)}${connections}${hypotheses}\n\nWeave this into the column: the documents and connections where they sharpen the argument — a reader should feel the column knows the players — and the hypotheses shaping your verdict: say where this goes and why, as a columnist does. Name the principals as given above.`;
+  return `THE DESK'S DOSSIER — the people behind the story, researched from documents read in full:\n\n${principalsText(args.dossier)}${connections}${hypotheses}`;
 }
+
+/** The paper's universal rules, for every voice: readability (operator,
+ *  2026-09-19: "this rule should be universal — readability!"). Words and
+ *  sentences: Robert Gunning, The Technique of Clear Writing (1952) — the
+ *  consultant who took the Wall Street Journal from a 14th- to an 11th-grade
+ *  reading level — and the American Press Institute's comprehension study (8
+ *  words a sentence: all of it understood, 14: 90%, 43: under 10%). Figures:
+ *  Blundell, The Art and Craft of Feature Writing (the WSJ guide), pp. 141–142
+ *  — his worked example cuts a four-figure sentence to two, and his one
+ *  absolute is never to butt two figure-heavy paragraphs together; the
+ *  three-a-paragraph cap is the desk's. The column is written to them; the
+ *  Audit holds the column to them. */
+export const READABILITY_RULES = readRules("readability");
+const VOICE_PICK_RULES = readRules("voice-pick");
+const VOICE_RULES = readRules("voice");
+const AUDIT_RULES = readRules("audit");
+const STANDING_TESTS = readRules("standing-tests");
+const COLUMN_RULES = readRules("column");
+const HEADLINE_RULES = readRules("headline");
+const DEK_RULES = readRules("dek");
+const TRANSLATION_RULES = readRules("translation");
+const DATA_PLAY_RULES = readRules("data-plays");
+const PRECEDENT_RULING_RULES = readRules("precedent-ruling");
+const TAG_RULES = readRules("tags");
+const PRINCIPAL_RULES = readRules("dossier-principals");
+const CONNECTION_RULES = readRules("dossier-connections");
+const HYPOTHESIS_RULES = readRules("dossier-hypotheses");
 
 export async function composeAuthorVersion(args: {
   llm: LlmClient;
@@ -433,8 +459,8 @@ export async function composeAuthorVersion(args: {
   /** Verified recent echoes (≤20y) threaded through as color — see the
    *  echo round in createNewsDesk. Empty = the column runs without them. */
   echoes: readonly VerifiedParallel[];
-  /** The desk's dossier block (dossierBlock) — the people behind the story,
-   *  their connections and where it goes next, woven through. Empty = none. */
+  /** The desk's dossier (dossierRecord) — the people behind the story, their
+   *  connections and where it goes next. Empty = none. */
   dossier?: string;
   wordCap: number;
   maxAttempts: number;
@@ -443,43 +469,20 @@ export async function composeAuthorVersion(args: {
 }): Promise<string> {
   const { persona } = args;
   const parallel = args.parallel !== null && args.parallel.event.trim() !== "" ? args.parallel : null;
-  const parallelBlock =
+  // The desk's standing tests and the column's rules live in the SYSTEM
+  // prompt, with who the columnist is — they are how this paper writes; the
+  // story's material is the user turn.
+  const system = `You are ${persona.name}, an opinion columnist writing your complete column on today's story.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography: ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}\n\nTHE DESK'S STANDING TESTS:\n${STANDING_TESTS}\n\nRULES:\n${COLUMN_RULES}\n\nREADABILITY:\n${READABILITY_RULES}`;
+  const parallelData =
     parallel === null
-      ? `NO parallel survived verification. You MUST include this sentence verbatim: "${NO_PARALLEL_PHRASE}" — then argue on the evidence alone.`
-      : `YOUR CENTRAL PARALLEL: "${parallel.event}". VERIFIED BACKGROUND (internal fact-check — never mention Wikipedia or any encyclopedia in your column; if your memory of this history conflicts with the background, THE BACKGROUND WINS — correct your history to it):\n${parallel.extract}\nClaimed similarity: ${parallel.claimedSimilarity}\nName the parallel event in your argument (by its name as given above) and COMMIT to it: argue why this precedent supports your judgment completely — the shared mechanism, not surface resemblance. Never hedge the parallel or list where it fails; if you find yourself needing disclaimers, you are arguing it wrong (operator, 2026-07-26: one side, supported by the precedent, argued all the way).`;
-
-  // Recent echoes ride as SEASONING (operator, 2026-08-30: "pepper 5-10
-  // sentences, 1-2 sparingly in different parts of the text, comparisons up
-  // to 20 years back"): verified like the central parallel, threaded through
-  // as color, never the spine.
-  const echoBlock =
+      ? `none. Required sentence: "${NO_PARALLEL_PHRASE}"`
+      : `${parallel.event}\nRecord: ${parallel.extract}\nShared mechanism: ${parallel.claimedSimilarity}`;
+  const echoData =
     args.echoes.length === 0
-      ? ""
-      : `\n\nVERIFIED RECENT ECHOES (the last twenty years — same internal fact-check rules as the background above: the record wins over your memory, and no encyclopedia is ever mentioned in the column):\n${args.echoes
-          .map((e, i) => `${i + 1}. ${e.event} (${e.era}) — ${e.claimedSimilarity}\n   Record: ${e.extract}`)
-          .join("\n")}\nPepper these through the column as COLOR: five to ten sentences across the whole piece, never more than one or two in any single spot, spread across different chapters — each drawing the line between then and now (what this same person did before, the earlier chapter of this same relationship, the comparable event and how it ended). They season the argument; your central parallel above, when you have one, remains the spine. Name each echo you use by the name given above, and leave out any echo that does not serve your argument.`;
-
-  // The desk's standing editorial tests live in the SYSTEM prompt, with who
-  // the columnist is — they are how this paper writes, not instructions about
-  // today's story. Keeping them out of the per-story requirement list also
-  // stops them crowding out the mechanical ones the contract actually checks
-  // (outlet attribution, the named parallel, chapter headings), which a small
-  // local model will drop first when a prompt grows.
-  //
-  // The second test is the delicate one: stating the opposing case at its
-  // strongest reads like "on the other hand" unless the prompt says otherwise,
-  // and this paper deliberately publishes committed op-eds. So it is written
-  // as an instrument of the argument — you state their best case BECAUSE
-  // beating the weak one proves nothing — never as balance.
-  const standards = `THE DESK'S STANDING TESTS — every column you write must pass all three:\n• THE VOTING BOOTH. Keep what a citizen could actually carry into a polling place, a council meeting, or an argument over a ballot measure: the facts that change what someone does or how they vote. Spend your words there, not on colour that merely entertains.\n• THE STRONGEST OPPOSING CASE. Put the other side at its best — the version its most capable advocate would recognise, its strongest evidence, not a pundit's soundbite and not a strawman you built to knock down — and then defeat it. This is NOT balance and it never softens your verdict: you state their best case precisely because beating the weak one proves nothing, and a reader can tell the difference.\n• THE LONG RECORD. Today's event is the surface of something older. Say what the historical pattern predicts here and what would have to be true for this time to be different. Never call a thing unprecedented unless you can show that nothing precedes it.`;
-
-  const system = `You are ${persona.name}, an opinion columnist with a decided worldview, writing your COMPLETE column on today's story: you retell what happened AND argue what it means, fused in one voice — yours. The facts belong to the reporting; the framing, emphasis, and verdict belong to you.\n\nPERSONA: ${persona.name}${persona.bio === undefined ? "" : `\nBiography (you ARE this person — let the background drive your style, word choice, references, and lean; live it, never recite it): ${persona.bio}`}\nMethod: ${persona.method}\nPriors: ${persona.priors}\nVoice: ${persona.voice}\n\n${standards}`;
-
-  const dossierPart = args.dossier === undefined || args.dossier === "" ? "" : `\n\n${args.dossier}`;
-
+      ? "none"
+      : args.echoes.map((e, i) => `${i + 1}. ${e.event} (${e.era}) — ${e.claimedSimilarity}\n   Record: ${e.extract}`).join("\n");
   const target = `${Math.round(args.wordCap * 0.7)}-${Math.round(args.wordCap * 0.85)}`;
-  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE (your ONLY source of current facts — quotes verbatim, numbers exact):\n${args.evidenceBlock}\n\n${parallelBlock}${echoBlock}${dossierPart}\n\nWrite your complete column now. Requirements:\n- Retell the story's essentials through your lens: who did what, the key figures and quotes — attributing the reporting in prose to at least TWO of these outlets by name: ${args.outletNames.join(", ")}\n- Never invent facts beyond the evidence; interpretation is yours, facts are theirs\n- Argue ONE decided position with force; no both-sides hedging, no "time will tell"\n- End on ONE committed verdict — a final paragraph that lands your position hard, no hedging. Do NOT label it ("The bottom line", "In sum", "The upshot", "In conclusion"): a columnist doesn't announce the verdict, they just deliver it\n- Break the piece into 2-4 chapters, each opening with a markdown heading ("## ..."). EVERY chapter title must be ORIGINAL and written from what THAT chapter actually says — a specific line a reader could only have written after reading it. NEVER use a generic label ("Analysis", "Context", "Background", "Conclusion", "What happened", "The numbers") and NEVER put your own name in a heading
-- This is an OP-ED, not a briefing: be very opinionated. Take a side in the first paragraph and press it all the way through — name who is wrong and say why, make the judgment call the reporting won't, and let your convictions show in the verbs. No neutrality, no "on the other hand", no hedging\n- ${target} words, hard cap ${args.wordCap} — unmistakably in your voice.`;
+  const base = `TODAY'S STORY: ${args.storyHeadline}\n\nTHE EVIDENCE:\n${args.evidenceBlock}\n\nOUTLETS: ${args.outletNames.join(", ")}\n\nTHE PARALLEL:\n${parallelData}\n\nRECENT ECHOES:\n${echoData}\n\nTHE DOSSIER:\n${args.dossier === undefined || args.dossier === "" ? "none" : args.dossier}\n\nLENGTH: ${target} words, hard cap ${args.wordCap}\n\nWrite your complete column now.`;
 
   // Retry = REVISE the previous draft, never regenerate: full rewrites under
   // failure feedback oscillate (live 2026-07-23 — each attempt satisfied the
@@ -491,7 +494,7 @@ export async function composeAuthorVersion(args: {
     const prompt =
       attempt === 1
         ? base
-        : `${base}\n\nYOUR PREVIOUS DRAFT:\n${lastDraft}\n\nIt failed the contract on exactly these points:\n${lastFailures.map((f) => `- ${f}`).join("\n")}\nREVISE the draft above: change only what those failures demand and keep everything else — every requirement it already met must stay met. Output the full revised column.`;
+        : `${base}\n\nYOUR PREVIOUS DRAFT:\n${lastDraft}\n\nIT FAILED ON:\n${lastFailures.map((f) => `- ${f}`).join("\n")}\n\nRevise the draft: fix only these points and keep everything else. Output the full column.`;
     const version = await args.llm.complete({
       system,
       prompt,
@@ -513,16 +516,16 @@ export async function composeAuthorVersion(args: {
   throw new Error(`author version (${persona.name}) failed the contract after ${args.maxAttempts} attempts: ${lastFailures.join(" | ")}`);
 }
 
-/** The Editor is the last read before print and always runs on the Flash
- *  models, the strongest free tier (20 requests a day per key each), in this
- *  order on every key and never on Flash-Lite or Gemma (operator, 2026-09-19:
- *  "always use for editor the expensive model"). With every Flash model spent
- *  the call throws and the unedited column prints. */
-export const EDITOR_MODEL = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview";
-/** Warmer than runEdit's 0.5 (operator, 2026-09-18). */
-export const EDITOR_TEMPERATURE = 0.7;
+/** The Audit is the last read before the Headline Desk and always runs on the
+ *  Flash models, the strongest free tier (20 requests a day per key each), in
+ *  this order on every key and never on Flash-Lite or Gemma (operator,
+ *  2026-09-19: "final pass with expensive LLM"). With every Flash model spent
+ *  the call throws and the column prints as written. */
+export const AUDIT_MODEL = "gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash,gemini-3-flash-preview";
+/** Cool: the Audit fixes what fails and invents nothing. */
+export const AUDIT_TEMPERATURE = 0.3;
 
-/** Pure. The original news story for the Editor: the lead outlet's own article
+/** Pure. The original news story for the Audit: the lead outlet's own article
  *  when the desk scraped it, else the first page that fed the evidence —
  *  `outlet — title (url)` and the page's whole text. "" with no page. */
 export function originalStoryOf(
@@ -537,7 +540,7 @@ export function originalStoryOf(
 
 /** Pure. The names the contract checks that THIS draft carries — its outlets,
  *  the parallel, the echoes — in the form the draft writes them: what the
- *  Editor is told to keep. An event may be named without its leading
+ *  Audit is told to keep. An event may be named without its leading
  *  "The", as namesEvent allows. */
 export function protectedNames(
   body: string,
@@ -551,109 +554,148 @@ export function protectedNames(
   ];
 }
 
-/** Pass 6 for the desk, the Editor: line-edits a contract-passing author version (the
- *  newspaper self-edit pass, gates.runEdit) without ever weakening the gate.
- *  It is the LAST read before print, for every columnist — after the lens,
- *  so a lens rewrite is edited too (operator, 2026-09-18).
- *  It reads the original news story as reference, and what it returns prints:
- *  no contract check and no length band (operator, 2026-09-19). Only a thrown
- *  call keeps the draft, so the desk's hot path grows no new failure mode. The word floor injected into the prompt is the DRAFT's own size
- *  (never below the contract's 300), not runEdit's feature default of 1200:
- *  without a number near the real size the Editor shreds a piece (43–54%
- *  keeps, 2026-07-08), and 1200 would tell a 700-word column to pad. */
-export async function editAuthorVersion(args: {
+/** Pure. Who writes the story and how: the columnist's method, voice and rules,
+ *  for every call after the Voice Pick. The biography and priors stay with the
+ *  column itself (composeAuthorVersion). */
+export function voiceBlock(voice: PersonaProfile): string {
+  const rules = voice.rules === undefined || voice.rules === "" ? "" : `\n${voice.name}'s rules:\n${voice.rules}`;
+  return `THE VOICE — ${voice.name}\nMethod: ${voice.method}\nVoice: ${voice.voice}${rules}\n\nRULES FOR EVERY STEP:\n${VOICE_RULES}`;
+}
+
+/** Every model call after the Voice Pick carries the voice (operator,
+ *  2026-09-19: "stick with this style/rules inside context for every llm call
+ *  until story is published"). The block joins the end of each call's own
+ *  standing instructions, so every call still opens on its own words. */
+export function withVoice(llm: LlmClient, voice: PersonaProfile): LlmClient {
+  const block = voiceBlock(voice);
+  return {
+    complete(args) {
+      return llm.complete({ ...args, system: args.system === undefined ? block : `${args.system}\n\n${block}` });
+    },
+    completeStructured(args) {
+      const first = args.messages.findIndex((m) => m.role === "system");
+      const messages =
+        first === -1
+          ? [{ role: "system" as const, content: block }, ...args.messages]
+          : args.messages.map((m, i) => (i === first ? { ...m, content: `${m.content}\n\n${block}` } : m));
+      return llm.completeStructured({ ...args, messages });
+    },
+  };
+}
+
+/** The Voice Pick (operator, 2026-09-19): once a story is certain to be
+ *  written, one cheap call on the desk's own model list reads every headline
+ *  its coverage printed and each columnist's method, priors, voice and rules —
+ *  never the long biography — and names who writes it. Fit alone decides:
+ *  there is no lean quota (operator: "pure fit"). A roster of one is its own
+ *  answer. A reply naming nobody on the roster is asked once more, then
+ *  throws. */
+export async function pickVoice(args: {
+  llm: LlmClient;
+  roster: readonly PersonaProfile[];
+  headlines: readonly string[];
+  log?: (line: string) => void;
+}): Promise<PersonaProfile> {
+  const [only] = args.roster;
+  if (only === undefined) throw new Error("news-desk: the roster is empty — no columnist to write the story");
+  if (args.roster.length === 1) return only;
+  const names = args.roster.map((p) => p.name) as [string, ...string[]];
+  const schema = z.object({ columnist: z.enum(names), why: z.string().min(8) });
+  const columnists = args.roster
+    .map((p) => `${p.name}\nMethod: ${p.method}\nPriors: ${p.priors}\nVoice: ${p.voice}${p.rules === undefined || p.rules === "" ? "" : `\nRules:\n${p.rules}`}`)
+    .join("\n\n");
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const pick = await args.llm.completeStructured({
+        messages: [
+          {
+            role: "system",
+            content: `You are the desk editor assigning today's story.\n\nRULES:\n${VOICE_PICK_RULES}`,
+          },
+          {
+            role: "user",
+            content: `THE STORY — every headline its coverage printed:\n${args.headlines.map((h, i) => `${i + 1}. ${h}`).join("\n")}\n\nTHE COLUMNISTS:\n\n${columnists}`,
+          },
+        ],
+        schema,
+        schemaName: "voice_pick",
+        temperature: 0.2,
+      });
+      const voice = args.roster.find((p) => p.name === pick.columnist) as PersonaProfile;
+      args.log?.(`news-desk: Voice Pick — ${voice.name}: ${pick.why}`);
+      return voice;
+    } catch (err: unknown) {
+      lastError = err;
+      args.log?.(`news-desk: Voice Pick attempt ${attempt}/2 failed: ${String(err)}`);
+    }
+  }
+  throw lastError;
+}
+
+/** The Audit Pass (operator, 2026-09-19), the last read before the Headline
+ *  Desk, on the Flash models. It holds the column to its own voice (the Voice
+ *  Pick's columnist, which the voiced client carries), makes the parallel, the
+ *  echoes and the dossier's connections hang together, and applies the paper's
+ *  universal rule, READABILITY_RULE. It adds nothing: every fact must already
+ *  be in the draft, and the original news story is shown only to check the
+ *  draft against. What it returns prints, with no contract check and no length
+ *  band; only a thrown call keeps the draft, so the desk's hot path grows no
+ *  new failure mode. */
+export async function auditColumn(args: {
+  /** The voiced client (withVoice): the Audit reads who wrote the column. */
   llm: LlmClient;
   body: string;
-  contract: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[] };
-  /** The original news story (`originalStoryOf`), shown as reference. */
+  /** The names the contract checks that the draft carries (protectedNames). */
+  keep: readonly string[];
+  parallel: VerifiedParallel | null;
+  echoes: readonly VerifiedParallel[];
+  /** The dossier as a record (dossierRecord). "" = none. */
+  dossier: string;
+  /** The original news story (originalStoryOf). "" = none. */
   originalStory: string;
   log?: (line: string) => void;
 }): Promise<string> {
   const words = args.body.trim().split(/\s+/).length;
-  try {
-    const raw = await runEdit(args.body, {
-      llm: args.llm,
-      model: EDITOR_MODEL,
-      editTemperature: EDITOR_TEMPERATURE,
-      editKeep: protectedNames(args.body, args.contract),
-      ...(args.originalStory === "" ? {} : { editContext: args.originalStory }),
-      withRetry: async (_label, fn) => fn(),
-      ctx: createRunContext("news-desk-editor"),
-      gatherExemplars: () => [],
-      fetchPriorTitles: async () => [],
-      embedDedupSurvivors: async () => null,
-      titleExemplarCount: 0,
-      titleCollisionSim: 0,
-      titleEmbedSim: 0,
-      searchTermsCount: 0,
-      editWordFloor: Math.max(300, Math.round(words * 0.85)),
-    });
-    const edited = stripPreambleAndFence(raw).trim();
-    args.log?.(`news-desk: Editor kept (${words} → ${edited.split(/\s+/).length} words)`);
-    return edited;
-  } catch (err: unknown) {
-    args.log?.(`news-desk: Editor failed (best-effort, keeping the draft): ${String(err)}`);
-    return args.body;
-  }
-}
+  const parallel =
+    args.parallel === null
+      ? "none"
+      : `${args.parallel.event} (${args.parallel.era}) — ${args.parallel.claimedSimilarity}\nRecord: ${args.parallel.extract}`;
+  const echoes =
+    args.echoes.length === 0
+      ? "none"
+      : args.echoes.map((e, i) => `${i + 1}. ${e.event} (${e.era}) — ${e.claimedSimilarity}\n   Record: ${e.extract}`).join("\n");
+  const prompt = `Audit this column for publication.
 
-/** The persona's standing editorial lens, read before the Editor — the
- *  last pass for every columnist since 2026-09-18. Operator, 2026-08-30:
- *  "some articles should evoke a sense of justice … select a few authors …
- *  the whole voice of the article pushed through this lens as final
- *  editorial". Two honest steps, the
- *  append-update shape: a structured judgment of whether THIS story carries
- *  the lens — "no" is the expected answer and changes nothing — then a
- *  full-voice rewrite only on a yes. The rewrite ships only inside
- *  lengthSafe's 70-130% band AND still passing checkAuthorVersionContract;
- *  any rejection or throw keeps the edited body, so the desk's hot path
- *  grows no new failure mode. Personas without a lens pass through free. */
-export async function applyEditorialLens(args: {
-  llm: LlmClient;
-  body: string;
-  persona: PersonaProfile;
-  contract: { outletNames: readonly string[]; parallelEvent: string | null; echoEvents: readonly string[]; wordCap: number; writerName: string };
-  log?: (line: string) => void;
-}): Promise<string> {
-  const lens = args.persona.lens;
-  if (lens === undefined || lens.trim() === "") return args.body;
+RULES:
+${AUDIT_RULES}
+
+READABILITY:
+${READABILITY_RULES}
+
+NAMES TO KEEP: ${args.keep.length === 0 ? "none" : args.keep.map((k) => `"${k}"`).join(", ")}
+
+THE PARALLEL:
+${parallel}
+
+THE RECENT ECHOES:
+${echoes}
+
+THE DOSSIER:
+${args.dossier === "" ? "none" : args.dossier}
+
+THE ORIGINAL NEWS STORY:
+${args.originalStory === "" ? "none" : args.originalStory}
+
+DRAFT:
+${args.body}`;
   try {
-    const judgment = await args.llm.completeStructured({
-      messages: [
-        {
-          role: "system",
-          content: `You are ${args.persona.name}, deciding whether your standing editorial lens applies to a finished column. THE LENS:\n${lens}\n\nMost columns do NOT carry it. Judge honestly — "no" is the expected answer, and a forced yes cheapens the columns that genuinely qualify.`,
-        },
-        { role: "user", content: `THE COLUMN:\n${args.body}\n\nDoes this story genuinely carry the lens?` },
-      ],
-      schema: z.object({ applies: z.boolean(), why: z.string().min(8) }),
-      schemaName: "editorial_lens_judgment",
-      temperature: 0.2,
-    });
-    if (!judgment.applies) {
-      args.log?.(`news-desk: lens (${args.persona.name}) not applied — ${judgment.why}`);
-      return args.body;
-    }
-    args.log?.(`news-desk: lens (${args.persona.name}) applies — ${judgment.why}`);
-    const rewritten = await args.llm.complete({
-      system: `You are ${args.persona.name}. Your standing editorial lens, and THIS story carries it:\n${lens}`,
-      prompt: `Rewrite your column so its WHOLE VOICE presses through the lens — the charge lives in the verbs, the emphasis, and the verdict, not in labels pasted on top.\nRules:\n- Same facts: every name, number, quote, outlet attribution, markdown link and heading stays; you may not add or alter a factual claim\n- Keep the structure and roughly the length — this is a re-voicing, not a new column\n- No moralising announcements ("This is an outrage"); the reader must FEEL the charge from how the sentences are built\nOutput ONLY the rewritten markdown column.\n\nYOUR COLUMN:\n${args.body}`,
-      temperature: 0.5,
-    });
-    const cleaned = stripPreambleAndFence(rewritten).trim();
-    if (lengthSafe("lens-edit", args.body, cleaned) !== cleaned) {
-      args.log?.("news-desk: lens rewrite rejected (outside the 70-130% length band) — keeping the edited body");
-      return args.body;
-    }
-    const verdict = checkAuthorVersionContract(cleaned, args.contract);
-    if (!verdict.ok) {
-      args.log?.(`news-desk: lens rewrite rejected (broke the contract: ${verdict.failures.join(" | ")}) — keeping the edited body`);
-      return args.body;
-    }
-    args.log?.(`news-desk: lens applied (${args.persona.name})`);
-    return cleaned;
+    const raw = await args.llm.complete({ prompt, model: AUDIT_MODEL, temperature: AUDIT_TEMPERATURE });
+    const audited = stripPreambleAndFence(raw).trim();
+    args.log?.(`news-desk: Audit kept (${words} → ${audited.split(/\s+/).length} words)`);
+    return audited;
   } catch (err: unknown) {
-    args.log?.(`news-desk: lens failed (best-effort, keeping the edited body): ${String(err)}`);
+    args.log?.(`news-desk: Audit failed (best-effort, the column prints as written): ${String(err)}`);
     return args.body;
   }
 }
@@ -904,14 +946,10 @@ export async function gatherPrimaryData(args: {
   try {
     picks = await args.llm.completeStructured({
       messages: [
-        {
-          role: "system",
-          content:
-            "You decide whether PRIMARY DATA would materially strengthen a news article, and which of a fixed menu of data plays to run. Be selective: most stories need NONE — return an empty plays array unless an authoritative figure from the menu would clearly sharpen this specific story. Never pick a play whose subject the story does not touch.",
-        },
+        { role: "system", content: `You decide which primary-data plays would strengthen a news article.\n\nRULES:\n${DATA_PLAY_RULES}` },
         {
           role: "user",
-          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS:\n${args.evidence}\n\nMENU:\n${menu}\n\nPick 0-2 plays. Field rules: seriesId is ONLY the bare code, exactly as written in the menu (e.g. "NY.GDP.MKTP.KD.ZG" or "NGDP_RPCH") — never a description, never inside query. For fred_series set seriesId; for worldbank_indicator and imf_weo set seriesId AND country (ISO code); for usaspending_search and wikipedia_summary set query; for eonet_events set query to the category word; for nasdaq_price and edgar_filings set ticker.`,
+          content: `STORY: ${args.storyHeadline}\n\nWHAT THE COVERAGE SAYS:\n${args.evidence}\n\nMENU:\n${menu}`,
         },
       ],
       schema: DataPlayPick,
@@ -1275,34 +1313,14 @@ export async function composeHeadline(args: {
   maxAttempts: number;
   log?: (line: string) => void;
 }): Promise<{ headline: string | null; dek: string | null }> {
-  const system =
-    `You write the headline and the dek for a signed opinion column in a daily paper.\n\n` +
-    `THE HEADLINE must do TWO things at once: say what happened, and land the column's judgement of it. A headline that carries only the judgement ("Private power needs the state to manage risk") is useless — the reader cannot tell which story it is. Name the people, institutions or places at the centre of it.\n\nHARD RULES:\n` +
-    `- Aim for 55-65 characters and never exceed ${args.maxChars}.\n` +
-    `- Name at least one person, institution or place that the column names, spelled and capitalised exactly as the column spells it.\n` +
-    `- Use ONLY names, places, organisations, numbers and quotations that appear in the column. Introduce nothing new — no figure, no name, no statistic.\n` +
-    `- Do not reuse or lightly reword any of the wire headlines you are shown. They are what other outlets called the news; your headline is what this columnist says about it.\n` +
-    `- No label prefixes ("Opinion:", "Analysis:", "Exclusive:", "Watch:"), no colon-prefixed section tags, and never the columnist's name.\n` +
-    `- No clickbait ("You won't believe", "Here's why"), and no full stop at the end.\n\n` +
-    `GOOD (names the actors, and takes a side): "Brussels blinked, and Beijing collected the winnings"\n` +
-    `BAD (a verdict about nothing in particular): "Trade policy should not reward coercion"\n\n` +
-    // The dek is the column's main theme statement — Blundell, The Art and
-    // Craft of Feature Writing, in our own words (operator, 2026-09-19).
-    `THE DEK is the one sentence printed under the headline and shown in search results and share cards: the column's main theme statement.\n` +
-    `1. State the development and what the column says it means: who did what, its main effect or the reaction it drew, and the columnist's verdict.\n` +
-    `2. Treat what the press has already reported as given: allude to the event in a few words and put the weight on the column's angle.\n` +
-    `3. Write one sentence of 20 to 35 words, with no details, figures or explanations beyond what the point needs, because the column carries those.\n` +
-    `4. Use plain words, straight and simple.\n` +
-    `5. Deliver the point instead of advertising it: no "a remarkable story", no "here's why it matters".\n` +
-    `6. Use only names, numbers and quotations the column contains, never the columnist's name, and no label prefix.`;
-
+  const system = `You write the headline and the dek for a signed opinion column.\n\nHEADLINE RULES:\n${HEADLINE_RULES}\n\nDEK RULES:\n${DEK_RULES}`;
   const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
     { role: "system", content: system },
     {
       role: "user",
       content:
-        `COLUMNIST: ${args.persona.name}\n\nWHAT THE WIRES CALLED IT (context only — do NOT reuse any of them):\n${args.sourceHeadlines.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
-        `THE COLUMN:\n${args.body}\n\nWrite the headline and the dek.`,
+        `COLUMNIST: ${args.persona.name}\n\nMAX CHARACTERS: ${args.maxChars}\n\nTHE WIRES:\n${args.sourceHeadlines.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
+        `THE COLUMN:\n${args.body}`,
     },
   ];
 
@@ -1380,19 +1398,12 @@ export async function translateHeadline(args: {
       ].filter((l) => l.split(": ").slice(1).join(": ").length >= 10),
     ),
   ];
-  const system =
-    `You translate news headlines. The world's press covered ONE story; their headlines are listed below in their original languages. Write the single ENGLISH headline this paper prints for that story.\n\nHARD RULES:\n` +
-    `- A faithful, natural English news headline: report what the wires collectively report. No opinion of your own, no additions, no interpretation.\n` +
-    `- Every name, place, organisation and number must appear EXACTLY as THE COLUMN below spells it — the column is this paper's ground truth, and foreign spellings often differ from it. Assert nothing the column does not contain.\n` +
-    `- Aim for 55-65 characters and never exceed ${args.maxChars}.\n` +
-    `- No label prefixes ("Exclusive:", "Watch:", "Live:"), no clickbait, no full stop at the end.`;
+  const system = `You translate news headlines into English.\n\nRULES:\n${TRANSLATION_RULES}`;
   const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
     { role: "system", content: system },
     {
       role: "user",
-      content:
-        `THE WIRES' HEADLINES:\n${wires.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\n` +
-        `THE COLUMN (ground truth for names, numbers and spelling):\n${args.body}\n\nWrite the English headline.`,
+      content: `MAX CHARACTERS: ${args.maxChars}\n\nTHE WIRES:\n${wires.map((w, i) => `${i + 1}. ${w}`).join("\n")}\n\nTHE COLUMN:\n${args.body}`,
     },
   ];
 
@@ -1442,7 +1453,9 @@ export function createNewsDesk(opts: {
   search: SearchClient;
   embedder?: Embedder;
   feeds: readonly OutletFeed[];
-  persona: PersonaProfile;
+  /** The masthead the Voice Pick chooses from, per story (pickVoice). A
+   *  roster of one writes every story without a pick. */
+  roster: readonly PersonaProfile[];
   /** One take per story (operator, 2026-07-24): the persona's fused column
    *  (retell + take) IS the article, titled with the source-optimized trending
    *  headline verbatim (never model-invented). wordCap is the MAX ceiling; the
@@ -1505,7 +1518,7 @@ export function createNewsDesk(opts: {
   parallelFetchImpl?: typeof fetch;
   leadImageFetchImpl?: typeof fetch;
 }): { run(): Promise<GeneratedPost> } {
-  const { llm, search, feeds, persona, brand, sink, knobs, log, recordArtifact } = opts;
+  const { search, feeds, brand, sink, knobs, log, recordArtifact } = opts;
   const blockedHosts = opts.blockedHosts ?? DEFAULT_BLOCKED_HOSTS;
 
   return {
@@ -1813,6 +1826,18 @@ export function createNewsDesk(opts: {
           continue;
         }
 
+        // The Voice Pick (operator, 2026-09-19): the story will be written, so
+        // the desk chooses who writes it, and every model call from here to
+        // print carries that columnist's voice and rules.
+        const voice = await pickVoice({
+          llm: opts.llm,
+          roster: opts.roster,
+          headlines: [story.headline, ...story.coverage.map((c) => c.headline)],
+          log,
+        });
+        recordArtifact?.("voice", voice.name);
+        const llm = withVoice(opts.llm, voice);
+
         // Per-outlet chunked evidence extraction; outlets whose every chunk
         // replied NONE drop (they carried nothing about THIS story).
         const contributing: { outlet: string; title: string; url: string; block: string }[] = [];
@@ -1940,11 +1965,7 @@ export function createNewsDesk(opts: {
           try {
             const judged = await llm.completeStructured({
               messages: [
-                {
-                  role: "system",
-                  content:
-                    "You judge which historical precedent best explains a news story at the MECHANISM level — the causal machinery they share, never surface resemblance. Score each candidate 0-100 for how completely its researched record supports reading the story through it, and state that shared mechanism in one sentence a columnist could argue.",
-                },
+                { role: "system", content: `You judge historical precedents for a news story.\n\nRULES:\n${PRECEDENT_RULING_RULES}` },
                 {
                   role: "user",
                   content: `STORY:\n${story.headline}\n${evidence}\n\nCANDIDATES:\n${field
@@ -2088,19 +2109,10 @@ export function createNewsDesk(opts: {
           try {
             const tagged = await llm.completeStructured({
               messages: [
-                {
-                  role: "system",
-                  content:
-                    "You tag news stories for a newspaper: its tag pages, its search, and the video desk that searches footage libraries with the tags. Output 5-9 lowercase tags drawn ONLY from the story.\n\n" +
-                    "A TAG NAMES THE STORY OR A THING IN IT — something a reader could type into a search engine and find this story. Two kinds, and most stories want both:\n" +
-                    "- TOPIC PHRASES that name what the story is about, 2-4 words, the way a headline writer compresses it — concrete nouns joined to the event: \"iran war midterm elections\", \"blizzcon 2026 announcements\", \"diablo v release date\", \"omarchy linux launch\", \"9/11 first responders health\". At least three, listed first. A phrase is the story's SUBJECT as a search query, never its theme or the column's argument: \"political pr strategy\", \"institutional capture\", \"regulatory capture in tech\", \"ai risk warning\" are wrong.\n" +
-                    "- NAMED ENTITIES central to the story, as full names spelled the way they spell themselves: people (\"jensen huang\", \"josé de rivera\"), organisations (\"openai\", \"nvidia\", \"federal reserve\"), named events, laws, products, and a place only when it is THE subject (\"strait of hormuz\"). Never the outlets that merely REPORTED the story (\"the guardian\", \"new york post\") unless the outlet itself is the subject.\n\n" +
-                    "REJECT categories and bare generic words: \"iran\", \"israel\", \"united states\", \"inflation\", \"elections\", \"artificial intelligence\", \"universities\", \"healthcare\". A country on its own is a category — \"iran war\" or \"iran sanctions\" is a topic. Also reject section names, bare plurals, verb phrases and sentence fragments.\n\n" +
-                    "Prefer fewer, sharper tags. Never invent an entity the story does not mention.",
-                },
+                { role: "system", content: `You tag news stories for a newspaper's tag pages, search and video desk.\n\nRULES:\n${TAG_RULES}` },
                 {
                   role: "user",
-                  content: `Story: ${story.headline}\n\nEvidence:\n${evidence}\n\nAlso choose the ONE section this story files under, from exactly this list: ${SECTIONS.join(", ")}.`,
+                  content: `Story: ${story.headline}\n\nEvidence:\n${evidence}\n\nSECTIONS: ${SECTIONS.join(", ")}`,
                 },
               ],
               // PERMISSIVE ON PURPOSE, then shaped in code below. The bounds
@@ -2175,14 +2187,14 @@ export function createNewsDesk(opts: {
             const connections = await findConnections({ llm, storyText, dossier: entries, model: DOSSIER_MODEL });
             const hypotheses = await projectHypotheses({ llm, storyText, dossier: entries, connections, model: DOSSIER_MODEL });
             recordArtifact?.("dossier", JSON.stringify({ principals: entries.map(({ detail, ...e }) => e), connections, hypotheses }, null, 2));
-            dossierText = dossierBlock({ dossier: entries, connections, hypotheses });
+            dossierText = dossierRecord({ dossier: entries, connections, hypotheses });
             const docsRead = entries.reduce((n, e) => n + (e.detail?.documents.length ?? 0), 0);
             log?.(`news-desk: dossier — ${entries.length} principals, ${docsRead} documents read in full, ${connections.length} connections, ${hypotheses.length} hypotheses`);
           } catch (err: unknown) {
             log?.(`news-desk: dossier failed (best-effort, the column runs without it): ${String(err)}`);
           }
 
-          const columnist = persona;
+          const columnist = voice;
           const authorWordCap = evidenceWordCap(contributing.length, evidence.length, opts.authorVersions?.wordCap ?? 1100);
           const rawBody = await composeAuthorVersion({
             llm,
@@ -2206,32 +2218,21 @@ export function createNewsDesk(opts: {
               "",
             );
           const body = stripVerdictLabel(rawBody);
-          // Pass 6, reintroduced 2026-08-30: the desk shipped columns
-          // unedited since the 07-21 cutover, and it read like it.
-          const authorContract = {
-            outletNames,
-            parallelEvent: parallel === null ? null : parallel.event,
-            echoEvents: echoes.map((e) => e.event),
-            wordCap: authorWordCap,
-            writerName: columnist.name,
-          };
-          // The lens (operator, 2026-08-30): a persona with a standing lens
-          // gives the piece a read through it — judged per story, most
-          // stories pass untouched — under the same band + contract guard as
-          // the Editor, so a lens can color the paper but never break it.
-          const lensBody = await applyEditorialLens({
+          // The Audit LAST, in the columnist's own voice: one read for voice,
+          // coherence and readability replaces the justice lens and the
+          // Editor, which each rewrote the column in a voice of their own
+          // (operator, 2026-09-19).
+          const finalBody = await auditColumn({
             llm,
             body,
-            persona: columnist,
-            contract: authorContract,
-            log,
-          });
-          // The Editor LAST, for every columnist, so what prints is what
-          // the editor read (operator, 2026-09-18).
-          const finalBody = await editAuthorVersion({
-            llm,
-            body: lensBody,
-            contract: authorContract,
+            keep: protectedNames(body, {
+              outletNames,
+              parallelEvent: parallel === null ? null : parallel.event,
+              echoEvents: echoes.map((e) => e.event),
+            }),
+            parallel,
+            echoes,
+            dossier: dossierText,
             originalStory: originalStoryOf(
               pages.filter((p) => contributing.some((c) => c.url === p.url)),
               story.leadOutlet,
@@ -2239,7 +2240,7 @@ export function createNewsDesk(opts: {
             log,
           });
           // What prints: the headline, the dek and their checks read this, not
-          // the pre-Editor draft (operator, 2026-09-19).
+          // the pre-Audit draft (operator, 2026-09-19).
           const printed = stripVerdictLabel(finalBody);
           const content = `${printed}${chartMarkdown}`;
           recordArtifact?.(`author version: ${columnist.name}`, content);

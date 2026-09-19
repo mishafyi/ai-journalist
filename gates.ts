@@ -122,17 +122,6 @@ export interface GateDeps {
    *  shred; with fact-guard stripping ~30% after them, finals fell under the
    *  pipeline's 800-word shape assertion. 1200 = 1.5× that assertion. */
   editWordFloor?: number;
-  /** runEdit's temperature (default 0.5). */
-  editTemperature?: number;
-  /** Names runEdit must keep: the ones the caller's own gate checks after the
-   *  edit — the desk's outlets, parallel and echo. Unnamed in the prompt, the
-   *  editor paraphrased them away and 154 of 254 desk edits were thrown out
-   *  (2026-09-11 to 09-18). */
-  editKeep?: readonly string[];
-  /** The original news story the draft was written from, shown to runEdit as
-   *  reference — the Editor checks names, numbers and quotes against it and
-   *  adds nothing from it (operator, 2026-09-19). Absent = no reference. */
-  editContext?: string;
 }
 
 /** Strip a whole-body code fence (```lang\n…\n```) that wraps the ENTIRE text. */
@@ -147,8 +136,7 @@ function themeHead(deps: GateDeps): string {
   return deps.theme ? `MAIN THEME of this piece: ${deps.theme}\n\n` : "";
 }
 
-/** Pass 6's rules, printed numbered and in this order. The podcast desk's line
- *  edit (lorien-times scripts/podcast/run-podcast.mjs) mirrors them — edit both. */
+/** Pass 6's rules, printed numbered and in this order. */
 export const EDIT_RULES: readonly string[] = [
   "Rewrite passive sentences in the active voice, and turn nominalizations back into verbs.",
   "Trim adjective pile-ups to the one adjective that does the work, and cut editorializing words so the facts carry the judgment.",
@@ -169,19 +157,12 @@ export const EDIT_RULES: readonly string[] = [
 
 /** Pass 6 — the Editor: line-edits the draft (the journalist self-edit pass). */
 export async function runEdit(draft: string, deps: GateDeps): Promise<string> {
-  const keep =
-    deps.editKeep === undefined || deps.editKeep.length === 0
-      ? []
-      : [`KEEP each of these by name, exactly as the draft writes it, and rephrase around them rather than cutting or paraphrasing them: ${deps.editKeep.map((k) => `"${k}"`).join(", ")}.`];
-  const rules = [...EDIT_RULES, ...keep].map((r, i) => `${i + 1}. ${r}`).join("\n");
+  const rules = EDIT_RULES.map((r, i) => `${i + 1}. ${r}`).join("\n");
   const prompt = `Line-edit this draft for publication. Apply the newspaper self-edit pass:
 ${rules}
 
 Output ONLY the edited markdown article, nothing else.
-${deps.editContext === undefined ? "" : `
-THE ORIGINAL NEWS STORY (reference only: check the draft's names, numbers and quotes against it; add nothing from it):
-${deps.editContext}
-`}
+
 DRAFT:
 ${draft}`;
   return deps.withRetry(
@@ -190,7 +171,7 @@ ${draft}`;
       deps.llm.complete({
         prompt,
         model: deps.model,
-        temperature: deps.editTemperature ?? 0.5,
+        temperature: 0.5,
       }),
     { input: prompt },
   );

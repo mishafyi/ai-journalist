@@ -16,7 +16,7 @@ async function main(): Promise<void> {
     async complete(): Promise<string> { throw new Error("unused"); },
     async completeStructured<T>(args: { messages: { content: string }[] }): Promise<T> {
       ok("propose: prompt carries the story summary and count",
-        args.messages.some((m) => m.content.includes("STORY:") && m.content.includes("exactly 2")),
+        args.messages.some((m) => m.content.includes("STORY:") && m.content.includes("COUNT: 2")),
         args.messages.map((m) => m.content.slice(0, 60)).join("|"));
       return { candidates: [
         { era: "1956", event: "Suez Crisis", actors: ["Egypt", "Britain", "France"], claimedSimilarity: "canal chokepoint crisis reshaping trade routes" },

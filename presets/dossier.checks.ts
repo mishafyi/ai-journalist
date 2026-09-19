@@ -8,7 +8,7 @@ import type { LlmClient } from "../ports";
 import type { PersonaProfile } from "../ports";
 import {
   composeAuthorVersion,
-  dossierBlock,
+  dossierRecord,
   findConnections,
   namePrincipals,
   projectHypotheses,
@@ -148,12 +148,12 @@ ok(hypotheses.length === 1 && hypotheses[0].precedent.includes("Noriega"), "hypo
 canned.story_hypotheses = { hypotheses: [] };
 ok((await projectHypotheses({ llm, storyText, dossier: entries, connections })).length === 0, "an empty hypothesis list is an answer, not a throw");
 
-const block = dossierBlock({ dossier: entries, connections, hypotheses });
+const block = dossierRecord({ dossier: entries, connections, hypotheses });
 ok(
   block.includes("THE DESK'S DOSSIER") && block.includes("outlived him") && block.includes("the oil is the leverage") && block.includes("Manuel Noriega, 1990"),
   "the block carries the research, the connections and the hypotheses",
 );
-ok(dossierBlock({ dossier: [], connections, hypotheses }) === "", "no principals → no block");
+ok(dossierRecord({ dossier: [], connections, hypotheses }) === "", "no principals → no block");
 
 const persona = { name: "Test Writer", method: "m", priors: "p", voice: "v" } as PersonaProfile;
 const shared = { llm, persona, storyHeadline: headline, evidenceBlock: ARTICLE, outletNames: ["Reuters", "AP"], parallel: null, echoes: [], wordCap: 1500, maxAttempts: 1 };

@@ -5,6 +5,7 @@
  * Port-pure: speaks only SearchClient/LlmClient; all knobs are arguments.
  * Everything here is OPT-IN — presets keep their cheap snippet default.
  */
+import { readRules } from "./rules";
 import pLimit from "p-limit";
 import type { LlmClient, SearchClient, SearchResult } from "./ports";
 import { DEFAULT_BLOCKED_HOSTS, isBlockedHost } from "./news";
@@ -564,6 +565,8 @@ export function createResearchStack(opts: ResearchStackOpts): ResearchStack {
  *  news desk extracts from RESOLVED URLs (not search hits); burying this in
  *  the search-driven closure would force a re-implementation there.
  *  Returns the extracted bullet blocks, [] when every chunk replied NONE. */
+const FACTS_RULES = readRules("facts");
+
 export async function extractEvidence(args: {
   llm: LlmClient;
   topic: string;
@@ -583,8 +586,7 @@ export async function extractEvidence(args: {
   const parts: string[] = [];
   for (const [i, chunk] of chunks.entries()) {
     const extracted = await llm.complete({
-      system:
-        "You extract evidence for a news article. From the page text, list every concrete fact, statistic, date, named person or institution, and direct quote (verbatim, in quotation marks, with who said it) relevant to the topic. Dense bullet points only, no commentary. If nothing is relevant, reply exactly: NONE",
+      system: `You extract evidence for a news article.\n\nRULES:\n${FACTS_RULES}`,
       prompt: `TOPIC: ${topic}\n\nPAGE ${page.url} (part ${i + 1}/${chunks.length}):\n${chunk}`,
       temperature: 0.1,
     });

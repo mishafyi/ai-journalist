@@ -1,4 +1,5 @@
-import { DATA_PLAYS, FRED_TITLES, EDITOR_MODEL, EDITOR_TEMPERATURE, originalStoryOf, PERSONAS, SERP_TITLE_CHARS, applyEditorialLens, protectedNames, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, editAuthorVersion, pickHeadline, stripFurniture, translateHeadline, validateHeadline } from "./news-desk";
+import { DATA_PLAYS, FRED_TITLES, AUDIT_MODEL, AUDIT_TEMPERATURE, READABILITY_RULES, originalStoryOf, PERSONAS, SERP_TITLE_CHARS, auditColumn, pickVoice, protectedNames, checkAuthorVersionContract, createNewsDesk, evidenceWordCap, fredChartUrl, isEnglishHeadline, pickHeadline, stripFurniture, translateHeadline, validateHeadline, voiceBlock, withVoice } from "./news-desk";
+import { readRules } from "../rules";
 import type { NewsDeskKnobs } from "./news-desk";
 import { NO_PARALLEL_PHRASE } from "../gates";
 import { proposeParallels } from "../parallels";
@@ -125,9 +126,11 @@ async function orchestrationChecks(): Promise<void> {
     `The bank has chosen credibility over flexibility, and it will end up paying for the first with the second before the year is out.`,
   ].join("\n");
   const prompts: string[] = [];
+  const systems: string[] = [];
   const llm = {
     async complete(args: { system?: string; prompt: string }): Promise<string> {
       prompts.push(args.prompt);
+      systems.push(args.system ?? "");
       if (args.prompt.startsWith("TOPIC:")) return `- fact ("quote", per wire)`;
       // Route on prompt content (the TOPIC: trick): a compose prompt built on
       // the no-parallel path instructs the phrase verbatim — answer with the
@@ -224,7 +227,7 @@ async function orchestrationChecks(): Promise<void> {
     llm,
     search,
     feeds: [],
-    persona: PERSONAS.historian,
+    roster: [PERSONAS.historian],
     brand,
     sink,
     knobs,
@@ -301,9 +304,12 @@ async function orchestrationChecks(): Promise<void> {
     !prompts.some((p) => p.includes("fact-checker reviewing")) &&
       !artifacts.some((a) => a.label.startsWith("fact-check-audit: ") || a.label.startsWith("claim-check: ")),
     artifacts.map((a) => a.label).join(","));
-  ok("the author version goes through the Editor (Pass 6 wired into the desk)",
-    prompts.some((p) => p.startsWith("Line-edit this draft")),
-    "no Line-edit prompt was sent");
+  ok("the column goes through the Audit, last",
+    prompts.some((p) => p.startsWith("Audit this column for publication.")) && !prompts.some((p) => p.startsWith("Line-edit this draft")),
+    "no Audit prompt was sent");
+  ok("every model call after the Voice Pick carries the voice",
+    systems.length > 0 && systems.every((x) => x.includes(`THE VOICE — ${PERSONAS.historian.name}`)),
+    systems.find((x) => !x.includes("THE VOICE")) ?? "");
   ok("stage artifacts recorded under the stable labels",
     ["trending", "evidence", "parallels", "lead-image", "published"].every((l) => artifacts.some((a) => a.label === l)) &&
       artifacts.some((a) => a.label === `resolution: ${STORY2}`) &&
@@ -328,7 +334,7 @@ async function orchestrationChecks(): Promise<void> {
       llm,
       search,
       feeds: [],
-      persona: PERSONAS.historian,
+      roster: [PERSONAS.historian],
       brand,
       sink,
       knobs: { ...knobs, minSources: 3 },
@@ -356,7 +362,7 @@ async function orchestrationChecks(): Promise<void> {
     llm,
     search,
     feeds: [],
-    persona: PERSONAS.historian,
+    roster: [PERSONAS.historian],
     brand,
     sink: {
       async publish(post) {
@@ -426,7 +432,7 @@ async function orchestrationChecks(): Promise<void> {
       },
     },
     feeds: [],
-    persona: PERSONAS.historian,
+    roster: [PERSONAS.historian],
     brand,
     sink: {
       async publish(post) {
@@ -525,7 +531,7 @@ async function orchestrationChecks(): Promise<void> {
       },
     },
     feeds: [],
-    persona: PERSONAS.historian,
+    roster: [PERSONAS.historian],
     brand,
     sink: {
       async publish(post) {
@@ -596,7 +602,7 @@ async function orchestrationChecks(): Promise<void> {
       },
     },
     feeds: [],
-    persona: PERSONAS.historian,
+    roster: [PERSONAS.historian],
     brand,
     sink: {
       async publish(post) {
@@ -925,10 +931,11 @@ async function orchestrationChecks(): Promise<void> {
   process.stdout.write("news-desk (part 2) checks: all green\n");
 }
 
-/** editAuthorVersion: whatever the Editor returns ships — no contract check,
- *  no length band (operator, 2026-09-19) — on the Flash models, with the
- *  original news story as reference; a thrown call keeps the draft. */
-async function editorChecks(): Promise<void> {
+/** auditColumn: whatever the Audit returns ships — no contract check, no
+ *  length band — on the Flash models, reading the rules from their files, the
+ *  names to keep, the parallel, the dossier record and the original story; a
+ *  thrown call keeps the draft. */
+async function auditChecks(): Promise<void> {
   let failures = 0;
   const ok = (name: string, cond: boolean, detail: string): void => {
     if (cond) process.stdout.write(`PASS ${name}\n`);
@@ -949,52 +956,35 @@ async function editorChecks(): Promise<void> {
     "",
     `${FILLER.repeat(8)}The bank has chosen credibility over flexibility, and it will pay for the first with the second.`,
   ].join("\n");
-  const CONTRACT = {
-    outletNames: ["Wire", "Beacon"] as const,
-    parallelEvent: "Panic of 1907",
-    echoEvents: [] as readonly string[],
-    wordCap: 700,
-    writerName: "Test Writer",
-  };
+  const KEEP = ["Wire", "Beacon", "Panic of 1907"];
+  const PARALLEL = { event: "Panic of 1907", era: "1907", actors: ["J.P. Morgan"], claimedSimilarity: "a lender of last resort ends a freeze", wikipediaTitle: "Panic of 1907", extract: "In 1907 a run on trust companies froze credit until J.P. Morgan organized a rescue.", wikipediaUrl: "https://en.wikipedia.org/wiki/Panic_of_1907", score: 0.9 };
+  const DOSSIER = "THE DESK'S DOSSIER — the people behind the story, researched from documents read in full:\n\n- The chair: signed the 2019 framework.";
   const ORIGINAL = "Wire — Rates rise (https://wire.test/rates)\n\nThe policy rate rose fifty basis points to a twenty-year high.";
-  const stubLlm = (reply: () => Promise<string>) => ({
+  const stubLlm = (reply: () => Promise<string>): LlmClient => ({
     complete: async (): Promise<string> => reply(),
     completeStructured: async <T,>(): Promise<T> => {
       throw new Error("unused");
     },
   });
+  const args = { body: DRAFT, keep: KEEP, parallel: PARALLEL, echoes: [], dossier: DOSSIER, originalStory: ORIGINAL };
 
   const POLISHED = DRAFT.replace("plain, and the argument follows", "unmistakable, and the argument follows");
-  ok("an edit ships",
-    (await editAuthorVersion({ llm: stubLlm(async () => POLISHED), body: DRAFT, contract: CONTRACT, originalStory: ORIGINAL })) === POLISHED,
-    "the edited version was not kept");
-  ok("a whole-body code fence is stripped before judging",
-    (await editAuthorVersion({ llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``), body: DRAFT, contract: CONTRACT, originalStory: ORIGINAL })) === POLISHED,
-    "the fenced edit was not unwrapped and kept");
+  ok("an audit ships", (await auditColumn({ ...args, llm: stubLlm(async () => POLISHED) })) === POLISHED, "the audited version was not kept");
+  ok("a whole-body code fence is stripped",
+    (await auditColumn({ ...args, llm: stubLlm(async () => `\`\`\`markdown\n${POLISHED}\n\`\`\``) })) === POLISHED,
+    "the fenced audit was not unwrapped and kept");
   const ONE_OUTLET = POLISHED.split("Beacon").join("Bacon");
-  ok("an edit ships even when it drops a name: no contract check",
-    (await editAuthorVersion({
-      llm: stubLlm(async () => ONE_OUTLET),
-      body: DRAFT,
-      contract: CONTRACT,
-      originalStory: ORIGINAL,
-    })) === ONE_OUTLET,
-    "the edit was held to the contract");
-  const bandLogs: string[] = [];
+  ok("an audit ships even when it drops a name: no contract check",
+    (await auditColumn({ ...args, llm: stubLlm(async () => ONE_OUTLET) })) === ONE_OUTLET, "the audit was held to the contract");
+  const keptLogs: string[] = [];
   const SHREDDED = DRAFT.split(FILLER.repeat(8)).join(FILLER);
-  ok("a much shorter edit still ships: no length band",
-    (await editAuthorVersion({
-      llm: stubLlm(async () => SHREDDED),
-      body: DRAFT,
-      contract: CONTRACT,
-      originalStory: ORIGINAL,
-      log: (l) => bandLogs.push(l),
-    })) === SHREDDED && bandLogs.some((l) => l.includes("Editor kept")),
-    bandLogs.join(" | "));
-  // The edit is the paper's last read: the Flash models only, warmer than
-  // runEdit's default, told the names to keep, reading the original story.
+  ok("a much shorter audit still ships: no length band",
+    (await auditColumn({ ...args, llm: stubLlm(async () => SHREDDED), log: (l: string) => keptLogs.push(l) })) === SHREDDED && keptLogs.some((l) => l.includes("Audit kept")),
+    keptLogs.join(" | "));
+
   let seen: { prompt: string; model?: string; temperature?: number } = { prompt: "" };
-  await editAuthorVersion({
+  await auditColumn({
+    ...args,
     llm: {
       complete: async (a: { prompt: string; model?: string; temperature?: number }): Promise<string> => {
         seen = a;
@@ -1004,16 +994,18 @@ async function editorChecks(): Promise<void> {
         throw new Error("unused");
       },
     },
-    body: DRAFT,
-    contract: CONTRACT,
-    originalStory: ORIGINAL,
   });
-  ok("the Editor runs on the Flash models only, at its own temperature",
-    seen.model === EDITOR_MODEL && EDITOR_MODEL.split(",")[0] === "gemini-3.8-flash" && !/lite|gemma/.test(EDITOR_MODEL) && seen.temperature === EDITOR_TEMPERATURE && EDITOR_TEMPERATURE === 0.7,
+  ok("the Audit runs on the Flash models only, cool",
+    seen.model === AUDIT_MODEL && AUDIT_MODEL.split(",")[0] === "gemini-3.8-flash" && !/lite|gemma/.test(AUDIT_MODEL) && seen.temperature === AUDIT_TEMPERATURE && AUDIT_TEMPERATURE === 0.3,
     `${seen.model} @ ${seen.temperature}`);
-  ok("the Editor reads the original news story",
-    seen.prompt.includes("THE ORIGINAL NEWS STORY") && seen.prompt.includes(ORIGINAL) && seen.prompt.indexOf(ORIGINAL) < seen.prompt.indexOf("DRAFT:"),
-    seen.prompt.slice(-600));
+  ok("the Audit reads its rules and the readability rules from their files",
+    seen.prompt.startsWith("Audit this column for publication.") && seen.prompt.includes(readRules("audit")) && seen.prompt.includes(READABILITY_RULES) && READABILITY_RULES.startsWith("1. "),
+    seen.prompt.slice(0, 400));
+  ok("the Audit is told the names to keep",
+    seen.prompt.includes('NAMES TO KEEP: "Wire", "Beacon", "Panic of 1907"'), seen.prompt.slice(0, 1200));
+  ok("the Audit reads the parallel's record, the dossier and the original story, before the draft",
+    [PARALLEL.extract, DOSSIER, ORIGINAL].every((t) => seen.prompt.includes(t) && seen.prompt.indexOf(t) < seen.prompt.indexOf("DRAFT:")),
+    seen.prompt.slice(-900));
   const PAGES = [
     { outlet: "BBC", title: "b", url: "https://bbc.test/b", content: "bbc text" },
     { outlet: "AP News", title: "a", url: "https://ap.test/a", content: "ap text" },
@@ -1021,9 +1013,6 @@ async function editorChecks(): Promise<void> {
   ok("originalStoryOf: the lead outlet's own page, matched loosely by name",
     originalStoryOf(PAGES, "apnews.com").includes("ap text") && originalStoryOf(PAGES, "Reuters").includes("bbc text") && originalStoryOf([], "BBC") === "",
     "");
-  ok("the Editor is told to keep the story's names",
-    ['"Wire"', '"Beacon"', '"Panic of 1907"'].every((n) => seen.prompt.includes(n)) && !seen.prompt.includes("thrown away"),
-    seen.prompt.slice(-400));
   ok("protectedNames: only what the draft carries, as it writes it",
     JSON.stringify(protectedNames("Wire and the Guardian report; it echoes Dust Bowl summers.", {
       outletNames: ["Wire", "The Guardian", "Beacon"],
@@ -1031,25 +1020,109 @@ async function editorChecks(): Promise<void> {
       echoEvents: ["Panic of 1907"],
     })) === JSON.stringify(["Wire", "The Guardian", "Dust Bowl"]),
     "");
-
   const throwLogs: string[] = [];
-  ok("a thrown edit call keeps the draft (best-effort)",
-    (await editAuthorVersion({
+  ok("a thrown audit call keeps the draft (best-effort)",
+    (await auditColumn({
+      ...args,
       llm: stubLlm(async () => {
         throw new Error("model died");
       }),
-      body: DRAFT,
-      contract: CONTRACT,
-      originalStory: ORIGINAL,
-      log: (l) => throwLogs.push(l),
-    })) === DRAFT && throwLogs.some((l) => l.includes("Editor failed")),
+      log: (l: string) => throwLogs.push(l),
+    })) === DRAFT && throwLogs.some((l) => l.includes("Audit failed")),
     throwLogs.join(" | "));
 
   if (failures > 0) {
     process.exitCode = 1;
     return;
   }
-  process.stdout.write("news-desk Editor checks: all green\n");
+  process.stdout.write("news-desk Audit checks: all green\n");
+}
+
+/** The Voice Pick and the voice every later call carries. */
+async function voiceChecks(): Promise<void> {
+  let failures = 0;
+  const ok = (name: string, cond: boolean, detail: string): void => {
+    if (cond) process.stdout.write(`PASS ${name}\n`);
+    else {
+      failures += 1;
+      process.stdout.write(`FAIL ${name} — ${detail}\n`);
+    }
+  };
+  const A = { name: "Ann Able", method: "method-a", priors: "priors-a", voice: "voice-a", bio: "BIO-A" };
+  const B = { name: "Ben Bold", method: "method-b", priors: "priors-b", voice: "voice-b", bio: "BIO-B", rules: "1. Press the wrong.\n2. Name who owes." };
+  const C = { name: "Cy Calm", method: "method-c", priors: "priors-c", voice: "voice-c" };
+  const never: LlmClient = {
+    complete: async (): Promise<string> => {
+      throw new Error("no call expected");
+    },
+    completeStructured: async <T,>(): Promise<T> => {
+      throw new Error("no call expected");
+    },
+  };
+  ok("a roster of one is its own answer, with no call", (await pickVoice({ llm: never, roster: [A], headlines: ["h"] })) === A, "");
+
+  let seen = "";
+  let calls = 0;
+  const picker = (replies: unknown[]): LlmClient => ({
+    complete: async (): Promise<string> => "unused",
+    completeStructured: async <T,>(a: { messages: { content: string }[]; schema: { parse(v: unknown): T } }): Promise<T> => {
+      seen = a.messages.map((m) => m.content).join("\n");
+      const reply = replies[calls];
+      calls += 1;
+      return a.schema.parse(reply);
+    },
+  });
+  calls = 0;
+  const chosen = await pickVoice({ llm: picker([{ columnist: "Ben Bold", why: "the harm is unanswered" }]), roster: [A, B, C], headlines: ["Plant fined $5", "Town still waits"] });
+  ok("the pick names a columnist on the roster", chosen === B && calls === 1, `${chosen.name}, ${calls} call(s)`);
+  ok("the pick reads the headlines, each method, priors, voice and rules — never the biography",
+    ["Plant fined $5", "Town still waits", "method-a", "priors-c", "voice-b", "Press the wrong."].every((t) => seen.includes(t)) && !seen.includes("BIO-A") && seen.includes(readRules("voice-pick")),
+    seen.slice(0, 600));
+  calls = 0;
+  const logs: string[] = [];
+  const second = await pickVoice({ llm: picker([{ columnist: "Nobody", why: "not on the roster" }, { columnist: "Cy Calm", why: "a quiet story" }]), roster: [A, B, C], headlines: ["h"], log: (l: string) => logs.push(l) });
+  ok("a name off the roster is asked once more", second === C && calls === 2 && logs.some((l) => l.includes("attempt 1/2 failed")), logs.join(" | "));
+  calls = 0;
+  let threw = false;
+  try {
+    await pickVoice({ llm: picker([{ columnist: "Nobody", why: "not on the roster" }, { columnist: "Still nobody", why: "not on it" }]), roster: [A, B, C], headlines: ["h"] });
+  } catch {
+    threw = true;
+  }
+  ok("two misses throw", threw && calls === 2, `${calls} call(s)`);
+
+  const block = voiceBlock(B);
+  ok("the voice block: name, method, voice, numbered rules and the every-step rules — no biography or priors",
+    block.startsWith("THE VOICE — Ben Bold") && block.includes("method-b") && block.includes("voice-b") && block.includes("1. Press the wrong.\n2. Name who owes.") && block.includes(readRules("voice")) && !block.includes("BIO-B") && !block.includes("priors-b"),
+    block);
+  let sys: string | undefined = "";
+  let msgs: { role: string; content: string }[] = [];
+  const inner: LlmClient = {
+    complete: async (a: { system?: string }): Promise<string> => {
+      sys = a.system;
+      return "x";
+    },
+    completeStructured: async <T,>(a: { messages: { role: string; content: string }[] }): Promise<T> => {
+      msgs = a.messages;
+      return {} as T;
+    },
+  };
+  const voiced = withVoice(inner, B);
+  await voiced.complete({ system: "You extract evidence for a news article.", prompt: "p" });
+  ok("a call's own instructions come first, the voice after", sys === `You extract evidence for a news article.\n\n${block}`, String(sys));
+  await voiced.complete({ prompt: "p" });
+  ok("a call with no instructions gets the voice as its system text", sys === block, String(sys));
+  await voiced.completeStructured({ messages: [{ role: "system", content: "Tag the story." }, { role: "user", content: "u" }], schema: { parse: (v: unknown) => v } as never, schemaName: "t" });
+  ok("a structured call's system message is extended, not replaced",
+    msgs.length === 2 && msgs[0].content === `Tag the story.\n\n${block}` && msgs[1].content === "u", JSON.stringify(msgs).slice(0, 200));
+  await voiced.completeStructured({ messages: [{ role: "user", content: "u" }], schema: { parse: (v: unknown) => v } as never, schemaName: "t" });
+  ok("a structured call with no system message gets one", msgs.length === 2 && msgs[0].role === "system" && msgs[0].content === block, JSON.stringify(msgs).slice(0, 200));
+
+  if (failures > 0) {
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write("news-desk voice checks: all green\n");
 }
 
 /** translateHeadline holds a translation to the printed-title standard:
@@ -1129,7 +1202,7 @@ async function translateHeadlineChecks(): Promise<void> {
 /** The 2026-08-30 editorial additions: verified recent echoes (proposal
  *  window + contract rule) and the persona lens (honest gate → guarded
  *  rewrite that can never break the contract). */
-async function lensAndEchoChecks(): Promise<void> {
+async function echoChecks(): Promise<void> {
   let failures = 0;
   const ok = (name: string, cond: boolean, detail: string): void => {
     if (cond) {
@@ -1169,42 +1242,17 @@ async function lensAndEchoChecks(): Promise<void> {
   ok("windowYears turns the proposal recent: the prompt names the 20-year window",
     seenPrompt.includes("past 20 years"), seenPrompt.slice(0, 200));
 
-  // ── applyEditorialLens: honest gate, guarded rewrite ─────────────────────
-  const filler = Array.from({ length: 320 }, (_, i) => `w${i}`).join(" ");
-  const passing = (tail: string): string =>
-    `Reuters reported the fine and AP confirmed the delay. ${NO_PARALLEL_PHRASE}\n\n## The fine that cost less than the crime\n${filler}\n\n## Who is still waiting for the check\nThe county waited ${tail}`;
-  const LENS_CONTRACT = { outletNames: ["Reuters", "AP"] as const, parallelEvent: null, echoEvents: [] as readonly string[], wordCap: 900, writerName: "X" };
-  const lensPersona = { ...PERSONAS.historian, lens: "THE JUSTICE READ: when harm goes unanswered, press it." };
-  const lensLlm = (applies: boolean, rewrite: string): LlmClient =>
-    ({
-      complete: async (): Promise<string> => rewrite,
-      completeStructured: async (): Promise<unknown> => ({ applies, why: "test judgment" }),
-    }) as unknown as LlmClient;
-  const calm = passing("quietly.");
-  const charged = passing("and the waiting is the scandal.");
-  ok("no lens on the persona → body untouched",
-    (await applyEditorialLens({ llm: lensLlm(true, charged), body: calm, persona: PERSONAS.historian, contract: LENS_CONTRACT })) === calm,
-    "body changed without a lens");
-  ok("lens judged NOT to apply → body untouched",
-    (await applyEditorialLens({ llm: lensLlm(false, charged), body: calm, persona: lensPersona, contract: LENS_CONTRACT })) === calm,
-    "body changed on a no");
-  ok("lens applies and the rewrite passes the contract → rewrite ships",
-    (await applyEditorialLens({ llm: lensLlm(true, charged), body: calm, persona: lensPersona, contract: LENS_CONTRACT })) === charged,
-    "valid lens rewrite was not kept");
-  ok("a rewrite that breaks the contract is discarded — the lens never breaks the paper",
-    (await applyEditorialLens({ llm: lensLlm(true, "just words"), body: calm, persona: lensPersona, contract: LENS_CONTRACT })) === calm,
-    "a contract-breaking rewrite shipped");
-
   if (failures > 0) {
-    throw new Error(`${failures} lens/echo check(s) failed`);
+    throw new Error(`${failures} echo check(s) failed`);
   }
-  process.stdout.write("news-desk lens+echo checks: all green\n");
+  process.stdout.write("news-desk echo checks: all green\n");
 }
 
 orchestrationChecks()
-  .then(() => editorChecks())
+  .then(() => auditChecks())
+  .then(() => voiceChecks())
   .then(() => translateHeadlineChecks())
-  .then(() => lensAndEchoChecks())
+  .then(() => echoChecks())
   .catch((err: unknown) => {
     process.stderr.write(`news-desk.checks failed: ${String(err)}\n`);
     process.exit(1);

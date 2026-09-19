@@ -78,6 +78,7 @@
     "*.ts",
     "*.json",
     "presets",
+    "rules",
     "sources",
     "clients",
     "testing",

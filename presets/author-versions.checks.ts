@@ -141,7 +141,7 @@ async function composeChecks(): Promise<void> {
     `calls=${prompts.length}`);
   ok("compose: the retry REVISES the previous draft (draft included, revise instruction)",
     (prompts[1] ?? "").includes("YOUR PREVIOUS DRAFT") && (prompts[1] ?? "").includes("the wires") &&
-      (prompts[1] ?? "").includes("REVISE the draft above"),
+      (prompts[1] ?? "").includes("Revise the draft: fix only these points"),
     (prompts[1] ?? "").slice(0, 120));
 
   let threw = "";

@@ -76,7 +76,7 @@ async function main(): Promise<void> {
       apiUrl: process.env.FIRECRAWL_API_URL,
     }),
     feeds: FEEDS,
-    persona: COLUMNIST,
+    roster: [COLUMNIST],
     brand: BRAND,
     sink: fileSink,
     authorVersions: { wordCap: 1100 },

@@ -8,6 +8,9 @@
  */
 import { z } from "zod";
 import type { LlmClient } from "./ports";
+import { readRules } from "./rules";
+
+const PRECEDENT_RULES = readRules("precedents");
 
 // Bounds are STRUCTURAL only. They used to be `era.min(2)`, `event.min(3)`,
 // `actors.min(1).max(6)`, `claimedSimilarity.min(10)` — and because zod rejects
@@ -55,17 +58,15 @@ export async function proposeParallels(args: {
 }): Promise<ParallelCandidate[]> {
   const result = await args.llm.completeStructured({
     messages: [
-      {
-        role: "system",
-        content: `You are a careful historian. Propose historical parallels for a current news story: real, well-documented ${args.windowYears === undefined ? "events from any era" : `subjects from the past ${args.windowYears} years ONLY — an earlier action by a person at the centre of today's story, an earlier chapter of the same relationship between the same parties, or a closely comparable recent event`} whose DYNAMICS resemble the story. Use only widely known subjects with standard Wikipedia articles, and name each by its common encyclopedic title ("Rwandan genocide", "Suez Crisis") — never a description ("Industrial Labor Disputes (General)" is not an event). Never invent events.`,
-      },
+      { role: "system", content: `You are a careful historian.\n\nRULES:\n${PRECEDENT_RULES}` },
       {
         role: "user",
-        content: `STORY:\n${args.storySummary}\n\nPropose exactly ${args.count} candidate parallels. For each: era (the year or period, e.g. "1956"), event (the standard name, e.g. "Suez Crisis"), actors (1-6 principal parties), claimedSimilarity (one sentence: which dynamic matches).${args.correctiveContext === undefined ? "" : `\n\nYOUR PREVIOUS CANDIDATES FAILED VERIFICATION — your memory of at least one event conflicted with the historical record. The verified record says:\n${args.correctiveContext}\nRe-propose candidates whose era, actors, and facts MATCH documented history; the record always wins over your memory.`}`,
+        content: `STORY:\n${args.storySummary}\n\nCOUNT: ${args.count}\nWINDOW: ${args.windowYears === undefined ? "any era" : `the past ${args.windowYears} years only`}${args.correctiveContext === undefined ? "" : `\n\nVERIFIED RECORD:\n${args.correctiveContext}`}`,
       },
     ],
     schema: z.object({ candidates: z.array(ParallelCandidate).min(1) }),
-    schemaName: "parallel_candidates",
+    // The echo round is its own step in the trace.
+    schemaName: args.windowYears === undefined ? "parallel_candidates" : "echo_candidates",
     ...(args.model === undefined ? {} : { model: args.model }),
     temperature: 0.4,
   });

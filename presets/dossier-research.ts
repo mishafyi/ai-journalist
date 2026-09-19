@@ -19,6 +19,7 @@
  * split into parts, each read in its own call — never truncated. The source
  * articles (the story's own reporting, whole) ride in every prompt.
  */
+import { readRules } from "../rules";
 import { execFile } from "node:child_process";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -99,18 +100,11 @@ const RETURNS: Readonly<Record<string, string>> = {
 
 /** Sources whose results are documents to open; the rest return records. */
 export const DOC_SOURCES = ["Federal Register", "NSArchive", "FRUS", "EDGAR", "Wikipedia", "NARA", "Wilson Center", "CIA", "FAS", "Congress"] as const;
-const REF_RULES = [
-  "Federal Register: the document_number",
-  'NSArchive: the path (e.g. "33209-document-45-office-director-…"), never the bare id',
-  'FRUS: "volume/doc" (e.g. "frus1964-68v34/213")',
-  'EDGAR: the _id exactly (e.g. "0001680247-26-000058:exhibit991.htm") and cik = the first of its ciks',
-  "Wikipedia: the article title",
-  "NARA: the naId",
-  "Wilson Center: the slug",
-  "CIA: the document path from the collection listing",
-  "FAS: the page path",
-  'Congress: "congress/type/number" (e.g. "119/hr/1234")',
-].join("\n");
+const RATE_RULES = readRules("dossier-rate-sources");
+const PLAN_RULES = readRules("dossier-plan-searches");
+const PICK_RULES = readRules("dossier-pick-documents");
+const NOTES_RULES = readRules("dossier-notes");
+
 const TEXT_PARAMS = ["q", "query", "term", "keyword", "name", "last_name", "condition", "intervention"];
 
 // ── the catalogue ────────────────────────────────────────────────────────────
@@ -672,18 +666,28 @@ export async function researchOne(args: {
   const { llm, datagod, catalogue, principal: p, headline, storyText } = args;
   const log = args.log ?? ((): void => undefined);
   const subject = `${p.name} (${p.kind}; in today's story: ${p.role})`;
-  const ask = <T>(schema: z.ZodType<T>, schemaName: string, prompt: string, temperature: number): Promise<T> =>
-    llm.completeStructured({ messages: [{ role: "user", content: prompt }], schema, schemaName, temperature, model: DOSSIER_MODEL });
+  const system = (rules: string): string => `You are the research editor building a newspaper's background dossier.\n\nRULES:\n${rules}`;
+  const ask = <T>(schema: z.ZodType<T>, schemaName: string, rules: string, prompt: string, temperature: number): Promise<T> =>
+    llm.completeStructured({
+      messages: [
+        { role: "system", content: system(rules) },
+        { role: "user", content: prompt },
+      ],
+      schema,
+      schemaName,
+      temperature,
+      model: DOSSIER_MODEL,
+    });
+  const about = `SUBJECT: ${subject}\nSTORY: ${headline}`;
 
   // A. every source, scored
   const rated = await ask(
     RatingsSchema,
     "dossier_rate_sources",
-    `You are the research editor preparing a newspaper's background dossier on ${subject}.\n\nTODAY'S STORY — the source articles:\n\n${storyText}\n\n` +
-      `Below is EVERY source in our research data gateway and what it holds. Score EVERY source from 0 to 10 for how likely it is to hold interesting DOCUMENTS ABOUT ${p.name} — texts and records in which ${p.name} itself is the subject: official acts, filings, declassified or archival papers, diplomatic records, contracts, votes, disclosures, reference articles — that a reader of today's story does not already have. ` +
-      `This is a search for DOCUMENTS — texts. A source of statistics or price series scores at most 4, however relevant its numbers. For a country, a government or an institution, its own official acts and its diplomatic, intelligence and archival record count as documents about it. A source that cannot be searched for ${p.name} scores low. 0 means it holds nothing about ${p.name}. One line of reasoning each.\n\n` +
+    RATE_RULES,
+    `${about}\n\nTODAY'S STORY — the source articles:\n\n${storyText}\n\nSOURCES:\n\n` +
       catalogue.sources.map((s) => `### ${s.name}\n${s.description}\n${howToSearch(s.name, catalogue.rows)}`).join("\n\n") +
-      `\n\nReturn JSON: {"ratings": [{"source", "score", "why"}]} with one entry for EVERY source above, named exactly as its heading.`,
+      `\n\nReturn JSON: {"ratings": [{"source", "score", "why"}]}`,
     0.2,
   );
   // One score per source — the highest the model gave it — for sources in the catalogue.
@@ -705,8 +709,8 @@ export async function researchOne(args: {
     const plan = await ask(
       PlanSchema,
       "dossier_plan_searches",
-      `You are researching ${subject} for the story "${headline}".\n\nSearch these sources for documents about ${p.name}. For each, give one or two calls that LIST documents about ${p.name} — the endpoint, and its parameters by the names listed. Put ids into the {placeholders} of the path. ` +
-        `Every call must target ${p.name}: search for ${p.name} by name — or, when ${p.name} is a country, a government or an institution, search its own documents for the story's subject (a president's executive orders and proclamations on Iran: Federal Register doc_type=PRESDOCU, term=Iran). A call that lists recent items about nothing in particular is refused. Follow each source's search rules.\n\n` +
+      PLAN_RULES,
+      `${about}\n\nSOURCES:\n\n` +
         top
           .map((r) => {
             const lines = catalogue.rows.filter((row) => row.source === r.source).map((row) => `  ${row.path} — ${row.description} — params: ${row.params || "none"}`).join("\n");
@@ -747,11 +751,9 @@ export async function researchOne(args: {
   const isDocSource = (s: string): boolean => (DOC_SOURCES as readonly string[]).includes(s);
   const docListings = listings.filter((l) => isDocSource(l.source) && l.items > 0);
   const recordListings = listings.filter((l) => !isDocSource(l.source) && l.items > 0);
-  const pickHead = `You are researching ${subject} for the story "${headline}".\n\nTODAY'S STORY — the source articles:\n\n${storyText}\n\nWHAT THE SEARCHES RETURNED:\n\n`;
-  const pickTail =
-    `\n\nPick up to ${MAX_DOCS} documents to read IN FULL for the dossier on ${p.name}, most interesting first: the ones most likely to tell a reader something about ${p.name} that today's story does not. Prefer documents whose full text can be read; a catalogue record is a title and a few fields. Only documents listed above, each once. ref is the document's id copied exactly as the results give it:\n${REF_RULES}\n\n` +
-    `Return JSON: {"picks": [{"source", "ref", "cik", "title", "why"}]}`;
-  const pickBudget = partBudget(CALL_BUDGET_CHARS - pickHead.length - pickTail.length);
+  const pickHead = `${about}\nMAX: ${MAX_DOCS}\n\nTODAY'S STORY — the source articles:\n\n${storyText}\n\nWHAT THE SEARCHES RETURNED:\n\n`;
+  const pickTail = `\n\nReturn JSON: {"picks": [{"source", "ref", "cik", "title", "why"}]}`;
+  const pickBudget = partBudget(CALL_BUDGET_CHARS - system(PICK_RULES).length - pickHead.length - pickTail.length);
   const listingTexts = docListings.flatMap((l, i) => {
     const header = `[L${i + 1}] ${l.source} — ${l.call}\nOpening one returns: ${RETURNS[l.source] ?? "its record"}`;
     const parts = splitText(JSON.stringify(l.data), partBudget(pickBudget - header.length - 40));
@@ -760,7 +762,7 @@ export async function researchOne(args: {
   const listed = docListings.map((l) => JSON.stringify(l.data)).join("\n");
   const picks: Pick[] = [...directPicks];
   for (const group of groupsUnder(listingTexts, pickBudget)) {
-    const picked = await ask(PicksSchema, "dossier_pick_documents", `${pickHead}${group.join("\n\n")}${pickTail}`, 0.2);
+    const picked = await ask(PicksSchema, "dossier_pick_documents", PICK_RULES, `${pickHead}${group.join("\n\n")}${pickTail}`, 0.2);
     for (const x of picked.picks) {
       // A pick is only a document the searches returned: its ref must appear in
       // a listing (two EPA rules were opened for Russia from nowhere, 2026-09-19).
@@ -806,27 +808,25 @@ export async function researchOne(args: {
   if (docs.length + records.length === 0) {
     return { summary: "", documents: [], records: [], ratings, searches };
   }
-  const notesHead = `You are researching ${subject} for a dossier behind the story "${headline}".\n\nTODAY'S STORY — the source articles:\n\n${storyText}\n\n`;
-  const notesTail =
-    `Write the research on ${p.name}. The dossier already carries the source articles: never repeat what they say — write only what the documents and records ADD.\n- summary: who or what ${p.name} is and what these documents and records show about them — record, money, past actions, positions, controversies — and anything that bears on today's story.\n` +
-    `- documents: for EVERY document, relevant (false when it holds nothing about ${p.name} or today's story), key_points (what it says that matters, with dates, names and numbers), and quotes (up to 3 sentences copied EXACTLY, character for character, from its text — statements a reporter would cite, never a title or a heading).\n- records: for every record set, its key_points.\n\n` +
-    `Return JSON: {"summary", "documents": [{"doc", "relevant", "key_points", "quotes"}], "records": [{"rec", "key_points"}]}`;
+  const notesHead = `${about}\n\nTODAY'S STORY — the source articles:\n\n${storyText}\n\n`;
+  const notesTail = `Return JSON: {"summary", "documents": [{"doc", "relevant", "key_points", "quotes"}], "records": [{"rec", "key_points"}]}`;
+  const notesBudget = CALL_BUDGET_CHARS - system(NOTES_RULES).length - notesHead.length - notesTail.length;
   const items: string[] = [];
   for (const d of docs) {
     const header = `[${d.id}] ${d.doc.title} — ${d.pick.source}${d.doc.date ? `, ${d.doc.date}` : ""} — ${d.doc.url} (${d.doc.kind}, ${d.doc.text.length.toLocaleString()} chars)`;
-    const parts = splitText(d.doc.text, partBudget(CALL_BUDGET_CHARS - notesHead.length - notesTail.length - header.length - 200));
+    const parts = splitText(d.doc.text, partBudget(notesBudget - header.length - 200));
     parts.forEach((part, i) => items.push(`${header}${parts.length > 1 ? ` — part ${i + 1} of ${parts.length}` : ""}\n${part}`));
   }
   for (const r of records) {
     const header = `[${r.id}] ${r.source} records — ${r.call}`;
-    const parts = splitText(r.json, partBudget(CALL_BUDGET_CHARS - notesHead.length - notesTail.length - header.length - 200));
+    const parts = splitText(r.json, partBudget(notesBudget - header.length - 200));
     parts.forEach((part, i) => items.push(`${header}${parts.length > 1 ? ` — part ${i + 1} of ${parts.length}` : ""}\n${part}`));
   }
   const summaries: string[] = [];
   const noteByDoc = new Map<string, { relevant: boolean; keyPoints: string[]; quotes: string[] }>();
   const noteByRec = new Map<string, string[]>();
-  for (const group of groupsUnder(items, CALL_BUDGET_CHARS - notesHead.length - notesTail.length)) {
-    const notes = await ask(NotesSchema, "dossier_notes", `${notesHead}DOCUMENTS AND RECORDS, in full:\n\n${group.join("\n\n=====\n\n")}\n\n${notesTail}`, 0.3);
+  for (const group of groupsUnder(items, notesBudget)) {
+    const notes = await ask(NotesSchema, "dossier_notes", NOTES_RULES, `${notesHead}DOCUMENTS AND RECORDS, in full:\n\n${group.join("\n\n=====\n\n")}\n\n${notesTail}`, 0.3);
     if (notes.summary.trim() !== "") summaries.push(notes.summary.trim());
     for (const n of notes.documents) {
       const id = `D${(String(n.doc).match(/\d+/) ?? [""])[0]}`;

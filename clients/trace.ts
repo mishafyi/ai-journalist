@@ -82,8 +82,9 @@ function stepForLlm(entry: LlmTrace): string {
   const user = entry.prompt ?? entry.messages?.find((m) => m.role === "user")?.content ?? "";
   switch (entry.schemaName) {
     case "parallel_candidates":
-      // Both parallel rounds share a schema; only the echo round bounds the era.
-      return system.includes("past 20 years ONLY") ? "10-echoes-propose" : "07-parallel-propose";
+      return "07-parallel-propose";
+    case "echo_candidates":
+      return "10-echoes-propose";
     case "parallel_judge":
       return "09-parallel-judge";
     case "story_tags":
@@ -92,8 +93,8 @@ function stepForLlm(entry: LlmTrace): string {
       return "16-headline";
     case "wire_headline_translation":
       return "17-headline-translation";
-    case "editorial_lens_judgment":
-      return "14-lens-judgment";
+    case "voice_pick":
+      return "04b-voice-pick";
     case "data_play_pick":
       return "05b-data-plays";
     case "story_principals":
@@ -114,9 +115,8 @@ function stepForLlm(entry: LlmTrace): string {
       break;
   }
   if (system.startsWith("You extract evidence for a news article")) return "05-evidence-extraction";
-  if (system.includes("writing your COMPLETE column")) return "12-column";
-  if (user.startsWith("Line-edit this draft for publication")) return "13-editor";
-  if (system.includes("standing editorial lens, and THIS story carries it")) return "15-lens-rewrite";
+  if (system.includes("an opinion columnist writing your complete column")) return "12-column";
+  if (user.startsWith("Audit this column for publication")) return "13-audit";
   if (user.startsWith("You are a fact-checker reviewing a PUBLISHED article")) return "19-fact-check-audit";
   return "99-unclassified";
 }

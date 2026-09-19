@@ -16,6 +16,7 @@ import {
   createExtractiveResearch,
 } from "./research";
 import type { LlmClient, SearchClient, SearchResult } from "./ports";
+import { readRules } from "./rules";
 
 let failures = 0;
 const ok = (name: string, cond: boolean, detail: string): void => {
@@ -264,8 +265,8 @@ const instant = { sleep: async (): Promise<void> => {}, now: (): number => 0 };
 // extractEvidence / createExtractiveResearch — chunked extraction (Task 5).
 // Byte-lock: the extraction system prompt moved UNCHANGED from the live-tested
 // examples/run-politics.ts runner.
-const EXTRACT_SYSTEM =
-  "You extract evidence for a news article. From the page text, list every concrete fact, statistic, date, named person or institution, and direct quote (verbatim, in quotation marks, with who said it) relevant to the topic. Dense bullet points only, no commentary. If nothing is relevant, reply exactly: NONE";
+/** The extraction prompt: its role line, then rules/facts.md whole. */
+const EXTRACT_SYSTEM = `You extract evidence for a news article.\n\nRULES:\n${readRules("facts")}`;
 
 function fakeLlm(
   reply: (prompt: string) => string,
