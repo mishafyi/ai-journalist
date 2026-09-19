@@ -133,7 +133,7 @@ const refEdit = (draft: string): string =>
 10. Alternate the general and the concrete to keep the piece MOVING: a broad claim, then a tight-focus illustration, then back out — never several abstractions in a row.
 11. Break up stacked citations: where a stretch hides behind them, surface once and draw the prudent conclusion plainly in one sentence.
 12. Attribute with "said", and use "according to" at most twice in the whole piece.
-13. Vary sentence length: land conclusions in short sentences, carry reasoning in longer ones, never three of the same length in a row.
+13. Vary sentence length. Land conclusions and key points in short declarative sentences, so they hit with certainty. Carry explanation, ambiguity and complex reasoning in longer sentences, where the qualifications fit. Never write three sentences of the same length in a row.
 14. Vary section-header shapes: mix plain noun phrases, claims, and the occasional question; never let every H2 share one construction — e.g. the "Topic — Subtitle" em-dash pattern on every header.
 15. Cut ONLY what these edits name — line-fat, repetition, filler — and never cut whole paragraphs or sections for brevity's sake.
 16. Keep every markdown link and the H1 exactly as the draft has them.
