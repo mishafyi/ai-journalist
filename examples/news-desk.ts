@@ -3,8 +3,8 @@
  *
  * `basic.ts` shows the generic pipeline: you bring a data signal, you get an
  * article. The NEWS desk is the other shape — it starts from what is trending,
- * refuses to write unless the Google News search for the title yields a
- * scrapable page.
+ * resolves the story against outlet feeds you trust, and refuses to write
+ * unless enough of them can actually be scraped.
  *
  * Three feeds and one columnist here, on purpose. A real masthead is dozens of
  * feeds and a roster, but that is YOUR editorial config, not something to
@@ -82,13 +82,16 @@ async function main(): Promise<void> {
     authorVersions: { wordCap: 1100 },
     knobs: {
       trendingLimit: 20,
-      // Cap: the Google News search's top 5 results. There is no 3-source
-      // floor — STEP 02 already chose a unique story.
+      // The floor that makes this a NEWS desk: fewer than three outlets whose
+      // pages actually scraped, and it moves to the next story rather than
+      // writing thin. Most cycles end here, and that is the feature.
       minSources: 3,
-      pagesMax: 5,
+      pagesMax: 6,
       chunkChars: 24_000,
       maxChunksPerPage: 4,
       minContentChars: 400,
+      // 0.62 suits embeddings; without an `embedder` the matcher falls back to
+      // trigrams, which score lower — pass ~0.35 then.
       matchThreshold: 0.35,
       coveredWindowMs: 72 * 60 * 60 * 1000,
       parallelCount: 4,
