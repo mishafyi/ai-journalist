@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- News-desk embedder (`clients/mlx-embedder.ts` + `clients/mlx_embed.py`):
+  EmbeddingGemma 300M 4-bit through mlx-embeddings (`load` + the model card's
+  `model(input_ids, attention_mask)` forward), replacing the Gemini embed ring
+  on the Lorien news desk. A runner failure is `EmbeddingUnavailable`.
+
 - Query hygiene (`sanitizeQuery`/`relaxQuery` in `research.ts`): normalizes
   typographic quotes, rejects ideation-scaffold lines and empty query slots,
   and strips leading interrogatives that make search backends return
