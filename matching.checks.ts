@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { createHeadlineMatcher } from "./matching";
 import { EmbeddingUnavailable } from "./ports";
 import type { Embedder } from "./ports";
@@ -13,7 +12,7 @@ async function main(): Promise<void> {
     }
   };
 
-  // Trigram fallback (no embedder): near-identical headline matches, unrelated doesn't.
+  // No embedder: trigrams are the scoring method, not a fallback.
   const tri = createHeadlineMatcher({});
   const hit = await tri.match(
     "Senate passes sweeping tariff bill after marathon session",
@@ -101,6 +100,43 @@ async function main(): Promise<void> {
       `${JSON.stringify(asked)} ${JSON.stringify(hitTwo)}`);
   }
 
+  // An embedder that cannot answer is a failed match, not a different scorer.
+  // Retry and key rotation live in the embedder; this file must not hide a
+  // spent ring behind trigrams (those are the no-embedder mode only).
+  {
+    const spent: Embedder = {
+      async embed() {
+        throw new EmbeddingUnavailable("ring exhausted");
+      },
+    };
+    const m = createHeadlineMatcher({ embedder: spent });
+    let unavailable: unknown;
+    try {
+      await m.match("Fed holds rates steady", ["Federal Reserve holds interest rates steady", "Cricket scores"], 0.3);
+    } catch (err: unknown) {
+      unavailable = err;
+    }
+    ok("a spent embedder fails the match, it does not score with trigrams",
+      unavailable instanceof EmbeddingUnavailable,
+      String(unavailable));
+
+    const broken: Embedder = { async embed() { throw new TypeError("malformed request"); } };
+    const m2 = createHeadlineMatcher({ embedder: broken });
+    let typed: unknown;
+    try {
+      await m2.match("a", ["a"], 0.3);
+    } catch (err: unknown) {
+      typed = err;
+    }
+    ok("a real embedder error propagates, never re-scored",
+      typed instanceof TypeError, String(typed));
+  }
+
+  if (failures > 0) {
+    process.exitCode = 1;
+    process.stdout.write(`matching checks: ${failures} failed\n`);
+    return;
+  }
   process.stdout.write("matching checks: all green\n");
 }
 
@@ -109,28 +145,3 @@ main().catch((err: unknown) => {
   process.exit(1);
 });
 
-// An embedder that runs out for the day is a SIGNAL: the matcher scores the
-// rest of the run with trigrams and never asks the embedder again. Anything
-// else the embedder throws is a real error and must propagate unchanged.
-{
-  let calls = 0;
-  const spent: Embedder = {
-    async embed() {
-      calls += 1;
-      throw new EmbeddingUnavailable("ring exhausted");
-    },
-  };
-  const logged: string[] = [];
-  const m = createHeadlineMatcher({ embedder: spent, log: (l) => logged.push(l) });
-  const hit = await m.match("Fed holds rates steady", ["Federal Reserve holds interest rates steady", "Cricket scores"], 0.3);
-  assert.ok(hit !== null && hit.index === 0, "trigram fallback still matches the right candidate");
-  await m.match("anything else", ["something"], 0.3);
-  assert.equal(calls, 1, "the embedder is not asked again after it declared itself unavailable");
-  assert.equal(logged.length, 1, "the switch is logged exactly once");
-  assert.ok(/trigram/.test(logged[0]));
-
-  const broken: Embedder = { async embed() { throw new TypeError("malformed request"); } };
-  const m2 = createHeadlineMatcher({ embedder: broken });
-  await assert.rejects(() => m2.match("a", ["a"], 0.3), TypeError, "a real error propagates, never re-scored");
-  console.log("PASS embedding unavailable → trigram for the rest of the run; real errors propagate");
-}

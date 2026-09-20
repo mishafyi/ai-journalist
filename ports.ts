@@ -261,11 +261,10 @@ export interface SearchClient {
 }
 
 /**
- * Thrown by an Embedder that can no longer answer for the rest of a run —
- * every key refused, a daily budget spent. It is a SIGNAL, not a failure:
- * the matcher answers it by scoring with trigrams for the remainder of the
- * run, which is what it does when no embedder was configured at all. A
- * malformed request must not be wrapped in this; that is a bug to surface.
+ * Thrown by an Embedder that can no longer answer — every key refused, a
+ * daily budget spent. It is a failure: the match does not fall back to
+ * trigrams. A malformed request must not be wrapped in this; that is a bug
+ * to surface.
  */
 export class EmbeddingUnavailable extends Error {}
 

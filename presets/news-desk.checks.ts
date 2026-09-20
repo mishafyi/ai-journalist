@@ -63,6 +63,7 @@ async function orchestrationChecks(): Promise<void> {
     "https://www.bloomberg.com/rates": REAL("Blocked Times"),
     "https://hunt-a.example/story": REAL("Hunt A"),
     "https://hunt-b.example/story": REAL("Hunt B"),
+    "https://www.cnn.com/story": REAL("CNN"),
   };
   const scraped: string[] = [];
   const search: SearchClient = {
@@ -139,7 +140,13 @@ async function orchestrationChecks(): Promise<void> {
       if (args.prompt.includes(NO_PARALLEL_PHRASE)) return NO_PARALLEL_COLUMN;
       return COLUMN;
     },
-    async completeStructured<T>(args: { schemaName?: string }): Promise<T> {
+    async completeStructured<T>(args: { schemaName?: string; messages?: { content: string }[] }): Promise<T> {
+      if (args.schemaName === "covered_check") {
+        const user = (args.messages ?? []).map((m) => m.content).join("\n");
+        const trending = /^TRENDING: (.+)$/m.exec(user)?.[1] ?? "";
+        if (trending === STORY1) return { verdict: "same", index: 1 } as unknown as T;
+        return { verdict: "new" } as unknown as T;
+      }
       // Scenario 5 only — English-cluster scenarios never reach translation.
       if (args.schemaName === "wire_headline_translation")
         return { headline: TRANSLATION5 } as unknown as T;
@@ -204,7 +211,7 @@ async function orchestrationChecks(): Promise<void> {
     maxChunksPerPage: 4,
     minContentChars: 40,
     matchThreshold: 0.35,
-    coveredThreshold: 0.5,
+    coveredWindowMs: 72 * 3_600_000,
     parallelCount: 1,
     parallelMinScore: 0.1,
     // Hermetic scenarios skip the echo round; the dedicated unit checks in
@@ -240,7 +247,7 @@ async function orchestrationChecks(): Promise<void> {
     parallelFetchImpl,
   }).run();
 
-  ok("story 1 skipped as already covered (threshold ledger match)",
+  ok("story 1 skipped as already covered (LLM SAME against the recent ledger)",
     logs.some((l) => l.includes("already covered") && l.includes(STORY1)), logs.join(" | "));
   ok("blocked host dropped before any scrape (default blocklist)",
     !scraped.includes("https://www.bloomberg.com/rates") && logs.some((l) => l.includes("Blocked Times") && l.includes("blocked host")),
@@ -574,6 +581,65 @@ async function orchestrationChecks(): Promise<void> {
   ok("cluster: the story publishes from the lead, the cluster and the index",
     ((published4b as GeneratedPost | null)?.sources ?? []).some((c) => c.title.startsWith("Hunt A: ")),
     JSON.stringify((published4b as GeneratedPost | null)?.sources ?? []));
+
+  // Scenario 4c — the hunt's Google News search hit a story cluster: the lead
+  // has a host from <source url>, the siblings do not. An empty host used to
+  // look like deny-tier and those outlets vanished. The stub is the identity;
+  // the host arrives when it decodes.
+  const decoded4c: string[] = [];
+  const STUB_SIB = "https://news.google.com/rss/articles/CLUSTERSIB";
+  let published4c: GeneratedPost | null = null;
+  let threw4c: unknown;
+  try {
+    await createNewsDesk({
+    llm,
+    search: {
+      async search(q: string) {
+        if (q.startsWith("site:hunt-a.example")) {
+          return [{ title: "Central bank hikes to 20-year high", url: "https://hunt-a.example/story", snippet: "" }];
+        }
+        if (q.startsWith("site:")) return [];
+        return [];
+      },
+      async scrape(url: string): Promise<string> {
+        const body = PAGES[url];
+        if (body === undefined) throw new Error(`no fixture page for ${url}`);
+        return body;
+      },
+    },
+    feeds: [],
+    roster: [PERSONAS.historian],
+    brand,
+    sink: {
+      async publish(post) {
+        published4c = post;
+        return { url: `memory://${post.slug}`, status: "DRAFT" as const };
+      },
+    },
+    knobs: { ...knobs, minSources: 3 },
+    coveredTopics: async () => [{ title: STORY1 }],
+    trendingImpl: async () => trending,
+    indexImpl: async () => [index[0]],
+    coverageImpl: async () => [
+      { outlet: "Hunt A", host: "hunt-a.example", headline: "Central bank hikes to 20-year high", stub: "" },
+      { outlet: "CNN", host: "", headline: "Rate rise rocks markets", stub: STUB_SIB },
+    ],
+    resolveUrlImpl: async (stub: string) => {
+      decoded4c.push(stub);
+      if (stub === STUB_SIB) return "https://www.cnn.com/story";
+      return "";
+    },
+    internalsFactory,
+    parallelFetchImpl,
+  }).run();
+  } catch (err: unknown) {
+    threw4c = err;
+  }
+  ok("hunt: a cluster sibling with no host is decoded, not dropped as deny",
+    threw4c === undefined &&
+      decoded4c.includes(STUB_SIB) &&
+      ((published4c as GeneratedPost | null)?.sources ?? []).some((c) => c.url.includes("cnn.com")),
+    `threw=${String(threw4c)} decoded=${JSON.stringify(decoded4c)} sources=${JSON.stringify((published4c as GeneratedPost | null)?.sources ?? [])}`);
 
   // Scenario 5 — a foreign-only cluster publishes under a validated
   // TRANSLATION (operator, 2026-08-30: "if something happened in a foreign

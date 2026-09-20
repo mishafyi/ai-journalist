@@ -318,7 +318,10 @@ export async function fetchSiteStories(args: {
 
 // ───────────────────────────────────────────────────────────────────────────
 // Coverage lookup — WHO is covering one story, from Google News rather than
-// from an open web search.
+// from an open web search. A headline search often returns Google's story
+// cluster as the first item (the same <ol> as trending); that cluster is the
+// coverage. Later items are other hits and are ignored once a cluster is
+// present.
 //
 // This is the source-discovery channel (operator, 2026-08-16: "for search hunt
 // we either need to use datagod or google news rss"). The old hunt asked a web
@@ -339,7 +342,9 @@ export async function fetchSiteStories(args: {
 export interface Coverage {
   /** Publisher display name, e.g. "Reuters". */
   outlet: string;
-  /** Publisher host without www., e.g. "reuters.com" — the provenance key. */
+  /** Publisher host without www., e.g. "reuters.com" — the provenance key.
+   *  Empty for a cluster sibling that had no `<source url>`; the hunt fills
+   *  it in from the decoded stub. */
   host: string;
   /** That outlet's own headline for the story. */
   headline: string;
@@ -398,33 +403,72 @@ const coverageParser: Parser<Record<string, unknown>, { source?: RssSourceNode[]
   customFields: { item: [["source", "source", { keepArray: true }]] },
 });
 
+interface CoverageFeedItem {
+  title?: string;
+  link?: string;
+  content?: string;
+  source?: RssSourceNode[];
+}
+
+function coverageFromItem(item: CoverageFeedItem): { host: string; outlet: string; headline: string; stub: string } {
+  const node = Array.isArray(item.source) ? item.source[0] : undefined;
+  const host = bareHost(String(node?.$?.url ?? ""));
+  const outlet = String(node?._ ?? "").trim();
+  // GN titles end " - Outlet"; strip only when it IS this item's outlet, so
+  // real headline text containing " - " survives.
+  let headline = String(item.title ?? "").trim();
+  const suffix = ` - ${outlet}`;
+  if (outlet !== "" && headline.endsWith(suffix)) headline = headline.slice(0, -suffix.length).trim();
+  return { host, outlet, headline, stub: String(item.link ?? "").trim() };
+}
+
 /**
  * Coverage straight out of the search-RSS XML. rss-parser handles CDATA,
  * entity decoding and attribute quoting, so none of that is re-implemented
  * here. A malformed feed yields [] rather than throwing — discovery must never
  * be able to kill a run.
+ *
+ * A headline search often returns Google's story cluster as one item whose
+ * description is the same <ol> the trending feed uses — every outlet already
+ * grouped, each with its own stub. That cluster IS the coverage; later items
+ * are other search hits (follow-ups, reactions) and must not mix in. Cluster
+ * siblings have no <source url>, so their host stays "" until the hunt
+ * decodes the stub. No cluster → one page per host from `<source url>`, as
+ * before.
  */
 export async function parseCoverageFeed(xml: string): Promise<Coverage[]> {
   const out: Coverage[] = [];
   const seen = new Set<string>();
-  let items: { title?: string; link?: string; source?: RssSourceNode[] }[];
+  let items: CoverageFeedItem[];
   try {
     items = (await coverageParser.parseString(xml)).items ?? [];
   } catch {
     return out;
   }
   for (const item of items) {
-    const node = Array.isArray(item.source) ? item.source[0] : undefined;
-    const host = bareHost(String(node?.$?.url ?? ""));
-    const outlet = String(node?._ ?? "").trim();
-    // GN titles end " - Outlet"; strip only when it IS this item's outlet, so
-    // real headline text containing " - " survives.
-    let headline = String(item.title ?? "").trim();
-    const suffix = ` - ${outlet}`;
-    if (outlet !== "" && headline.endsWith(suffix)) headline = headline.slice(0, -suffix.length).trim();
-    if (host === "" || headline === "" || seen.has(host)) continue;
-    seen.add(host);
-    out.push({ outlet: outlet === "" ? host : outlet, host, headline, stub: String(item.link ?? "").trim() });
+    const clustered = parseCoverage(item.content ?? "");
+    if (clustered.length < 2) continue;
+    const lead = coverageFromItem(item);
+    const seenStub = new Set<string>();
+    const cluster: Coverage[] = [];
+    clustered.forEach((entry, i) => {
+      const stub = entry.link ?? "";
+      if (stub === "" || seenStub.has(stub)) return;
+      seenStub.add(stub);
+      cluster.push({
+        outlet: entry.outlet === "" ? (i === 0 ? lead.outlet : "") : entry.outlet,
+        host: i === 0 ? lead.host : "",
+        headline: entry.headline,
+        stub,
+      });
+    });
+    if (cluster.length >= 2) return cluster;
+  }
+  for (const item of items) {
+    const row = coverageFromItem(item);
+    if (row.host === "" || row.headline === "" || seen.has(row.host)) continue;
+    seen.add(row.host);
+    out.push({ outlet: row.outlet === "" ? row.host : row.outlet, host: row.host, headline: row.headline, stub: row.stub });
   }
   return out;
 }

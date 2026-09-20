@@ -1,11 +1,11 @@
 /**
  * matching.ts — mechanical headline similarity for the news desk. The model
- * never ranks: embeddings (Embedder port) when configured, trigram fallback
- * otherwise. Pure engine core; the embedder arrives through the port.
+ * never ranks: embeddings (Embedder port) when configured, trigrams only when
+ * no embedder is passed. A live embedder that fails is a failed match — retry
+ * and key rotation belong to the embedder, not a second scorer here.
  */
 import { cosineSimilarity } from "./text";
 import { trigramSimilarity } from "./primitives";
-import { EmbeddingUnavailable } from "./ports";
 import type { Embedder } from "./ports";
 
 export interface MatchHit {
@@ -71,23 +71,16 @@ async function embedScores(
   return candVecs.map((cv) => Math.max(...probeVecs.map((pv) => cosineSimilarity(pv, cv))));
 }
 
-export function createHeadlineMatcher(opts: { embedder?: Embedder; log?: (line: string) => void }): HeadlineMatcher {
-  let embed = opts.embedder ? createVectorCache(opts.embedder) : null;
-  // Embeddings until they are unavailable, trigrams after — for the rest of
-  // the run, not per call: flapping between two scoring methods mid-run makes
-  // the thresholds mean two things. Trigram is the documented no-embedder
-  // mode, so its thresholds already hold. Anything other than
-  // EmbeddingUnavailable is a real error and propagates.
+export function createHeadlineMatcher(opts: { embedder?: Embedder } = {}): HeadlineMatcher {
+  const embed = opts.embedder ? createVectorCache(opts.embedder) : null;
+  // Embeddings when an embedder is configured; trigrams when it is not.
+  // There is no third mode. A spent ring, a 500, a dropped socket — those
+  // retry and rotate inside the embedder. Catching them here to re-score
+  // with trigrams made the 0.62 threshold mean two different things, and
+  // published the same story twice.
   const scoresFor = async (probes: readonly string[], candidates: readonly string[]): Promise<number[]> => {
     if (embed === null) return trigramScores(probes, candidates);
-    try {
-      return await embedScores(embed, probes, candidates);
-    } catch (err) {
-      if (!(err instanceof EmbeddingUnavailable)) throw err;
-      embed = null;
-      opts.log?.(`matching: embeddings unavailable (${err.message.slice(0, 120)}) — trigram scoring for the rest of this run`);
-      return trigramScores(probes, candidates);
-    }
+    return embedScores(embed, probes, candidates);
   };
 
   return {

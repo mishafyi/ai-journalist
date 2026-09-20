@@ -91,6 +91,8 @@ function stepForLlm(entry: LlmTrace): string {
       return "06-story-tags";
     case "wire_headline_translation":
       return "17-headline-translation";
+    case "covered_check":
+      return "02-covered-check";
     case "voice_pick":
       return "04b-voice-pick";
     case "data_play_pick":

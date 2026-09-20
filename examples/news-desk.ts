@@ -93,7 +93,7 @@ async function main(): Promise<void> {
       // 0.62 suits embeddings; without an `embedder` the matcher falls back to
       // trigrams, which score lower — pass ~0.35 then.
       matchThreshold: 0.35,
-      coveredThreshold: 0.35,
+      coveredWindowMs: 72 * 60 * 60 * 1000,
       parallelCount: 4,
       parallelMinScore: 0.3,
       echoCount: 4,

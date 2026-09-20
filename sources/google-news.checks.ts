@@ -202,11 +202,6 @@ async function main(): Promise<void> {
     );
   }
 
-  if (failures > 0) {
-    process.exitCode = 1;
-    return;
-  }
-
   // ── Coverage lookup: the <source url> attribute is the whole point ────────
   // rss-parser flattens <source url="…">Reuters</source> to "Reuters" and
   // drops the url, which silently returned an empty cluster for every story.
@@ -236,6 +231,37 @@ async function main(): Promise<void> {
     cov.filter((c) => c.host === "nbcnews.com").length === 1 && cov.length === 3, JSON.stringify(cov.map((c) => c.host)));
   ok("empty xml yields no coverage rather than throwing", (await parseCoverageFeed("")).length === 0, "");
   ok("malformed xml yields no coverage rather than throwing", (await parseCoverageFeed("<rss><chan")).length === 0, "");
+
+  // A headline search often returns Google's own story cluster as the first
+  // item: the description is the same <ol> the trending feed uses, ten
+  // outlets already grouped. Later items are other search hits — follow-ups,
+  // reactions — not that story's coverage. Measured 2026-09-20 on
+  // "Trump says he is banning media outlets CNN, MS NOW, Politico from White
+  // House": item 1 listed ABC/CNN/NYT/NPR/WaPo/Axios/Reuters/CBS/CNBC/The Hill;
+  // item 8 was Barrasso on the same keywords.
+  const CLUSTER_SEARCH_XML = `<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>MS NOW, CNN, Politico reporters barred from White House after Trump announces ban - ABC News</title>
+<link>https://news.google.com/rss/articles/CBMiLEAD?oc=5</link>
+<source url="https://abcnews.com">ABC News</source>
+<description>&lt;ol&gt;&lt;li&gt;&lt;a href="https://news.google.com/rss/articles/CBMiLEAD?oc=5"&gt;MS NOW, CNN, Politico reporters barred from White House after Trump announces ban&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;ABC News&lt;/font&gt;&lt;/li&gt;&lt;li&gt;&lt;a href="https://news.google.com/rss/articles/CBMiCNN?oc=5"&gt;Trump says he’s banning CNN, MS NOW and Politico from the White House&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;CNN&lt;/font&gt;&lt;/li&gt;&lt;li&gt;&lt;a href="https://news.google.com/rss/articles/CBMiNYT?oc=5"&gt;CNN, Politico and MS NOW Reporters Barred From White House&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;The New York Times&lt;/font&gt;&lt;/li&gt;&lt;/ol&gt;</description></item>
+<item><title>Sen. John Barrasso says Trump isn’t violating the Constitution by banning reporters from the White House - NBC News</title>
+<link>https://news.google.com/rss/articles/CBMiBARR?oc=5</link>
+<source url="https://www.nbcnews.com">NBC News</source>
+<description>&lt;a href="https://news.google.com/rss/articles/CBMiBARR?oc=5"&gt;Sen. John Barrasso says Trump isn’t violating the Constitution by banning reporters from the White House&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;NBC News&lt;/font&gt;</description></item>
+</channel></rss>`;
+  const clustered = await parseCoverageFeed(CLUSTER_SEARCH_XML);
+  ok("a search hit that is a story cluster keeps every outlet in the <ol>",
+    clustered.length === 3 &&
+      clustered[0].outlet === "ABC News" && clustered[0].host === "abcnews.com" && clustered[0].stub.includes("CBMiLEAD") &&
+      clustered[1].outlet === "CNN" && clustered[1].stub.includes("CBMiCNN") &&
+      clustered[2].outlet === "The New York Times" && clustered[2].stub.includes("CBMiNYT"),
+    JSON.stringify(clustered));
+  ok("cluster siblings have no <source url>, so their host is empty until the stub is decoded",
+    clustered[1].host === "" && clustered[2].host === "",
+    JSON.stringify(clustered.slice(1)));
+  ok("later search hits are not mixed in once a story cluster is present",
+    clustered.every((c) => c.host !== "nbcnews.com" && !c.stub.includes("CBMiBARR")),
+    JSON.stringify(clustered));
 
   // ── resolveCoverageUrl ────────────────────────────────────────────────────
   // Every branch is exercised against a FAKE fetch: the real endpoint is
@@ -276,6 +302,11 @@ async function main(): Promise<void> {
   ok("the coverage feed keeps each item's stub link for the resolver",
     (await parseCoverageFeed(COVERAGE_XML)).every((c) => typeof c.stub === "string"), "");
 
+  if (failures > 0) {
+    process.exitCode = 1;
+    process.stdout.write(`google-news checks: ${failures} failed\n`);
+    return;
+  }
   process.stdout.write("google-news checks: all green\n");
 }
 

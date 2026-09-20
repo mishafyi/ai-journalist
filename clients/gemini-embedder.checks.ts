@@ -140,6 +140,23 @@ async function main(): Promise<void> {
       /empty vector at index 0/.test(message), `msg=${message}`);
   }
 
+  // ── A 500 is Google falling over, retried on the SAME key by the SDK.
+  // Without retryOptions the SDK never retries (apiCall returns at once), and
+  // the rotation would jump keys. A 429 stays out of that list on purpose.
+  {
+    let calls = 0;
+    globalThis.fetch = (async (_u: unknown, init?: RequestInit): Promise<Response> => {
+      calls += 1;
+      if (calls === 1) return json({ error: { code: 500, message: "Internal error encountered.", status: "INTERNAL" } }, 500);
+      return vectors(textsOf(JSON.parse(String(init?.body ?? "{}")) as EmbedRequest));
+    }) as typeof fetch;
+    const logs: string[] = [];
+    const out = await createGeminiEmbedder({ apiKeys: keys, models: EMBED_MODELS, log: (l) => logs.push(l) }).embed(["a"]);
+    ok("a 500 is retried on the same key, not rotated away",
+      out.length === 1 && calls === 2 && !logs.some((l) => l.includes("server error") || l.includes("rate-limited")),
+      `len=${out.length} calls=${calls} logs=${JSON.stringify(logs)}`);
+  }
+
   // ── The second model (operator, 2026-09-19): each model has its own daily
   // quota. When the first is spent on every key, the second takes the whole
   // call from its first text, and `space` says which model the vectors are.

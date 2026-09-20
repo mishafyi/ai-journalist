@@ -1,6 +1,6 @@
 /**
  * `Embedder` port on the Gemini embedding endpoint, for the same job
- * `ollama-embedder.ts` does: headline matching and covered-story dedup.
+ * `ollama-embedder.ts` does: headline matching for source resolution.
  *
  * It exists so the desk is not half-cloud. With `DESK_LLM=gemini` the prose
  * runs on Google and the embeddings still ran on the mini, which made the
@@ -9,7 +9,8 @@
  * The rotation, the cooldowns and the failure classification are NOT repeated
  * here — `createRotation` from `./gemini-llm` is the same ring of keys, the
  * same per-model-and-key cooldowns and the same hard-won reading of 429 / 503 /
- * 500 / 401 / dropped socket. One classifier, one place to fix it.
+ * 500 / 401 / dropped socket. SDK `retryOptions` (`SERVER_ERROR_RETRY`) retry
+ * a 500/502/504 on the same key; a 429 rotates. There is no trigram fallback.
  *
  * ── Measured against the live API, 2026-09-08 ──────────────────────────────
  *
@@ -26,11 +27,10 @@
  * 2026-09-19): 100 embeddings a minute and 1,000 a day, where a 100-text
  * batch is 100 of them (quota `EmbedContentRequestsPerMinutePerProjectPerModel
  * -FreeTier`, limit 100). Batching saves round trips, not quota. With 8 keys,
- * one model is 8,000 texts a day, and a run embeds ~3,700 (2,000 covered
- * titles, ~1,000 outlet headlines, every trending and coverage headline), so
- * the day's budget used to be spent by 03:00 Pacific. Each MODEL has its own
- * quota, so a second model doubles the day (operator, 2026-09-19: "use second
- * model").
+ * one model is 8,000 texts a day. A run embeds the outlet index (~1,000) plus
+ * probes; the covered-check is a Gemma call, not an embedding. Each MODEL has
+ * its own quota, so a second model doubles the day (operator, 2026-09-19:
+ * "use second model").
  *
  * ONE MODEL PER CALL. Two models' vectors live in different spaces and never
  * meet: a call that runs out on one model starts again from its first text on
@@ -49,7 +49,7 @@
  */
 import { GoogleGenAI } from "@google/genai";
 import type { Embedder } from "../ports";
-import { createRotation, GeminiExhausted } from "./gemini-llm";
+import { createRotation, GeminiExhausted, SERVER_ERROR_RETRY } from "./gemini-llm";
 
 /**
  * Texts per request. The API's own ceiling, not a guess — see the header.
@@ -76,7 +76,10 @@ export interface GeminiEmbedderConfig {
 
 export function createGeminiEmbedder(cfg: GeminiEmbedderConfig): Embedder {
   if (cfg.models.length === 0) throw new Error("gemini embed: no models configured");
-  const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({ apiKey, httpOptions: { timeout: 120_000 } }));
+  const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({
+    apiKey,
+    httpOptions: { timeout: 120_000, retryOptions: SERVER_ERROR_RETRY },
+  }));
   const rotate = createRotation(cfg.models, ring.length, cfg.log);
   let current = 0;
 
