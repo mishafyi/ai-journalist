@@ -5,8 +5,7 @@ import { NO_PARALLEL_PHRASE } from "../gates";
 import { proposeParallels } from "../parallels";
 import type { BrandProfile, GeneratedPost, LlmClient, SearchClient, Sink } from "../ports";
 import type { createDefaultInternals } from "./default";
-import type { TrendingStory } from "../sources/google-news";
-import type { OutletItem } from "../sources/newswire";
+import type { Coverage, TrendingStory } from "../sources/google-news";
 import type { Plan } from "../planning";
 import type { GeneratedArticle } from "../pipeline";
 
@@ -44,16 +43,6 @@ async function orchestrationChecks(): Promise<void> {
       ],
     },
   ];
-  // Fixture index: 4 outlets carry story 2 (one on a DEFAULT_BLOCKED_HOSTS
-  // host) + one unrelated item that must fall below matchThreshold. Wire
-  // appears twice → exercises best-hit-per-outlet.
-  const index: OutletItem[] = [
-    { outlet: "Wire", region: "US", title: STORY2, url: "https://wire.example/rates" },
-    { outlet: "Beacon", region: "US", title: "Central bank raises rates to twenty-year high, markets react", url: "https://beacon.example/rates" },
-    { outlet: "Teaser Daily", region: "US", title: "Central bank raises interest rates: what it means", url: "https://teaser.example/rates" },
-    { outlet: "Blocked Times", region: "US", title: "Central bank raises interest rates to a twenty-year high", url: "https://www.bloomberg.com/rates" },
-    { outlet: "Wire", region: "US", title: "Local team wins championship after dramatic final", url: "https://wire.example/sport" },
-  ];
   const REAL = (outlet: string): string =>
     `${outlet} full article body. The central bank raised its policy rate by 50 basis points to a twenty-year high. "We will stay the course," the chair said. Markets fell 2 percent on the announcement. `.repeat(2);
   const PAGES: Record<string, string> = {
@@ -64,6 +53,27 @@ async function orchestrationChecks(): Promise<void> {
     "https://hunt-a.example/story": REAL("Hunt A"),
     "https://hunt-b.example/story": REAL("Hunt B"),
     "https://www.cnn.com/story": REAL("CNN"),
+    "https://extra.example/rates": REAL("Extra"),
+  };
+  // STEP 03 is a Google News headline search, not the outlet index. Stubs
+  // decode to the fixture pages above; a blocked host never reaches scrape.
+  const GN_WIRE = "https://news.google.com/rss/articles/WIRE";
+  const GN_BEACON = "https://news.google.com/rss/articles/BEACON";
+  const GN_TEASER = "https://news.google.com/rss/articles/TEASER";
+  const GN_BLOCK = "https://news.google.com/rss/articles/BLOCK";
+  const coverageRates = (): Coverage[] => [
+    { outlet: "Wire", host: "wire.example", headline: STORY2, stub: GN_WIRE },
+    { outlet: "Beacon", host: "beacon.example", headline: "Central bank raises rates to twenty-year high, markets react", stub: GN_BEACON },
+    { outlet: "Teaser Daily", host: "teaser.example", headline: "Central bank raises interest rates: what it means", stub: GN_TEASER },
+    { outlet: "Blocked Times", host: "bloomberg.com", headline: "Central bank raises interest rates to a twenty-year high", stub: GN_BLOCK },
+    { outlet: "Fifth Desk", host: "fifth.example", headline: "Rates at a twenty-year high", stub: "https://news.google.com/rss/articles/FIFTH" },
+  ];
+  const resolveRates = async (stub: string): Promise<string> => {
+    if (stub === GN_WIRE) return "https://wire.example/rates";
+    if (stub === GN_BEACON) return "https://beacon.example/rates";
+    if (stub === GN_TEASER) return "https://teaser.example/rates";
+    if (stub === GN_BLOCK) return "https://www.bloomberg.com/rates";
+    return "";
   };
   const scraped: string[] = [];
   const search: SearchClient = {
@@ -206,7 +216,7 @@ async function orchestrationChecks(): Promise<void> {
   const knobs: NewsDeskKnobs = {
     trendingLimit: 20,
     minSources: 2,
-    pagesMax: 6,
+    pagesMax: 5,
     chunkChars: 24_000,
     maxChunksPerPage: 4,
     minContentChars: 40,
@@ -242,7 +252,8 @@ async function orchestrationChecks(): Promise<void> {
     log: (line) => logs.push(line),
     recordArtifact: (label, content) => artifacts.push({ label, content }),
     trendingImpl: async () => trending,
-    indexImpl: async () => index,
+    coverageImpl: async () => coverageRates(),
+    resolveUrlImpl: resolveRates,
     internalsFactory,
     parallelFetchImpl,
   }).run();
@@ -333,8 +344,9 @@ async function orchestrationChecks(): Promise<void> {
     String(post.telemetry?.parallel) === "Panic of 1907" && String(post.telemetry?.topic) === STORY2,
     JSON.stringify(post.telemetry));
 
-  // Scenario 2 — minSources: 3. Resolution passes (3 unblocked outlets) but the
-  // teaser floor leaves 2 survivors < 3 → next story → none left → loud throw.
+  // Scenario 2 — an empty Google News search (nothing to scrape) → next story
+  // → none left → loud throw. There is no 3-source floor: STEP 02 already
+  // chose a unique story, and the search's top results are the sources.
   let threw = "";
   try {
     await createNewsDesk({
@@ -344,18 +356,19 @@ async function orchestrationChecks(): Promise<void> {
       roster: [PERSONAS.historian],
       brand,
       sink,
-      knobs: { ...knobs, minSources: 3 },
+      knobs,
       coveredTopics: async () => [{ title: STORY1 }],
       trendingImpl: async () => trending,
-      indexImpl: async () => index,
+      coverageImpl: async () => [],
+      resolveUrlImpl: resolveRates,
       internalsFactory,
       parallelFetchImpl,
     }).run();
   } catch (err: unknown) {
     threw = String(err);
   }
-  ok("≥3-source floor: no surviving story → loud throw with N interpolated",
-    threw.includes("news-desk: no trending story resolved ≥3 scrapable sources"), threw);
+  ok("empty GN search: no surviving story → loud throw",
+    threw.includes("news-desk: no trending story produced a column"), threw);
 
   // Scenario 3 — the recentParallels guard (operator, 2026-07-24: the desk
   // kept reaching for the Panic of 1907 week after week). With the just-used
@@ -382,7 +395,8 @@ async function orchestrationChecks(): Promise<void> {
     recentParallels: ["Panic of 1907"],
     log: (line) => logs3.push(line),
     trendingImpl: async () => trending,
-    indexImpl: async () => index,
+    coverageImpl: async () => coverageRates(),
+    resolveUrlImpl: resolveRates,
     internalsFactory,
     parallelFetchImpl,
   }).run();
@@ -399,16 +413,15 @@ async function orchestrationChecks(): Promise<void> {
     post3.telemetry !== undefined && !("parallel" in post3.telemetry) && String(post3.telemetry.topic) === STORY2,
     JSON.stringify(post3.telemetry));
 
-  // Scenario 4 — the source hunt, Google-News-first (operator, 2026-08-16).
-  // The index holds ONE outlet. GN coverage names two more real outlets plus a
-  // deny-tier impersonator; the impersonator must never be admitted, and the
-  // two real ones are resolved by a SITE-RESTRICTED search, so the web search
-  // only ever locates a URL on a host GN already vetted. A result that comes
-  // back off-host must be discarded.
+  // Scenario 4 — Google News RSS of the title is the source list. Stubs
+  // decode to publisher URLs; a deny-tier host is never touched; a decode
+  // that lands off the named host is discarded. There is no site: hunt.
   const logs4: string[] = [];
   let published4: GeneratedPost | null = null;
   const searched4: string[] = [];
   const decoded4: string[] = [];
+  const coverageQueries4: string[] = [];
+  const GN_STUB_A = "https://news.google.com/rss/articles/HUNTA";
   const GN_STUB_B = "https://news.google.com/rss/articles/HUNTB";
   const GN_STUB_C = "https://news.google.com/rss/articles/HUNTC";
   const GN_STUB_DENY = "https://news.google.com/rss/articles/DENY";
@@ -417,20 +430,7 @@ async function orchestrationChecks(): Promise<void> {
     search: {
       async search(q: string) {
         searched4.push(q);
-        // Parallel research still asks plain questions; only the hunt is
-        // site-restricted, and it gets back that host's page plus a decoy on
-        // another host that the host check must reject.
-        if (q.startsWith("site:hunt-a.example")) {
-          return [
-            { title: "Decoy on the wrong host", url: "https://scraper.example/copy", snippet: "" },
-            { title: "Central bank hikes to 20-year high", url: "https://hunt-a.example/story", snippet: "" },
-          ];
-        }
-        if (q.startsWith("site:hunt-b.example")) {
-          return [{ title: "Rate rise rocks markets", url: "https://hunt-b.example/story", snippet: "" }];
-        }
-        if (q.startsWith("site:")) return [];
-        return [{ title: "Rates story", url: "https://news.google.com/rss/articles/xyz", snippet: "" }];
+        return [];
       },
       async scrape(url: string): Promise<string> {
         const body = PAGES[url];
@@ -447,23 +447,24 @@ async function orchestrationChecks(): Promise<void> {
         return { url: `memory://${post.slug}`, status: "DRAFT" as const };
       },
     },
-    knobs: { ...knobs, minSources: 3 },
+    knobs,
     coveredTopics: async () => [{ title: STORY1 }],
     log: (line) => logs4.push(line),
     trendingImpl: async () => trending,
-    indexImpl: async () => [index[0]],
-    // A mixed cluster, so one run covers both resolvers: Hunt A carries no
-    // stub and must fall back to a site: search, Hunt B decodes cleanly, Hunt
-    // C decodes to a URL on someone ELSE's host and must be thrown away, and
-    // the deny-tier outlet must never be touched by either path.
-    coverageImpl: async () => [
-      { outlet: "Hunt A", host: "hunt-a.example", headline: "Central bank hikes to 20-year high", stub: "" },
-      { outlet: "Hunt B", host: "hunt-b.example", headline: "Rate rise rocks markets", stub: GN_STUB_B },
-      { outlet: "Hunt C", host: "hunt-c.example", headline: "Markets react", stub: GN_STUB_C },
-      { outlet: "Telegraph Online", host: "telegraph.com", headline: "Rates explained", stub: GN_STUB_DENY },
-    ],
+    coverageImpl: async (headline) => {
+      coverageQueries4.push(headline);
+      return [
+        { outlet: "Wire", host: "wire.example", headline: STORY2, stub: GN_WIRE },
+        { outlet: "Hunt A", host: "hunt-a.example", headline: "Central bank hikes to 20-year high", stub: GN_STUB_A },
+        { outlet: "Hunt B", host: "hunt-b.example", headline: "Rate rise rocks markets", stub: GN_STUB_B },
+        { outlet: "Hunt C", host: "hunt-c.example", headline: "Markets react", stub: GN_STUB_C },
+        { outlet: "Telegraph Online", host: "telegraph.com", headline: "Rates explained", stub: GN_STUB_DENY },
+      ];
+    },
     resolveUrlImpl: async (stub: string) => {
       decoded4.push(stub);
+      if (stub === GN_WIRE) return "https://wire.example/rates";
+      if (stub === GN_STUB_A) return "https://hunt-a.example/story";
       if (stub === GN_STUB_B) return "https://hunt-b.example/story";
       if (stub === GN_STUB_C) return "https://scraper.example/copy";
       return "https://telegraph.com/rates";
@@ -471,37 +472,25 @@ async function orchestrationChecks(): Promise<void> {
     internalsFactory,
     parallelFetchImpl,
   }).run();
-  const md4 = (published4 as GeneratedPost | null)?.markdown ?? "";
-  ok("hunt: web search is SITE-RESTRICTED to hosts Google News named",
-    searched4.some((q) => q === "site:hunt-a.example Central bank hikes to 20-year high") &&
-      !searched4.includes(STORY2),
-    JSON.stringify(searched4));
-  ok("hunt: the site-search fan-out is budgeted, not one call per outlet",
-    searched4.filter((q) => q.startsWith("site:")).length <= 4,
-    `${searched4.filter((q) => q.startsWith("site:")).length} site searches`);
-  ok("hunt: a deny-tier outlet in the cluster is never searched or cited",
-    !searched4.some((q) => q.includes("telegraph.com")) &&
+  ok("hunt: Google News is searched with the story title",
+    coverageQueries4.includes(STORY2), JSON.stringify(coverageQueries4));
+  ok("hunt: no site: search locates a URL",
+    searched4.filter((q) => q.startsWith("site:")).length === 0, JSON.stringify(searched4));
+  ok("hunt: a deny-tier outlet in the search is never decoded or cited",
+    !decoded4.includes(GN_STUB_DENY) &&
       !((published4 as GeneratedPost | null)?.sources ?? []).some((c) => c.url.includes("telegraph.com")),
-    JSON.stringify(searched4));
+    JSON.stringify(decoded4));
   ok("parallel research: the tournament web-researched the verified candidate",
     searched4.some((q) => q.includes("Panic of 1907")), JSON.stringify(searched4));
-  ok("hunt: log names the shortfall, the cluster and what resolved",
-    logs4.some((l) => l.includes("index gave 1/3") && l.includes("GN coverage named 4 outlet(s) (3 admissible), resolved 2")),
+  ok("hunt: log names how many the search named and how many decoded",
+    logs4.some((l) => l.includes("GN coverage named 5 outlet(s), resolved 3")),
     logs4.join(" | "));
-  // The point of the decode: a URL Google already holds costs no search call.
-  ok("hunt: a decoded stub resolves the outlet with NO site: search for it",
-    decoded4.includes(GN_STUB_B) && !searched4.some((q) => q.startsWith("site:hunt-b.example")),
-    `decoded=${JSON.stringify(decoded4)} searched=${JSON.stringify(searched4)}`);
-  // A decode is a URL lookup, never a grant of admissibility: Google handing
-  // back a link on another host must not put that host in the paper.
   ok("hunt: a decode landing off the named host is discarded, not cited",
     decoded4.includes(GN_STUB_C) &&
       !((published4 as GeneratedPost | null)?.sources ?? []).some((c) => c.url.includes("scraper.example")),
     JSON.stringify((published4 as GeneratedPost | null)?.sources ?? []));
-  ok("hunt: a deny-tier outlet is never decoded either",
-    !decoded4.includes(GN_STUB_DENY), JSON.stringify(decoded4));
   const cited4 = (published4 as GeneratedPost | null)?.sources ?? [];
-  ok("hunt: published with index + GN-vetted hosts; off-host decoy discarded",
+  ok("hunt: published from decoded GN hosts; off-host decoy discarded",
     cited4.some((c) => c.title.startsWith("Wire: ")) &&
       cited4.some((c) => c.title.startsWith("Hunt A: ")) &&
       cited4.some((c) => c.title.startsWith("Hunt B: ")) &&
@@ -513,16 +502,15 @@ async function orchestrationChecks(): Promise<void> {
       post4.slug === CHOSEN_SLUG,
     post4.slug);
 
-  // Scenario 4b — Google's own cluster first (operator, 2026-09-19): the lead's
-  // link and each coverage link are decoded; the lead's article is scraped
-  // first, a paywalled host is skipped, a deny-tier host never admitted, and
-  // the index only fills in after.
+  // Scenario 4b — STEP 01's cluster links are not the source list. The desk
+  // searches the title; those trending stubs are never decoded.
   const scraped4b: string[] = [];
   const decoded4b: string[] = [];
   const STUB_LEAD = "https://news.google.com/rss/articles/LEAD";
   const STUB_B = "https://news.google.com/rss/articles/CLUSTERB";
   const STUB_PAY = "https://news.google.com/rss/articles/PAYWALL";
   const STUB_DENY = "https://news.google.com/rss/articles/CLUSTERDENY";
+  const TRENDING_STUBS = new Set([STUB_LEAD, STUB_B, STUB_PAY, STUB_DENY]);
   let published4b: GeneratedPost | null = null;
   await createNewsDesk({
     llm,
@@ -546,7 +534,7 @@ async function orchestrationChecks(): Promise<void> {
         return { url: `memory://${post.slug}`, status: "DRAFT" as const };
       },
     },
-    knobs: { ...knobs, minSources: 3 },
+    knobs,
     coveredTopics: async () => [{ title: STORY1 }],
     trendingImpl: async () => [
       trending[0],
@@ -561,32 +549,31 @@ async function orchestrationChecks(): Promise<void> {
         ],
       },
     ],
-    indexImpl: async () => [index[0]],
+    coverageImpl: async () => coverageRates(),
     resolveUrlImpl: async (stub: string) => {
       decoded4b.push(stub);
-      if (stub === STUB_LEAD) return "https://hunt-a.example/story";
-      if (stub === STUB_B) return "https://hunt-b.example/story";
-      if (stub === STUB_PAY) return "https://www.bloomberg.com/rates";
-      return "https://telegraph.com/rates";
+      if (TRENDING_STUBS.has(stub)) throw new Error(`trending cluster stub decoded: ${stub}`);
+      return resolveRates(stub);
     },
     internalsFactory,
     parallelFetchImpl,
   }).run();
-  ok("cluster: the lead's own article is scraped first, then the cluster, then the index",
-    scraped4b[0] === "https://hunt-a.example/story" && scraped4b[1] === "https://hunt-b.example/story" && scraped4b.includes(index[0].url),
+  ok("search, not cluster: STEP 01's links are never decoded",
+    decoded4b.every((s) => !TRENDING_STUBS.has(s)), JSON.stringify(decoded4b));
+  ok("search, not cluster: scrape follows the title search, not the trending lead",
+    scraped4b[0] === "https://wire.example/rates" &&
+      scraped4b.includes("https://beacon.example/rates") &&
+      !scraped4b.some((u) => u.includes("hunt-a.example") || u.includes("bloomberg.com") || u.includes("telegraph.com")),
     JSON.stringify(scraped4b));
-  ok("cluster: a paywalled host is decoded but never scraped, and a deny-tier host never admitted",
-    decoded4b.includes(STUB_PAY) && !scraped4b.some((u) => u.includes("bloomberg.com") || u.includes("telegraph.com")),
-    JSON.stringify(scraped4b));
-  ok("cluster: the story publishes from the lead, the cluster and the index",
-    ((published4b as GeneratedPost | null)?.sources ?? []).some((c) => c.title.startsWith("Hunt A: ")),
+  ok("search, not cluster: the story publishes from the search hits",
+    ((published4b as GeneratedPost | null)?.sources ?? []).some((c) => c.title.startsWith("Wire: ")),
     JSON.stringify((published4b as GeneratedPost | null)?.sources ?? []));
 
-  // Scenario 4c — the hunt's Google News search hit a story cluster: the lead
-  // has a host from <source url>, the siblings do not. An empty host used to
-  // look like deny-tier and those outlets vanished. The stub is the identity;
-  // the host arrives when it decodes.
+  // Scenario 4c — a search hit with no <source url> is a cluster sibling.
+  // An empty host used to look like deny-tier. The stub is the identity;
+  // the host arrives when it decodes. An empty stub is skipped, not hunted.
   const decoded4c: string[] = [];
+  const searched4c: string[] = [];
   const STUB_SIB = "https://news.google.com/rss/articles/CLUSTERSIB";
   let published4c: GeneratedPost | null = null;
   let threw4c: unknown;
@@ -595,10 +582,7 @@ async function orchestrationChecks(): Promise<void> {
     llm,
     search: {
       async search(q: string) {
-        if (q.startsWith("site:hunt-a.example")) {
-          return [{ title: "Central bank hikes to 20-year high", url: "https://hunt-a.example/story", snippet: "" }];
-        }
-        if (q.startsWith("site:")) return [];
+        searched4c.push(q);
         return [];
       },
       async scrape(url: string): Promise<string> {
@@ -616,17 +600,20 @@ async function orchestrationChecks(): Promise<void> {
         return { url: `memory://${post.slug}`, status: "DRAFT" as const };
       },
     },
-    knobs: { ...knobs, minSources: 3 },
+    knobs,
     coveredTopics: async () => [{ title: STORY1 }],
     trendingImpl: async () => trending,
-    indexImpl: async () => [index[0]],
     coverageImpl: async () => [
       { outlet: "Hunt A", host: "hunt-a.example", headline: "Central bank hikes to 20-year high", stub: "" },
       { outlet: "CNN", host: "", headline: "Rate rise rocks markets", stub: STUB_SIB },
+      { outlet: "Wire", host: "wire.example", headline: STORY2, stub: GN_WIRE },
+      { outlet: "Beacon", host: "beacon.example", headline: "Central bank raises rates to twenty-year high, markets react", stub: GN_BEACON },
     ],
     resolveUrlImpl: async (stub: string) => {
       decoded4c.push(stub);
       if (stub === STUB_SIB) return "https://www.cnn.com/story";
+      if (stub === GN_WIRE) return "https://wire.example/rates";
+      if (stub === GN_BEACON) return "https://beacon.example/rates";
       return "";
     },
     internalsFactory,
@@ -640,6 +627,81 @@ async function orchestrationChecks(): Promise<void> {
       decoded4c.includes(STUB_SIB) &&
       ((published4c as GeneratedPost | null)?.sources ?? []).some((c) => c.url.includes("cnn.com")),
     `threw=${String(threw4c)} decoded=${JSON.stringify(decoded4c)} sources=${JSON.stringify((published4c as GeneratedPost | null)?.sources ?? [])}`);
+  ok("hunt: an empty stub is skipped, not located by a site: search",
+    !decoded4c.includes("") &&
+      searched4c.filter((q) => q.startsWith("site:")).length === 0 &&
+      !((published4c as GeneratedPost | null)?.sources ?? []).some((c) => c.url.includes("hunt-a.example")),
+    `decoded=${JSON.stringify(decoded4c)} searched=${JSON.stringify(searched4c)}`);
+
+  // Scenario 4d — search the top 10, keep the first 5 that actually scrape.
+  // Hits ahead of those five (paywall, teaser, deny, empty stub) do not fill
+  // the cap; a sixth scrapable page in the ten is never fetched.
+  const scraped4d: string[] = [];
+  const GN_EXTRA = "https://news.google.com/rss/articles/EXTRA";
+  let published4d: GeneratedPost | null = null;
+  await createNewsDesk({
+    llm,
+    search: {
+      async search() {
+        return [];
+      },
+      async scrape(url: string): Promise<string> {
+        scraped4d.push(url);
+        const body = PAGES[url];
+        if (body === undefined) throw new Error(`no fixture page for ${url}`);
+        return body;
+      },
+    },
+    feeds: [],
+    roster: [PERSONAS.historian],
+    brand,
+    sink: {
+      async publish(post) {
+        published4d = post;
+        return { url: `memory://${post.slug}`, status: "DRAFT" as const };
+      },
+    },
+    knobs,
+    coveredTopics: async () => [{ title: STORY1 }],
+    trendingImpl: async () => trending,
+    coverageImpl: async () => [
+      { outlet: "Blocked Times", host: "bloomberg.com", headline: "Central bank raises interest rates to a twenty-year high", stub: GN_BLOCK },
+      { outlet: "Teaser Daily", host: "teaser.example", headline: "Central bank raises interest rates: what it means", stub: GN_TEASER },
+      { outlet: "Wire", host: "wire.example", headline: STORY2, stub: GN_WIRE },
+      { outlet: "Beacon", host: "beacon.example", headline: "Central bank raises rates to twenty-year high, markets react", stub: GN_BEACON },
+      { outlet: "Hunt A", host: "hunt-a.example", headline: "Central bank hikes to 20-year high", stub: GN_STUB_A },
+      { outlet: "Hunt B", host: "hunt-b.example", headline: "Rate rise rocks markets", stub: GN_STUB_B },
+      { outlet: "CNN", host: "cnn.com", headline: "Rate rise rocks markets", stub: "https://news.google.com/rss/articles/CLUSTERSIB" },
+      { outlet: "Extra Desk", host: "extra.example", headline: "Rates at a twenty-year high", stub: GN_EXTRA },
+      { outlet: "Fifth Desk", host: "fifth.example", headline: "Rates at a twenty-year high", stub: "https://news.google.com/rss/articles/FIFTH" },
+      { outlet: "Telegraph Online", host: "telegraph.com", headline: "Rates explained", stub: GN_STUB_DENY },
+    ],
+    resolveUrlImpl: async (stub: string) => {
+      if (stub === GN_BLOCK) return "https://www.bloomberg.com/rates";
+      if (stub === GN_TEASER) return "https://teaser.example/rates";
+      if (stub === GN_WIRE) return "https://wire.example/rates";
+      if (stub === GN_BEACON) return "https://beacon.example/rates";
+      if (stub === GN_STUB_A) return "https://hunt-a.example/story";
+      if (stub === GN_STUB_B) return "https://hunt-b.example/story";
+      if (stub === "https://news.google.com/rss/articles/CLUSTERSIB") return "https://www.cnn.com/story";
+      if (stub === GN_EXTRA) return "https://extra.example/rates";
+      return "";
+    },
+    internalsFactory,
+    parallelFetchImpl,
+  }).run();
+  const cited4d = (published4d as GeneratedPost | null)?.sources ?? [];
+  ok("top 10: the first 5 scrapable pages are kept, a sixth scrapable is not fetched",
+    cited4d.length === 5 &&
+      cited4d.some((c) => c.url === "https://wire.example/rates") &&
+      cited4d.some((c) => c.url === "https://www.cnn.com/story") &&
+      !scraped4d.includes("https://extra.example/rates") &&
+      !scraped4d.includes("https://www.bloomberg.com/rates"),
+    `sources=${JSON.stringify(cited4d.map((c) => c.url))} scraped=${JSON.stringify(scraped4d)}`);
+  ok("top 10: a teaser in the ten is tried and dropped, and does not fill the cap",
+    scraped4d.includes("https://teaser.example/rates") &&
+      !cited4d.some((c) => c.url.includes("teaser.example")),
+    JSON.stringify(scraped4d));
 
   // Scenario 5 — a foreign-only cluster publishes under a validated
   // TRANSLATION (operator, 2026-08-30: "if something happened in a foreign
@@ -652,14 +714,16 @@ async function orchestrationChecks(): Promise<void> {
     "https://beacon5.example/tassi": REAL("Beacon"),
     "https://canale5.example/tassi": REAL("Canale"),
   };
+  const GN5_WIRE = "https://news.google.com/rss/articles/W5";
+  const GN5_BEACON = "https://news.google.com/rss/articles/B5";
+  const GN5_CANALE = "https://news.google.com/rss/articles/C5";
   const logs5: string[] = [];
   let published5: GeneratedPost | null = null;
   const post5 = await createNewsDesk({
     llm,
     search: {
-      async search(q: string) {
-        if (q.startsWith("site:")) return [];
-        return [{ title: "Rates story", url: "https://news.google.com/rss/articles/xyz", snippet: "" }];
+      async search() {
+        return [];
       },
       async scrape(url: string): Promise<string> {
         const body = PAGES5[url];
@@ -690,11 +754,17 @@ async function orchestrationChecks(): Promise<void> {
         ],
       },
     ],
-    indexImpl: async () => [
-      { outlet: "Wire", region: "EU", title: STORY5, url: "https://wire5.example/tassi" },
-      { outlet: "Beacon", region: "EU", title: STORY5, url: "https://beacon5.example/tassi" },
-      { outlet: "Canale", region: "EU", title: STORY5, url: "https://canale5.example/tassi" },
+    coverageImpl: async () => [
+      { outlet: "Wire", host: "wire5.example", headline: STORY5, stub: GN5_WIRE },
+      { outlet: "Beacon", host: "beacon5.example", headline: STORY5, stub: GN5_BEACON },
+      { outlet: "Canale", host: "canale5.example", headline: STORY5, stub: GN5_CANALE },
     ],
+    resolveUrlImpl: async (stub: string) => {
+      if (stub === GN5_WIRE) return "https://wire5.example/tassi";
+      if (stub === GN5_BEACON) return "https://beacon5.example/tassi";
+      if (stub === GN5_CANALE) return "https://canale5.example/tassi";
+      return "";
+    },
     internalsFactory,
     parallelFetchImpl,
   }).run();

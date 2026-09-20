@@ -1,10 +1,10 @@
 /**
  * Google News Top-Stories RSS → ranked, PRE-CLUSTERED trending stories.
  * Extends news.ts's validated fetch pattern (15s timeout). GN item links are
- * opaque stubs; resolution happens by headline-matching against our own outlet
- * feeds (matching.ts), and for a story's wider coverage by decoding the stub
- * (`resolveCoverageUrl`). A stub is NEVER scraped as itself and never confers
- * admissibility — the host from <source url> decides that, before any decode.
+ * opaque stubs; a coverage lookup searches the story title and
+ * `resolveCoverageUrl` decodes each stub to the publisher's URL. A stub is
+ * NEVER scraped as itself and never confers admissibility — the host from
+ * <source url> decides that, before any decode.
  * The <description> carries the coverage list: <ol><li><a>headline</a>
  * <font>Outlet</font></li>… (single-link form when GN lists one source).
  *
@@ -475,8 +475,8 @@ export async function parseCoverageFeed(xml: string): Promise<Coverage[]> {
 
 /**
  * Which outlets are covering this story, per Google News. Best-effort: a failed
- * or empty lookup returns [] and the caller falls back to the outlet index
- * alone — discovery must never be able to kill a run.
+ * or empty lookup returns [] and the caller skips the story — discovery must
+ * never be able to kill a run.
  */
 export async function fetchCoverage(args: {
   headline: string;
@@ -517,8 +517,8 @@ export async function fetchCoverage(args: {
 //
 // THIS IS A PRIVATE ENDPOINT. It carries no compatibility promise and will
 // break without notice; that is a cost of the approach, not a surprise. Every
-// failure path returns "" so the caller falls back to the search hunt, and
-// nothing here can throw into a run.
+// failure path returns "" so the caller skips that outlet, and nothing here
+// can throw into a run.
 
 /** Signature/timestamp the batchexecute call has to echo back. */
 function stubCredentials(html: string): { signature: string; timestamp: string } | undefined {
@@ -539,8 +539,7 @@ function firstResolvedUrl(body: string): string {
  *
  * Returns "" on ANY failure — a missing stub, a page without credentials, a
  * refused RPC, a response with no URL. The caller treats "" as "not resolved"
- * and falls back to searching, so a Google-side change degrades this to the
- * behaviour we had before it existed.
+ * and skips the outlet.
  */
 export async function resolveCoverageUrl(args: {
   stub: string;

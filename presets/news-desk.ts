@@ -5,7 +5,6 @@
  * verified parallel → ONE columnist's fused column → publish.
  */
 import { mentionsName, namesEvent, NO_PARALLEL_PHRASE } from "../gates";
-import { createHeadlineMatcher } from "../matching";
 import { pickLeadImage } from "../sources/lead-image";
 import type { ImageSearchConfig } from "../sources/lead-image";
 import type { LeadImage } from "../sources/lead-image";
@@ -37,7 +36,6 @@ import type { OpenedDoc, PrincipalResearch } from "./dossier-research";
 import { fetchCoverage, fetchTrendingStories, resolveCoverageUrl, GN_US } from "../sources/google-news";
 import type { Coverage } from "../sources/google-news";
 import type { TrendingStory } from "../sources/google-news";
-import { createNewswire } from "../sources/newswire";
 import { provenanceOf } from "../sources/provenance";
 import type { OutletFeed, OutletItem } from "../sources/newswire";
 import { createDefaultInternals } from "./default";
@@ -770,24 +768,25 @@ ${args.body}`;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Part 2: createNewsDesk — the orchestration. Trending (Google News) →
-// resolution against ALL outlet indexes (newswire + matching, ≥minSources
-// scrapable floor, next-story fallback) → full-scrape per-outlet extraction →
+// a Google News RSS search of the unique story's title (top 10,
+// first pagesMax that scrape) → full-scrape per-outlet extraction →
 // the FIXED retell plan through EngineInternals.generate → verified parallel →
-// contract-gated Analysis → assembled markdown + ## Sources → sink.publish.
-// Ranking, source matching and counting stay mechanical. The covered-check
+// contract-gated Analysis → assembled markdown + sources[] → sink.publish.
+// Ranking and source counting stay mechanical. The covered-check
 // is the one early judgement: SAME / FOLLOWUP / NEW against the recent ledger.
 // ───────────────────────────────────────────────────────────────────────────
 
 /** The news desk's tunable knobs — all explicit, no defaults (spec values in
- *  comments; matchThreshold semantics depend on the matcher backend). */
+ *  comments). minSources / matchThreshold are kept so callers do not break;
+ *  STEP 03 no longer gates on a source count or matches an outlet index. */
 export interface NewsDeskKnobs {
   trendingLimit: number; // 20
-  minSources: number; // 3 — never write thin
-  pagesMax: number; // 6
+  minSources: number; // unused — write with whatever of the GN search scrapes
+  pagesMax: number; // 5 — keep this many pages that actually scrape
   chunkChars: number; // 24000
   maxChunksPerPage: number; // 4
   minContentChars: number; // 400
-  matchThreshold: number; // 0.62 with embedder, pass 0.35 when trigram-only
+  matchThreshold: number; // unused — no outlet-index match
   coveredWindowMs: number; // 72h — covered-check only scores the recent ledger
   parallelCount: number; // 4
   parallelMinScore: number; // 0.3
@@ -798,9 +797,9 @@ export interface NewsDeskKnobs {
 /**
  * Wire the news-desk run. `search` is the RAW client WITH `scrape()` — the
  * hardened research facade (memoized + gap-gated scrapes) is built internally.
- * `trendingImpl`/`indexImpl`/`internalsFactory`/`parallelFetchImpl` are test
- * seams whose defaults are the real implementations, so offline checks drive
- * the REAL orchestration through fakes at exactly those seams.
+ * `trendingImpl`/`coverageImpl`/`resolveUrlImpl`/`internalsFactory`/`parallelFetchImpl`
+ * are test seams whose defaults are the real implementations, so offline
+ * checks drive the REAL orchestration through fakes at exactly those seams.
  */
 // ───────────────────────────────────────────────────────────────────────────
 // Primary-data plays (DataGod) — WHICH API for WHICH story, as data.
@@ -1496,12 +1495,12 @@ export async function translateHeadline(args: {
   return null;
 }
 
-/** The shipped coverage channel: Google News, US edition, last week. */
+/** The shipped coverage channel: Google News, US edition, last week, top 10. */
 const defaultCoverage = (headline: string): Promise<Coverage[]> =>
-  fetchCoverage({ headline, edition: GN_US, limit: 12 });
+  fetchCoverage({ headline, edition: GN_US, limit: 10 });
 
 /** The shipped URL resolver: decode the coverage item's own Google News stub.
- *  Returns "" when it cannot, and the hunt falls back to a site: search. */
+ *  Returns "" when it cannot; that outlet is skipped (no site: fallback). */
 const defaultResolveUrl = (stub: string): Promise<string> =>
   resolveCoverageUrl({ stub, edition: GN_US });
 
@@ -1524,13 +1523,12 @@ export function createNewsDesk(opts: {
    *  source og:image only; a story with no usable source photo runs imageless. */
   imageSearch?: ImageSearchConfig;
   knobs: NewsDeskKnobs;
-  /** Who is covering a story, for the source hunt. Defaults to Google News
-   *  (sources/google-news.ts fetchCoverage). Injected in checks, and the seam
-   *  for swapping in another vetted-publisher index later. */
+  /** Who is covering a story. Defaults to Google News
+   *  (sources/google-news.ts fetchCoverage, top 10). Injected in checks. */
   coverageImpl?: (headline: string) => Promise<Coverage[]>;
   /** Turn a coverage item's Google News stub into the publisher's URL.
-   *  Defaults to `resolveCoverageUrl`. Returning "" is normal and means "fall
-   *  back to the site: search" — it must never throw. Injected in checks. */
+   *  Defaults to `resolveCoverageUrl`. Returning "" skips the outlet — it
+   *  must never throw. Injected in checks. */
   resolveUrlImpl?: (stub: string) => Promise<string>;
   coveredTopics?: () => Promise<CoveredTopic[]>;
   /** Called when a trending story matches one the paper has already run.
@@ -1575,7 +1573,7 @@ export function createNewsDesk(opts: {
   parallelFetchImpl?: typeof fetch;
   leadImageFetchImpl?: typeof fetch;
 }): { run(): Promise<GeneratedPost> } {
-  const { search, feeds, brand, sink, knobs, log, recordArtifact } = opts;
+  const { search, brand, sink, knobs, log, recordArtifact } = opts;
   const blockedHosts = opts.blockedHosts ?? DEFAULT_BLOCKED_HOSTS;
 
   return {
@@ -1586,25 +1584,20 @@ export function createNewsDesk(opts: {
       if (scrape === undefined) {
         throw new Error("news-desk: search client has no scrape() port — full-page evidence scraping is required");
       }
-      const matcher = createHeadlineMatcher(opts.embedder === undefined ? {} : { embedder: opts.embedder });
       const fetchTrending =
         opts.trendingImpl ?? ((): Promise<TrendingStory[]> => fetchTrendingStories({ edition: GN_US, limit: knobs.trendingLimit }));
-      const buildIndex =
-        opts.indexImpl ??
-        // concurrency 8: the feed list went from 10 papers to 65 (2026-08-16),
-        // and at 4 a cold index build serialised into ~17 rounds of waiting.
-        ((): Promise<OutletItem[]> => createNewswire({ feeds, concurrency: 8, timeoutMs: 15_000, log }).buildIndex());
 
       const stories = await fetchTrending();
       // Google News hands over no article URL: the item <link> is a JS stub and
       // <source url> is the publisher's home page, so real URLs only exist
-      // after resolution. Everything the feed DOES carry is recorded here.
+      // after a headline search's stubs are decoded. Everything the feed DOES
+      // carry is recorded here.
       recordArtifact?.(
         "trending",
         [
           "Google News gives no article URLs at this stage (its item links are JS stubs).",
-          "The publisher home page below is from <source url>; real article URLs are resolved",
-          "against the outlet indexes and recorded in the resolution artifacts.",
+          "The publisher home page below is from <source url>; real article URLs come from a",
+          "Google News search of the unique story's title, recorded in the resolution artifacts.",
           "",
           ...stories.map((s) =>
             [
@@ -1616,8 +1609,6 @@ export function createNewsDesk(opts: {
           ),
         ].join("\n"),
       );
-      const index = await buildIndex();
-      const indexTitles = index.map((i) => i.title);
       const recentLedger = recentCovered((await opts.coveredTopics?.()) ?? [], Date.now(), knobs.coveredWindowMs);
 
       for (const story of stories) {
@@ -1658,23 +1649,32 @@ export function createNewsDesk(opts: {
           );
         }
 
-        // Resolution: GN headlines never carry real URLs — match every probe
-        // (lead + coverage headlines) against ALL outlet indexes, keep the
-        // best hit per outlet, drop blocked hosts, rank by score, cap pages.
-        const probes = [story.headline, ...story.coverage.map((c) => c.headline)];
-        // Google's own cluster first (operator, 2026-09-19): the lead outlet's
-        // article and every other outlet Google News shows for the story, their
-        // links decoded to the publishers' URLs, lead first, one page per host.
-        // A blocked (paywalled) or deny-tier host is skipped: the lead stays the
-        // story's lead while the other sources carry the text.
-        const clustered: { item: OutletItem; score: number }[] = [];
-        for (const c of [{ outlet: story.leadOutlet, headline: story.headline, link: story.link }, ...story.coverage]) {
-          if (clustered.length >= knobs.pagesMax) break;
-          if (c.link === undefined || c.link === "") continue;
-          const url = await (opts.resolveUrlImpl ?? defaultResolveUrl)(c.link);
+        // Resolution: STEP 02 already chose a unique story. Search its title
+        // on Google News RSS (top 10). Decode every hit that passes the
+        // doors, then scrape in order until pagesMax (production: 5) survive.
+        // Deny-tier and blocked hosts are skipped; an empty stub or a decode
+        // that lands off the named host is skipped. No outlet-index match,
+        // no site: hunt, no minSources floor — write with whatever scrapes.
+        const coverage = await (opts.coverageImpl ?? defaultCoverage)(story.headline);
+        const resolved: { item: OutletItem; score: number }[] = [];
+        const held = new Set<string>();
+        for (const c of coverage) {
+          if (c.host !== "") {
+            if (isBlockedHost(c.host, blockedHosts)) {
+              log?.(`news-desk: ${c.outlet} (${c.host}) — blocked host, not scraped; the story's other sources carry it`);
+              continue;
+            }
+            if (provenanceOf(c.host) === "deny") {
+              log?.(`news-desk: dropped ${c.outlet} (${c.host}) — deny-tier provenance`);
+              continue;
+            }
+          }
+          if (c.stub === "") continue;
+          const url = await (opts.resolveUrlImpl ?? defaultResolveUrl)(c.stub);
           if (url === "") continue;
           const host = hostOf(url);
-          if (clustered.some(({ item }) => hostOf(item.url) === host)) continue;
+          if (c.host !== "" && !host.endsWith(c.host)) continue;
+          if (held.has(host)) continue;
           if (isBlockedHost(host, blockedHosts)) {
             log?.(`news-desk: ${c.outlet} (${url}) — blocked host, not scraped; the story's other sources carry it`);
             continue;
@@ -1683,199 +1683,34 @@ export function createNewsDesk(opts: {
             log?.(`news-desk: dropped ${c.outlet} (${url}) — deny-tier provenance`);
             continue;
           }
-          clustered.push({ item: { outlet: c.outlet, region: "", title: c.headline, url }, score: 1 });
+          held.add(host);
+          if (c.host !== "") held.add(c.host);
+          resolved.push({
+            item: { outlet: c.outlet === "" ? host : c.outlet, region: "", title: c.headline, url },
+            score: 1,
+          });
         }
-        const clusterHosts = new Set(clustered.map(({ item }) => hostOf(item.url)));
-        const hits = await matcher.matchAny(probes, indexTitles, knobs.matchThreshold);
-        const bestByOutlet = new Map<string, { item: OutletItem; score: number }>();
-        for (const hit of hits) {
-          const item = index[hit.index];
-          const prev = bestByOutlet.get(item.outlet);
-          if (prev === undefined || hit.score > prev.score) bestByOutlet.set(item.outlet, { item, score: hit.score });
-        }
-        const fromIndex = [...bestByOutlet.values()].filter(({ item }) => {
-          const host = hostOf(item.url);
-          if (clusterHosts.has(host)) return false;
-          const blocked = isBlockedHost(host, blockedHosts);
-          if (blocked) log?.(`news-desk: dropped ${item.outlet} (${item.url}) — blocked host`);
-          // Feeds are curated, but a feed can still link out to a deny-tier
-          // host inside its cluster; the tier applies at every door.
-          const denied = provenanceOf(host) === "deny";
-          if (denied) log?.(`news-desk: dropped ${item.outlet} (${item.url}) — deny-tier provenance`);
-          return !blocked && !denied;
-        });
-        // The cluster's pages lead (score 1 sorts them first); the index adds the rest.
-        const unblocked = [...clustered, ...fromIndex];
-        // Source hunt (operator, 2026-07-25: "make sure we write news for every
-        // trending news"): the outlet index is ten shallow RSS windows, so real
-        // stories often match 0-2 of them — 61% of all rejections. When the
-        // index comes up short, ask the search backend for the story's other
-        // coverage and admit pages from hosts we don't already hold. Hunted
-        // pages face the same blocklist here and the same content floors
-        // downstream; index sources keep priority in the page cap.
-        const hunted: { item: OutletItem; score: number }[] = [];
-        if (unblocked.length < knobs.minSources) {
-          try {
-            // ── Discovery: Google News, not an open web search ──────────────
-            // GN only indexes publishers admitted to its news index, so its
-            // coverage cluster is a vetted outlet list by construction. The old
-            // hunt asked a web search engine and admitted whatever hosts came
-            // back — that is how a WordPress site calling itself "Telegraph
-            // Online" got cited (operator, 2026-08-16). GN item links are JS
-            // stubs, so what we take is the HOST and that outlet's own
-            // HEADLINE; the URL is resolved below.
-            const coverage = await (opts.coverageImpl ?? defaultCoverage)(story.headline);
-            // An empty host is a cluster sibling (no <source url> on the <li>).
-            // provenanceOf("") is deny, which would drop the whole cluster;
-            // the host is judged after the stub decodes, same door as below.
-            const fresh = coverage.filter((c) => {
-              if (c.host === "") return c.stub !== "";
-              return provenanceOf(c.host) !== "deny" && !isBlockedHost(c.host, blockedHosts);
-            });
-
-            // Pass 1 — free: the outlets' own headlines are extra probes into
-            // the index we already hold. Most clusters resolve here with no
-            // search call at all.
-            const held = new Set(unblocked.map(({ item }) => hostOf(item.url)));
-            const extraHits = await matcher.matchAny(
-              fresh.map((c) => c.headline),
-              indexTitles,
-              knobs.matchThreshold,
-            );
-            for (const hit of extraHits) {
-              if (unblocked.length + hunted.length >= knobs.pagesMax) break;
-              const item = index[hit.index];
-              const host = hostOf(item.url);
-              if (held.has(host) || isBlockedHost(host, blockedHosts)) continue;
-              if (provenanceOf(host) === "deny") continue;
-              held.add(host);
-              hunted.push({ item, score: hit.score });
-            }
-
-            // Pass 2 — ask Google News for the URL it already has. Each
-            // coverage item carries a stub link to the very article whose
-            // headline we just read; decoding it returns the publisher URL
-            // directly, with no third party asked to find a page we have
-            // already been told exists. This is the primary resolver: on
-            // 2026-09-03 it returned 12/12 back to back while every search
-            // query was being met with an anti-bot page.
-            //
-            // The decode NEVER widens admissibility. When Google News named
-            // the host (`<source url>`), a decoded URL that lands anywhere
-            // else is discarded. A cluster sibling has no host yet — the
-            // decoded URL's host is then judged by the same deny/block doors.
-            for (const c of fresh) {
-              if (unblocked.length + hunted.length >= knobs.minSources) break;
-              if (unblocked.length + hunted.length >= knobs.pagesMax) break;
-              if (c.stub === "") continue;
-              if (c.host !== "" && held.has(c.host)) continue;
-              const url = await (opts.resolveUrlImpl ?? defaultResolveUrl)(c.stub);
-              if (url === "") continue;
-              const host = hostOf(url);
-              if (c.host !== "" && !host.endsWith(c.host)) continue;
-              if (held.has(host) || isBlockedHost(host, blockedHosts) || provenanceOf(host) === "deny") continue;
-              held.add(host);
-              if (c.host !== "") held.add(c.host);
-              hunted.push({ item: { outlet: c.outlet === "" ? host : c.outlet, region: "", title: c.headline, url }, score: 0 });
-            }
-
-            // Pass 3 — FALLBACK for coverage the decode could not resolve.
-            // Web search is a URL-LOCATOR inside one named host here, never a
-            // discoverer of hosts: the query is site-restricted and any result
-            // off that host is discarded.
-            //
-            // BUDGETED, because the first version was not: it searched every
-            // outlet in the cluster, so a twelve-outlet story cost twelve
-            // search calls — and when the backend degraded and each returned
-            // nothing, the loop hammered it hardest at exactly the wrong
-            // moment and resolved zero (live, 2026-08-17). Now it stops as
-            // soon as it has enough, and gives up early when the backend is
-            // plainly not answering.
-            //
-            // The budget is 6, not 4, because the floor is 3 and a miss is
-            // ordinary: Google News names 7–11 admissible outlets for a story
-            // and not all of them are findable by a `site:` query. 4 left no
-            // room for two misses (live, 2026-09-03: 10 outlets named, index
-            // gave 2/3, hunt stopped one source short). Pacing, not a small
-            // budget, is what keeps this gentle now — the SearchClient spaces
-            // consecutive searches (`createPacer`), so a bigger budget costs
-            // wall-clock, not goodwill with the backend. Since Pass 2 resolves
-            // most clusters without a search at all, the budget is now rarely
-            // reached — it bounds the tail, it is not the normal path.
-            const SEARCH_BUDGET = 6;
-            const EMPTY_STREAK_LIMIT = 3;
-            let spent = 0;
-            let emptyStreak = 0;
-            for (const c of fresh) {
-              if (unblocked.length + hunted.length >= knobs.minSources) break;
-              if (unblocked.length + hunted.length >= knobs.pagesMax) break;
-              if (spent >= SEARCH_BUDGET) {
-                log?.(`news-desk: hunt hit its ${SEARCH_BUDGET}-search budget for "${story.headline}"`);
-                break;
-              }
-              if (emptyStreak >= EMPTY_STREAK_LIMIT) {
-                log?.(`news-desk: hunt stopping — ${emptyStreak} site searches in a row returned nothing (backend degraded?)`);
-                break;
-              }
-              if (c.host === "" || held.has(c.host)) continue;
-              spent += 1;
-              const found = await search.search(`site:${c.host} ${c.headline}`, { limit: 10 });
-              const onHost = found.find(
-                (r) => r.url.startsWith("http") && hostOf(r.url).endsWith(c.host),
-              );
-              if (onHost === undefined) {
-                emptyStreak += 1;
-                continue;
-              }
-              emptyStreak = 0;
-              held.add(c.host);
-              hunted.push({
-                item: { outlet: c.outlet, region: "", title: c.headline, url: onHost.url },
-                score: 0,
-              });
-            }
-            // Wide fallback: the backend has been answering `site:` queries with
-            // off-host pages (measured 2026-09-02: 1 on-host result in 14
-            // searches, all day), so one plain headline search is asked for
-            // ten results and any that land on an admissible, still-unheld
-            // coverage outlet count — the story is the filter, not the operator.
-            if (unblocked.length + hunted.length < knobs.minSources && fresh.length > 0) {
-              const wide = await search.search(story.headline, { limit: 10 });
-              for (const r of wide) {
-                if (unblocked.length + hunted.length >= knobs.pagesMax) break;
-                if (!r.url.startsWith("http")) continue;
-                const host = hostOf(r.url);
-                const outlet = fresh.find((c) => c.host !== "" && !held.has(c.host) && host.endsWith(c.host));
-                if (outlet === undefined) continue;
-                held.add(outlet.host);
-                hunted.push({ item: { outlet: outlet.outlet, region: "", title: r.title || outlet.headline, url: r.url }, score: 0 });
-              }
-            }
-            log?.(
-              `news-desk: "${story.headline}" index gave ${unblocked.length}/${knobs.minSources} — GN coverage named ${coverage.length} outlet(s) (${fresh.length} admissible), resolved ${hunted.length}`,
-            );
-          } catch (err: unknown) {
-            log?.(`news-desk: source hunt failed (best-effort, continuing with the index alone): ${String(err)}`);
-          }
-        }
-        const resolved = [...unblocked.sort((a, b) => b.score - a.score), ...hunted].slice(0, knobs.pagesMax);
+        log?.(
+          `news-desk: "${story.headline}" GN coverage named ${coverage.length} outlet(s), resolved ${resolved.length}`,
+        );
         recordArtifact?.(
           `resolution: ${story.headline}`,
           resolved.length === 0
-            ? "(no outlet index hit survived)"
+            ? "(no Google News search hit survived)"
             : resolved.map(({ item, score }) => `${item.outlet} [${score.toFixed(2)}]: ${item.title} — ${item.url}`).join("\n"),
         );
-        if (resolved.length < knobs.minSources) {
+        if (resolved.length === 0) {
           log?.(
-            `news-desk: "${story.headline}" resolved only ${resolved.length}/${knobs.minSources} scrapable sources — next story`,
+            `news-desk: "${story.headline}" resolved no scrapable sources — next story`,
           );
           continue;
         }
 
         // Full scrape through the hardened facade (memoized + gated); scrape
-        // failures and teaser/paywall stubs drop the outlet, floor named.
+        // failures and teaser/paywall stubs drop the outlet.
         const pages: { outlet: string; title: string; url: string; content: string }[] = [];
         for (const { item } of resolved) {
+          if (pages.length >= knobs.pagesMax) break;
           let content: string;
           try {
             content = await scrape(item.url);
@@ -1896,9 +1731,9 @@ export function createNewsDesk(opts: {
           recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\n${content.length} chars\n${content.slice(0, 20_000)}`);
           pages.push({ outlet: item.outlet, title: item.title, url: item.url, content });
         }
-        if (pages.length < knobs.minSources) {
+        if (pages.length === 0) {
           log?.(
-            `news-desk: "${story.headline}" kept ${pages.length}/${knobs.minSources} sources after the scrape floors — next story`,
+            `news-desk: "${story.headline}" kept no sources after the scrape floors — next story`,
           );
           continue;
         }
@@ -1938,9 +1773,9 @@ export function createNewsDesk(opts: {
             block: `SOURCE ${page.outlet} — ${page.title} (${page.url}):\n${parts.join("\n")}`,
           });
         }
-        if (contributing.length < knobs.minSources) {
+        if (contributing.length === 0) {
           log?.(
-            `news-desk: "${story.headline}" kept ${contributing.length}/${knobs.minSources} sources after evidence extraction — next story`,
+            `news-desk: "${story.headline}" kept no sources after evidence extraction — next story`,
           );
           continue;
         }
@@ -2419,7 +2254,7 @@ export function createNewsDesk(opts: {
         }
 
       }
-      throw new Error(`news-desk: no trending story resolved ≥${knobs.minSources} scrapable sources`);
+      throw new Error("news-desk: no trending story produced a column");
     },
   };
 }
