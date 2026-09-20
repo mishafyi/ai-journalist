@@ -17,6 +17,7 @@
  *    complete JSON value is taken and Zod judges it.
  */
 import { GoogleGenAI } from "@google/genai";
+import type { HttpRetryOptions } from "@google/genai";
 import { z } from "zod";
 import type { ZodType } from "zod";
 import type { LlmClient } from "../ports";
@@ -78,12 +79,38 @@ const ROTATION_ROUNDS = 8;
  * nothing recovers.
  */
 const MAX_COOLDOWN_WAIT_MS = 120_000;
+/** A SERVER ERROR IS ASKED AGAIN; A REFUSAL ROTATES. The SDK retries for us —
+ *  `HttpRetryOptions`, with its own exponential backoff and jitter — but ONLY
+ *  when it is given a retryOptions object: its `apiCall` opens
+ *  `if (!retryOptions || …) return`, so the documented defaults never apply to
+ *  a client that omits it, as this one did. Every 500 therefore cost a key.
+ *
+ *  Only Google's own faults are listed. A 429 and a 408 are deliberately left
+ *  out: a rate limit means THIS key is spent, and the answer is the next key
+ *  now, not this key after a backoff — retrying it in place would sit on the
+ *  ring's own remedy. 503 stays out too; "high demand" is the model, not the
+ *  key, and the rotation already cools it for ten seconds.
+ *
+ *  Measured 2026-09-19: gemma-4-31b-it answered
+ *  {"code":500,"message":"Internal error encountered.","status":"INTERNAL"}
+ *  to 9 of 40 probes, every key alike — 211 of them in one day's logs. */
+export const SERVER_ERROR_RETRY: HttpRetryOptions = {
+  attempts: 3,
+  initialDelay: 0.5,
+  maxDelay: 4,
+  httpStatusCodes: [500, 502, 504],
+};
 
 /** Why a failed call is worth trying elsewhere, and how long to shun the pair
  *  that produced it. `null` means the error is a real fault to surface. */
 interface Retryable {
   waitMs: number;
-  reason: "rate-limited" | "daily limit" | "transport failure" | "dead key";
+  reason:
+    | "rate-limited"
+    | "daily limit"
+    | "server error"
+    | "transport failure"
+    | "dead key";
 }
 
 /**
@@ -125,7 +152,13 @@ function evidence(err: unknown): string {
  *  lorien-times `scripts/gemini.mjs`. */
 export function untilPacificMidnight(nowMs: number): number {
   const at = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hourCycle: "h23", hour: "numeric", minute: "numeric", second: "numeric" })
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Los_Angeles",
+      hourCycle: "h23",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    })
       .formatToParts(new Date(nowMs))
       .map((p) => [p.type, Number(p.value)]),
   ) as Record<string, number>;
@@ -144,21 +177,33 @@ function retryableAfter(err: unknown): Retryable | null {
   // 24s), the day `GenerateRequestsPerDayPerProjectPerModel-FreeTier` (limit
   // 20, retry 18s). The day's pair is skipped until midnight Pacific for the
   // rest of this process; the next run asks again.
-  if (/PerDay/.test(text)) return { waitMs: untilPacificMidnight(Date.now()), reason: "daily limit" };
+  if (/PerDay/.test(text))
+    return { waitMs: untilPacificMidnight(Date.now()), reason: "daily limit" };
   const asked = text.match(/"retryDelay":\s*"(\d+)s"/);
-  if (asked !== null) return { waitMs: Number(asked[1]) * 1000, reason: "rate-limited" };
-  if (/"code":\s*429|RESOURCE_EXHAUSTED/.test(text)) return { waitMs: 30_000, reason: "rate-limited" };
-  if (/"code":\s*503|high demand|UNAVAILABLE/.test(text)) return { waitMs: 10_000, reason: "rate-limited" };
+  if (asked !== null)
+    return { waitMs: Number(asked[1]) * 1000, reason: "rate-limited" };
+  if (/"code":\s*429|RESOURCE_EXHAUSTED/.test(text))
+    return { waitMs: 30_000, reason: "rate-limited" };
+  if (/"code":\s*503|high demand|UNAVAILABLE/.test(text))
+    return { waitMs: 10_000, reason: "rate-limited" };
   // A 500 INTERNAL is Google's side falling over, not our request being wrong.
   // It reads like a fault and is not one: on 2026-09-08 it ended 254 runs in a
   // day — the desk published once, at 04:12, and spent the rest of the day
   // dying mid-column on "Internal error encountered". The next key or model
   // answers it, which is the same remedy as for a dropped socket, so it gets
   // the same short cooldown rather than taking the run down.
-  if (/"code":\s*50[024]|INTERNAL|Internal error encountered|Bad Gateway|Gateway Time/i.test(text)) {
-    return { waitMs: 5_000, reason: "transport failure" };
+  if (
+    /"code":\s*50[024]|INTERNAL|Internal error encountered|Bad Gateway|Gateway Time/i.test(
+      text,
+    )
+  ) {
+    return { waitMs: 5_000, reason: "server error" };
   }
-  if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|terminated|other side closed|timed? ?out|AbortError|The operation was aborted/i.test(text)) {
+  if (
+    /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|terminated|other side closed|timed? ?out|AbortError|The operation was aborted/i.test(
+      text,
+    )
+  ) {
     return { waitMs: 2_000, reason: "transport failure" };
   }
   // A DEAD KEY IS THE RING'S PROBLEM, NOT THE REQUEST'S. Keys get revoked and
@@ -173,7 +218,11 @@ function retryableAfter(err: unknown): Retryable | null {
   // in the next breath, and probing it every call would spend a request each
   // time to be told the same thing. If EVERY key is dead the rotation still
   // ends with its "every model failed" error, naming them.
-  if (/"code":\s*40[13]|API_KEY_INVALID|API key not valid|bound service account is (?:deleted|disabled)|PERMISSION_DENIED|UNAUTHENTICATED/i.test(text)) {
+  if (
+    /"code":\s*40[13]|API_KEY_INVALID|API key not valid|bound service account is (?:deleted|disabled)|PERMISSION_DENIED|UNAUTHENTICATED/i.test(
+      text,
+    )
+  ) {
     return { waitMs: 60 * 60_000, reason: "dead key" };
   }
   return null;
@@ -220,8 +269,9 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-
-const REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS ?? 300_000);
+const REQUEST_TIMEOUT_MS = Number(
+  process.env.GEMINI_REQUEST_TIMEOUT_MS ?? 300_000,
+);
 
 export function createRotation(
   models: readonly string[],
@@ -271,11 +321,20 @@ export function createRotation(
     // order, because Flash-Lite's scarce number is requests per day (500/key).
     const ordered =
       (promptTokens ?? 0) > BIG_PROMPT_TOKENS
-        ? [...models].sort((a, b) => Number(isBigBudget(b)) - Number(isBigBudget(a)))
+        ? [...models].sort(
+            (a, b) => Number(isBigBudget(b)) - Number(isBigBudget(a)),
+          )
         : models;
     // A pinned call names one model, or several comma-separated, tried in that order.
-    const candidateModels = pinned === undefined ? ordered : pinned.split(",").map((m) => m.trim()).filter((m) => m !== "");
-    if (candidateModels.length === 0) throw new Error("gemini: no models configured");
+    const candidateModels =
+      pinned === undefined
+        ? ordered
+        : pinned
+            .split(",")
+            .map((m) => m.trim())
+            .filter((m) => m !== "");
+    if (candidateModels.length === 0)
+      throw new Error("gemini: no models configured");
     if (keyCount === 0) throw new Error("gemini: no api keys configured");
     const start = cursor;
     cursor = (cursor + 1) % keyCount;
@@ -283,17 +342,26 @@ export function createRotation(
     // so an operator's first choice is genuinely exhausted before we move off
     // it. The keys themselves rotate so the load spreads across projects.
     const pairs = candidateModels.flatMap((model) =>
-      Array.from({ length: keyCount }, (_, n) => ({ model, key: (start + n) % keyCount })),
+      Array.from({ length: keyCount }, (_, n) => ({
+        model,
+        key: (start + n) % keyCount,
+      })),
     );
 
     let last: unknown;
     for (let round = 1; round <= ROTATION_ROUNDS; round += 1) {
-      const ready = pairs.filter((p) => (coolUntil.get(slot(p.model, p.key)) ?? 0) <= Date.now());
+      const ready = pairs.filter(
+        (p) => (coolUntil.get(slot(p.model, p.key)) ?? 0) <= Date.now(),
+      );
       if (ready.length === 0) {
-        const soonest = Math.min(...pairs.map((p) => coolUntil.get(slot(p.model, p.key)) ?? 0));
+        const soonest = Math.min(
+          ...pairs.map((p) => coolUntil.get(slot(p.model, p.key)) ?? 0),
+        );
         const wait = Math.max(0, soonest - Date.now());
         if (wait > MAX_COOLDOWN_WAIT_MS) break; // nothing usable soon — say so
-        log?.(`gemini: ${label} — every model/key pair is cooling, waiting ${Math.round(wait / 1000)}s`);
+        log?.(
+          `gemini: ${label} — every model/key pair is cooling, waiting ${Math.round(wait / 1000)}s`,
+        );
         await new Promise((resolve) => setTimeout(resolve, wait));
         continue;
       }
@@ -312,7 +380,9 @@ export function createRotation(
           // network problem instead of hiding behind "rate-limited".
           if (announced !== `${model}|${retry.reason}`) {
             announced = `${model}|${retry.reason}`;
-            log?.(`gemini: ${label} — ${model} ${retry.reason} on key ${key + 1}/${keyCount}, trying its other keys`);
+            log?.(
+              `gemini: ${label} — ${model} ${retry.reason} on key ${key + 1}/${keyCount}, trying its other keys`,
+            );
           }
         }
       }
@@ -327,7 +397,9 @@ export function createRotation(
 
 /** The first complete JSON object or array in `text`, fences and trailing prose stripped. */
 function firstJsonValue(text: string): string {
-  const stripped = text.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+  const stripped = text
+    .replace(/^\s*```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "");
   const start = stripped.search(/[[{]/);
   if (start === -1) return stripped;
   let depth = 0;
@@ -355,7 +427,16 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
   // A request that has taken five minutes is not going to answer. The SDK has
   // no default timeout, so without this a dead stream holds the await until
   // the caller's own cap kills the whole run.
-  const ring = cfg.apiKeys.map((apiKey) => new GoogleGenAI({ apiKey, httpOptions: { timeout: REQUEST_TIMEOUT_MS } }));
+  const ring = cfg.apiKeys.map(
+    (apiKey) =>
+      new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          timeout: REQUEST_TIMEOUT_MS,
+          retryOptions: SERVER_ERROR_RETRY,
+        },
+      }),
+  );
   const rotate = createRotation(cfg.models, ring.length, cfg.log);
   const pin = (candidate: string | undefined): string | undefined =>
     candidate === undefined || candidate.trim() === "" ? undefined : candidate;
@@ -373,63 +454,100 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
       };
       let served = "";
       try {
-        const res = await rotate("complete", pin(model), (chosen, key) => {
-          served = chosen;
-          return ring[key].models.generateContent({
-            model: chosen,
-            contents: prompt,
-            config: {
-              ...(system === undefined ? {} : { systemInstruction: system }),
-              ...(temperature === undefined ? {} : { temperature }),
-            },
-          });
-        }, estimateTokens(prompt + (system ?? "")));
+        const res = await rotate(
+          "complete",
+          pin(model),
+          (chosen, key) => {
+            served = chosen;
+            return ring[key].models.generateContent({
+              model: chosen,
+              contents: prompt,
+              config: {
+                ...(system === undefined ? {} : { systemInstruction: system }),
+                ...(temperature === undefined ? {} : { temperature }),
+              },
+            });
+          },
+          estimateTokens(prompt + (system ?? "")),
+        );
         const text = res.text ?? "";
-        if (!text.trim()) throw new Error(`Gemini returned an empty completion (model=${served})`);
+        if (!text.trim())
+          throw new Error(
+            `Gemini returned an empty completion (model=${served})`,
+          );
         cfg.trace?.llm({ ...request, model: served, response: text });
         return text;
       } catch (err: unknown) {
-        cfg.trace?.llm({ ...request, model: served, error: describeError(err) });
+        cfg.trace?.llm({
+          ...request,
+          model: served,
+          error: describeError(err),
+        });
         throw err;
       }
     },
 
     async completeStructured<T>(args: {
-      messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+      messages: Array<{
+        role: "system" | "user" | "assistant";
+        content: string;
+      }>;
       schema: ZodType<T>;
       schemaName: string;
       model?: string;
       temperature?: number;
     }): Promise<T> {
-      const system = args.messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
+      const system = args.messages
+        .filter((m) => m.role === "system")
+        .map((m) => m.content)
+        .join("\n\n");
       const contents = args.messages
         .filter((m) => m.role !== "system")
-        .map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] }));
+        .map((m) => ({
+          role: m.role === "assistant" ? "model" : "user",
+          parts: [{ text: m.content }],
+        }));
       const request = {
         model: "",
-        ...(args.temperature === undefined ? {} : { temperature: args.temperature }),
+        ...(args.temperature === undefined
+          ? {}
+          : { temperature: args.temperature }),
         schemaName: args.schemaName,
         messages: args.messages,
       };
       let served = "";
       let text: string;
       try {
-        const res = await rotate(args.schemaName, pin(args.model), (chosen, key) => {
-          served = chosen;
-          return ring[key].models.generateContent({
-            model: chosen,
-            contents,
-            config: {
-              responseMimeType: "application/json",
-              responseJsonSchema: z.toJSONSchema(args.schema) as Record<string, unknown>,
-              ...(system === "" ? {} : { systemInstruction: system }),
-              ...(args.temperature === undefined ? {} : { temperature: args.temperature }),
-            },
-          });
-        }, estimateTokens(JSON.stringify(contents)));
+        const res = await rotate(
+          args.schemaName,
+          pin(args.model),
+          (chosen, key) => {
+            served = chosen;
+            return ring[key].models.generateContent({
+              model: chosen,
+              contents,
+              config: {
+                responseMimeType: "application/json",
+                responseJsonSchema: z.toJSONSchema(args.schema) as Record<
+                  string,
+                  unknown
+                >,
+                ...(system === "" ? {} : { systemInstruction: system }),
+                ...(args.temperature === undefined
+                  ? {}
+                  : { temperature: args.temperature }),
+              },
+            });
+          },
+          estimateTokens(JSON.stringify(contents)),
+        );
         text = res.text ?? "";
       } catch (err: unknown) {
-        cfg.trace?.llm({ ...request, model: served, error: describeError(err) });
+        cfg.trace?.llm({
+          ...request,
+          model: served,
+          error: describeError(err),
+        });
         throw err;
       }
       cfg.trace?.llm({ ...request, model: served, response: text });
@@ -437,7 +555,9 @@ export function createGeminiLlm(cfg: GeminiLlmConfig): LlmClient {
       try {
         parsed = JSON.parse(firstJsonValue(text));
       } catch {
-        throw new Error(`Gemini structured response was not valid JSON: ${text.slice(0, 200)}`);
+        throw new Error(
+          `Gemini structured response was not valid JSON: ${text.slice(0, 200)}`,
+        );
       }
       return args.schema.parse(parsed);
     },

@@ -9,7 +9,7 @@
  * is decided entirely there. Driving it through the SDK would test Google's
  * mood and the SDK's constructor, neither of which is ours.
  */
-import { createRotation, FREE_MODELS, untilPacificMidnight } from "./gemini-llm";
+import { createRotation, FREE_MODELS, SERVER_ERROR_RETRY, untilPacificMidnight } from "./gemini-llm";
 process.env.GEMINI_RING_START = "0"; // the checks reason about "the next key" from key 1
 import { describeError } from "./trace";
 
@@ -261,6 +261,29 @@ async function main(): Promise<void> {
   });
   ok("a 500 INTERNAL advances instead of killing the run",
     past500 === "served" && after500 === 2, `attempts=${after500}`);
+  // And it is named as GOOGLE'S fault, not ours. It used to log as "transport
+  // failure", which reads as a sick network and sent the next person
+  // debugging it to look at the mini's connection instead of the model.
+  const serverLines: string[] = [];
+  await createRotation(["m"], 2, (l) => serverLines.push(l))("complete", undefined, async () => {
+    throw new Error('{"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}');
+  }).catch(() => undefined);
+  ok("a 500 is logged as a server error, not a transport failure",
+    serverLines.some((l) => l.includes("server error")) && !serverLines.some((l) => l.includes("transport failure")),
+    serverLines.join(" | ").slice(0, 120));
+
+  // THE SDK DOES THE RETRYING, and only for Google's own faults. Its apiCall
+  // opens `if (!retryOptions || …) return`, so a client that passes none —
+  // as this one did — never retries at all whatever the documented defaults
+  // say. A 429 must stay OUT: a spent key wants the next key now, not this
+  // key after a backoff, which is the ring's whole job.
+  ok("the SDK retries Google's own faults", [500, 502, 504].every((c) => SERVER_ERROR_RETRY.httpStatusCodes?.includes(c)),
+    JSON.stringify(SERVER_ERROR_RETRY.httpStatusCodes));
+  ok("the SDK never retries a refusal the ring should rotate away from",
+    [429, 408, 503].every((c) => SERVER_ERROR_RETRY.httpStatusCodes?.includes(c) !== true),
+    JSON.stringify(SERVER_ERROR_RETRY.httpStatusCodes));
+  ok("the SDK is given a retryOptions object at all (without one it never retries)",
+    (SERVER_ERROR_RETRY.attempts ?? 0) > 1, JSON.stringify(SERVER_ERROR_RETRY));
 
   // ── the key ring ──────────────────────────────────────────────────────────
   // Free-tier limits are per PROJECT, so a model refused on one project's key
