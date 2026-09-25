@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- MLX embedder (`clients/mlx-embedder.ts` + `clients/mlx_embed.py`): one runner
+  process per `embed` call (the model loads once, not once per 64 texts), and a
+  batch holds texts of one token length, so nothing is padded —
+  mlx-embeddings 0.1.0 leaks padding into quantized checkpoints
+  (https://github.com/Blaizzy/mlx-embeddings/issues/72). Replies up to 512 MB.
 - Dossier (`presets/dossier-research.ts`): the time budget also stops a
   document mid-open — the download, the retry waits and every pdfinfo,
   pdftotext, pdftoppm and tesseract process. **Breaking:** `openDoc` takes an

@@ -8,6 +8,11 @@
  * L2-normalised `text_embeds`. A missing interpreter, a missing package or
  * a non-zero exit is `EmbeddingUnavailable` — the match does not fall back
  * to trigrams.
+ *
+ * ONE process per `embed` call: loading the model costs ~1.8 s, so a
+ * 3,000-headline index split 64 to a process spent ~85 s of every desk run on
+ * loading alone. The runner batches texts of one token length together, so
+ * one long list pads nothing (see mlx_embed.py).
  */
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
@@ -16,11 +21,6 @@ import { EmbeddingUnavailable, type Embedder } from "../ports";
 
 export const MLX_EMBED_MODEL = "mlx-community/embeddinggemma-300m-4bit";
 export const MLX_EMBED_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "mlx_embed.py");
-
-/** One Python process embeds this many texts. The model card's own example is
- *  a short list; a thousand index headlines in one `generate` would pad every
- *  row to the longest. */
-const BATCH = 64;
 
 export interface MlxEmbedRun {
   python: string;
@@ -49,7 +49,8 @@ function defaultRun(req: MlxEmbedRun): MlxEmbedResult {
     input: req.input,
     encoding: "utf8",
     env: req.env,
-    maxBuffer: 64 * 1024 * 1024,
+    // 3,028 headlines x 768 floats print ~49 MB; 512 MB is V8's string ceiling.
+    maxBuffer: 512 * 1024 * 1024,
     timeout: 10 * 60_000,
     killSignal: "SIGKILL",
   });
@@ -83,7 +84,7 @@ export function createMlxEmbedder(cfg: MlxEmbedderConfig = {}): Embedder {
   const model = cfg.model ?? process.env.MLX_EMBED_MODEL ?? MLX_EMBED_MODEL;
   const run = cfg.runImpl ?? defaultRun;
 
-  async function embedChunk(texts: string[]): Promise<number[][]> {
+  async function embedAll(texts: string[]): Promise<number[][]> {
     const req: MlxEmbedRun = {
       python,
       script,
@@ -117,11 +118,7 @@ export function createMlxEmbedder(cfg: MlxEmbedderConfig = {}): Embedder {
     },
     async embed(texts: string[]): Promise<number[][]> {
       if (texts.length === 0) return [];
-      const out: number[][] = [];
-      for (let i = 0; i < texts.length; i += BATCH) {
-        out.push(...(await embedChunk(texts.slice(i, i + BATCH))));
-      }
-      return out;
+      return embedAll(texts);
     },
   };
 }
