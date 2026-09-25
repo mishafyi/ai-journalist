@@ -12,25 +12,23 @@ import { readRules } from "./rules";
 
 const PRECEDENT_RULES = readRules("precedents");
 
-// Bounds are STRUCTURAL only. They used to be `era.min(2)`, `event.min(3)`,
-// `actors.min(1).max(6)`, `claimedSimilarity.min(10)` — and because zod rejects
-// the whole object when any one element misses, a single candidate naming a
-// two-letter actor or a nine-character similarity threw away all four good
-// candidates. Worse than the tags and dossier versions of this mistake: these
-// call sites are NOT wrapped, so it ended the entire run. 15 runs died that
-// way, the most recent on 2026-09-08. Shape is correctness; length is a
-// preference, applied by `shapeCandidates` after the parse.
+// SHAPE only — no length bounds, not even `.min(1)`. Zod rejects the whole
+// object when any one element misses, and these call sites are NOT wrapped, so
+// one empty actor string in one candidate ended the entire run: 15 runs to
+// 2026-09-08 on the old `event.min(3)`-style bounds, then 17 more by 09-24 on
+// `.min(1)`. Emptiness is a preference, applied by `shapeCandidates` after the
+// parse, which drops the empty string or the candidate and keeps the rest.
 export const ParallelCandidate = z.object({
-  era: z.string().min(1),
-  event: z.string().min(1),
-  actors: z.array(z.string().min(1)).min(1),
-  claimedSimilarity: z.string().min(1),
+  era: z.string(),
+  event: z.string(),
+  actors: z.array(z.string()),
+  claimedSimilarity: z.string(),
 });
 
 /** Drop candidates too empty to research, cap the actor list, keep the rest. */
 export function shapeCandidates(candidates: readonly ParallelCandidate[]): ParallelCandidate[] {
   return candidates
-    .filter((c) => c.event.trim() !== "" && c.claimedSimilarity.trim() !== "")
+    .filter((c) => c.event.trim() !== "" && c.era.trim() !== "" && c.claimedSimilarity.trim() !== "")
     .map((c) => ({ ...c, actors: c.actors.filter((a) => a.trim() !== "").slice(0, 6) }));
 }
 export type ParallelCandidate = z.infer<typeof ParallelCandidate>;

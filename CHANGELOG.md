@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Parallels (`parallels.ts`): `ParallelCandidate` checks shape only; an empty
+  actor, event, era or similarity is dropped by `shapeCandidates` instead of
+  failing the parse, which ended the run.
+
 - News-desk embedder (`clients/mlx-embedder.ts` + `clients/mlx_embed.py`):
   EmbeddingGemma 300M 4-bit through mlx-embeddings (`load` + the model card's
   `model(input_ids, attention_mask)` forward), replacing the Gemini embed ring

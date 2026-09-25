@@ -27,6 +27,33 @@ async function main(): Promise<void> {
   const cands = await proposeParallels({ llm: fakeLlm, storySummary: "Strait blockade raises shipping costs", count: 2 });
   ok("propose: returns the schema'd candidates", cands.length === 2 && cands[0].event === "Suez Crisis", JSON.stringify(cands[0]));
 
+  // An empty string in the model's JSON drops that string or candidate, never the run.
+  // The stub validates like clients/gemini-llm.ts does (schema.parse on the reply);
+  // 17 runs between 2026-09-10 and 09-24 died on exactly these replies.
+  const parsingLlm = {
+    async complete(): Promise<string> { throw new Error("unused"); },
+    async completeStructured<T>(args: { schema: { parse(v: unknown): T } }): Promise<T> {
+      return args.schema.parse({ candidates: [
+        { era: "1956", event: "Suez Crisis", actors: ["Egypt", "", "France"], claimedSimilarity: "canal chokepoint crisis reshaping trade routes" },
+        { era: "", event: "", actors: [""], claimedSimilarity: "" },
+        { era: "1973", event: "OPEC oil embargo", actors: [], claimedSimilarity: "energy supply weaponized against the West" },
+        { era: "", event: "Bretton Woods conference", actors: ["IMF"], claimedSimilarity: "a monetary order rewritten by the victors" },
+      ] });
+    },
+  } as unknown as LlmClient;
+  let emptied: Awaited<ReturnType<typeof proposeParallels>> = [];
+  let threw = "";
+  try {
+    emptied = await proposeParallels({ llm: parsingLlm, storySummary: "Strait blockade raises shipping costs", count: 4 });
+  } catch (err: unknown) {
+    threw = String(err).slice(0, 160);
+  }
+  ok("propose: empty strings in the reply do not throw", threw === "", threw);
+  ok("propose: a candidate with no event or no era is dropped, the others kept",
+    emptied.map((c) => c.event).join("|") === "Suez Crisis|OPEC oil embargo", JSON.stringify(emptied.map((c) => c.event)));
+  ok("propose: an empty actor is dropped from its candidate",
+    JSON.stringify(emptied[0]?.actors) === '["Egypt","France"]', JSON.stringify(emptied[0]?.actors));
+
   // verify: opensearch → summary; token-overlap score.
   const fetchFor = (extract: string, found: boolean): typeof fetch =>
     (async (url: unknown) => {
