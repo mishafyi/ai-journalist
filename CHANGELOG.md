@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Covered-check (`presets/covered.ts`, `rules/covered.md`): the recent columns
+  are listed newest first with each column's age, rule 5 asks for the most
+  recent column on the story, and a FOLLOWUP of a column younger than
+  `followupCooldownMs` (`FOLLOWUP_COOLDOWN_MS`, 24 hours) files as developing
+  through `onCovered` instead of writing a new column. **Breaking:** the knob
+  is required, and `judgeCovered` takes `now`.
 - MLX embedder (`clients/mlx-embedder.ts` + `clients/mlx_embed.py`): one runner
   process per `embed` call (the model loads once, not once per 64 texts), and a
   batch holds texts of one token length, so nothing is padded —

@@ -42,10 +42,10 @@ import { provenanceOf } from "../sources/provenance";
 import type { OutletFeed, OutletItem } from "../sources/newswire";
 import { createDefaultInternals } from "./default";
 import { stripPreambleAndFence } from "./text-defaults";
-import { judgeCovered, recentCovered } from "./covered";
+import { judgeCovered, recentCovered, withinCooldown } from "./covered";
 import { readRules } from "../rules";
 
-export { COVERED_WINDOW_MS } from "./covered";
+export { COVERED_WINDOW_MS, FOLLOWUP_COOLDOWN_MS } from "./covered";
 
 
 /** The section taxonomy — modeled on the NYT / WSJ / Washington Post mastheads,
@@ -789,6 +789,7 @@ export interface NewsDeskKnobs {
   minContentChars: number; // 400
   matchThreshold: number; // 0.62 with embedder, pass 0.35 when trigram-only
   coveredWindowMs: number; // 72h — covered-check only scores the recent ledger
+  followupCooldownMs: number; // 24h — a FOLLOWUP of a column younger than this files as developing
   parallelCount: number; // 4
   parallelMinScore: number; // 0.3
   echoCount: number; // 4 — recent-echo (≤20y) candidates per column; 0 disables the round
@@ -1618,22 +1619,31 @@ export function createNewsDesk(opts: {
       );
       const index = await buildIndex();
       const indexTitles = index.map((i) => i.title);
-      const recentLedger = recentCovered((await opts.coveredTopics?.()) ?? [], Date.now(), knobs.coveredWindowMs);
+      const now = Date.now();
+      const recentLedger = recentCovered((await opts.coveredTopics?.()) ?? [], now, knobs.coveredWindowMs);
 
       for (const story of stories) {
         // Covered-story skip: the model, against the last 72h of titles, not
-        // a cosine threshold. SAME → developing queue; FOLLOWUP / NEW → write.
+        // a cosine threshold. SAME → developing queue; FOLLOWUP → write, unless
+        // the column it follows is inside the cooldown, then developing too;
+        // NEW → write.
         const judgement = await judgeCovered({
           llm: opts.llm,
           headline: story.headline,
           recent: recentLedger,
+          now,
           ...(log === undefined ? {} : { log }),
         });
         if (judgement.kind === "blocked") continue;
-        if (judgement.kind === "same") {
+        if (
+          judgement.kind === "same" ||
+          (judgement.kind === "followup" && withinCooldown(judgement.topic, now, knobs.followupCooldownMs))
+        ) {
           const hitSlug = judgement.topic.slug ?? "";
           log?.(
-            `news-desk: "${story.headline}" already covered ("${judgement.topic.title}") — still trending, filing as developing`,
+            judgement.kind === "same"
+              ? `news-desk: "${story.headline}" already covered ("${judgement.topic.title}") — still trending, filing as developing`
+              : `news-desk: "${story.headline}" follows "${judgement.topic.title}", which ran under ${knobs.followupCooldownMs / 3_600_000}h ago — filing as developing, not a new column`,
           );
           if (opts.onCovered !== undefined && hitSlug !== "") {
             try {

@@ -94,6 +94,7 @@ async function main(): Promise<void> {
       // trigrams, which score lower — pass ~0.35 then.
       matchThreshold: 0.35,
       coveredWindowMs: 72 * 60 * 60 * 1000,
+      followupCooldownMs: 24 * 60 * 60 * 1000,
       parallelCount: 4,
       parallelMinScore: 0.3,
       echoCount: 4,

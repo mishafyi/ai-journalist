@@ -212,6 +212,7 @@ async function orchestrationChecks(): Promise<void> {
     minContentChars: 40,
     matchThreshold: 0.35,
     coveredWindowMs: 72 * 3_600_000,
+    followupCooldownMs: 24 * 3_600_000,
     parallelCount: 1,
     parallelMinScore: 0.1,
     // Hermetic scenarios skip the echo round; the dedicated unit checks in
@@ -398,6 +399,54 @@ async function orchestrationChecks(): Promise<void> {
   ok("recentParallels: no-parallel run publishes no telemetry.parallel field",
     post3.telemetry !== undefined && !("parallel" in post3.telemetry) && String(post3.telemetry.topic) === STORY2,
     JSON.stringify(post3.telemetry));
+
+  // Scenario 3b — the follow-up cooldown. A FOLLOWUP of a column under a day old
+  // files as developing and the desk moves on to the next story; a FOLLOWUP of an
+  // older column is still written. (37 of 61 FOLLOWUP columns, 2026-09-20..24,
+  // followed one under a day old — each another Short on the same story.)
+  const followupLlm = {
+    ...llm,
+    async completeStructured<T>(args: { schemaName?: string; messages?: { content: string }[] }): Promise<T> {
+      if (args.schemaName !== "covered_check") return llm.completeStructured(args as never);
+      const user = (args.messages ?? []).map((m) => m.content).join("\n");
+      return (/^TRENDING: (.+)$/m.exec(user)?.[1] === STORY1 ? { verdict: "followup", index: 1 } : { verdict: "new" }) as unknown as T;
+    },
+  } as unknown as LlmClient;
+  for (const [ageHours, cooled] of [[2, true], [30, false]] as const) {
+    const logsC: string[] = [];
+    const developing: string[] = [];
+    let publishedC: GeneratedPost | null = null;
+    await createNewsDesk({
+      llm: followupLlm,
+      search,
+      feeds: [],
+      roster: [PERSONAS.historian],
+      brand,
+      sink: {
+        async publish(post) {
+          publishedC = post;
+          return { url: `memory://${post.slug}`, status: "DRAFT" as const };
+        },
+      },
+      knobs,
+      coveredTopics: async () => [{ title: STORY1, slug: "story-1", date: new Date(Date.now() - ageHours * 3_600_000).toISOString() }],
+      onCovered: async (dev) => {
+        developing.push(dev.slug);
+      },
+      coverageImpl: async () => [],
+      log: (line) => logsC.push(line),
+      trendingImpl: async () => trending,
+      indexImpl: async () => index,
+      internalsFactory,
+      parallelFetchImpl,
+    }).run();
+    const wroteFollowup = logsC.some((l) => l.includes(`"${STORY1}" follows`) && l.includes("writing as a new column"));
+    ok(`follow-up cooldown: a FOLLOWUP of a ${ageHours}h-old column ${cooled ? "files as developing" : "is written as a new column"}`,
+      cooled ? JSON.stringify(developing) === '["story-1"]' && !wroteFollowup : developing.length === 0 && wroteFollowup,
+      `developing=${JSON.stringify(developing)} | ${logsC.filter((l) => l.includes(STORY1)).join(" | ")}`);
+    ok(`follow-up cooldown: after the ${ageHours}h case the desk still publishes the next story`,
+      String((publishedC as GeneratedPost | null)?.telemetry?.topic) === STORY2, JSON.stringify((publishedC as GeneratedPost | null)?.telemetry));
+  }
 
   // Scenario 4 — the source hunt, Google-News-first (operator, 2026-08-16).
   // The index holds ONE outlet. GN coverage names two more real outlets plus a

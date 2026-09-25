@@ -1,7 +1,7 @@
 /** Covered-check: 72h window and the SAME / FOLLOWUP / NEW judgement.
  *  Run: npx tsx presets/covered.checks.ts */
 import { readRules } from "../rules";
-import { COVERED_WINDOW_MS, judgeCovered, recentCovered } from "./covered";
+import { COVERED_WINDOW_MS, judgeCovered, recentCovered, withinCooldown } from "./covered";
 import type { LlmClient } from "../ports";
 
 let failed = 0;
@@ -71,6 +71,7 @@ const recent = [
     llm,
     headline: "Thick smoke seen near Riyadh airport after air raid alerts",
     recent: [],
+    now: NOW,
   });
   ok("an empty recent list is NEW and does not call the model", hit.kind === "new" && (llm as never as { calls: unknown[] }).calls.length === 0, JSON.stringify(hit));
 }
@@ -81,6 +82,7 @@ const recent = [
     llm,
     headline: "Thick smoke seen near Riyadh airport after air raid alerts",
     recent,
+    now: NOW,
   });
   const calls = (llm as never as { calls: { schemaName: string; system: string; user: string }[] }).calls;
   ok("SAME returns that column", hit.kind === "same" && hit.topic.slug === "riyadh-1", JSON.stringify(hit));
@@ -88,8 +90,8 @@ const recent = [
   ok(
     "the user prompt numbers the recent columns and names the trending headline",
     calls[0]?.user.includes("TRENDING: Thick smoke seen near Riyadh airport after air raid alerts") &&
-      calls[0]?.user.includes("1. Smoke seen near Riyadh airport") &&
-      calls[0]?.user.includes("2. Senate passes sweeping tariff bill"),
+      calls[0]?.user.includes("1. [age unknown] Smoke seen near Riyadh airport") &&
+      calls[0]?.user.includes("2. [age unknown] Senate passes sweeping tariff bill"),
     calls[0]?.user ?? "",
   );
   ok(
@@ -105,6 +107,7 @@ const recent = [
     llm,
     headline: "Riyadh's air defenses fail as Houthis expose Saudi fragility",
     recent,
+    now: NOW,
   });
   ok(
     "FOLLOWUP returns that column and is not SAME",
@@ -115,35 +118,59 @@ const recent = [
 
 {
   const llm = fakeLlm({ verdict: "new" });
-  const hit = await judgeCovered({ llm, headline: "Central bank raises rates", recent });
+  const hit = await judgeCovered({ llm, headline: "Central bank raises rates", recent, now: NOW });
   ok("NEW is NEW", hit.kind === "new", JSON.stringify(hit));
 }
 
 {
   const llm = fakeLlm({ verdict: "same", index: 9 });
-  const hit = await judgeCovered({ llm, headline: "Anything", recent });
+  const hit = await judgeCovered({ llm, headline: "Anything", recent, now: NOW });
   ok("an out-of-range index is treated as NEW", hit.kind === "new", JSON.stringify(hit));
 }
 
 {
   const llm = fakeLlm({ verdict: "same" });
-  const hit = await judgeCovered({ llm, headline: "Anything", recent });
+  const hit = await judgeCovered({ llm, headline: "Anything", recent, now: NOW });
   ok("SAME with no index is treated as NEW", hit.kind === "new", JSON.stringify(hit));
 }
 
 {
   const llm = fakeLlm([new Error("timeout"), { verdict: "new" }]);
-  const hit = await judgeCovered({ llm, headline: "Central bank raises rates", recent });
+  const hit = await judgeCovered({ llm, headline: "Central bank raises rates", recent, now: NOW });
   const n = (llm as never as { calls: unknown[] }).calls.length;
   ok("a thrown first attempt is retried", hit.kind === "new" && n === 2, `kind=${hit.kind} calls=${n}`);
 }
 
 {
   const llm = fakeLlm([new Error("timeout"), new Error("still down")]);
-  const hit = await judgeCovered({ llm, headline: "Central bank raises rates", recent });
+  const hit = await judgeCovered({ llm, headline: "Central bank raises rates", recent, now: NOW });
   const n = (llm as never as { calls: unknown[] }).calls.length;
   ok("two thrown attempts block the story without naming a column", hit.kind === "blocked" && n === 2, `kind=${hit.kind} calls=${n}`);
 }
+
+// Newest first, each with its age: asked for "the closest", the model matched a
+// thread's FIRST column even with a newer one in the list — 14 of the 24
+// FOLLOWUPs a cooldown on the matched column's age would have let through
+// (2026-09-20..24).
+const older = { title: "Court filing defends the press ban", slug: "older", date: new Date(NOW - 30 * HOUR).toISOString() };
+const newer = { title: "Judge blocks the press ban", slug: "newer", date: new Date(NOW - 2 * HOUR).toISOString() };
+{
+  const llm = fakeLlm({ verdict: "followup", index: 1 });
+  const hit = await judgeCovered({ llm, headline: "Reporters return to the White House", recent: [older, undated, newer], now: NOW });
+  const user = (llm as never as { calls: { user: string }[] }).calls[0]?.user ?? "";
+  ok(
+    "the list runs newest first with each column's age; an undated one goes last",
+    user.includes("1. [2h ago] Judge blocks the press ban\n2. [30h ago] Court filing defends the press ban\n3. [age unknown] Undated column"),
+    user,
+  );
+  ok("the index counts in the printed order", hit.kind === "followup" && hit.topic.slug === "newer", JSON.stringify(hit));
+}
+
+// A FOLLOWUP of a column younger than the cooldown files as developing.
+ok("withinCooldown: a column 23h59m old is inside 24h", withinCooldown({ title: "t", date: new Date(NOW - 24 * HOUR + 60_000).toISOString() }, NOW, 24 * HOUR));
+ok("withinCooldown: a column exactly 24h old is outside it", !withinCooldown({ title: "t", date: new Date(NOW - 24 * HOUR).toISOString() }, NOW, 24 * HOUR));
+ok("withinCooldown: an undated column is never inside it", !withinCooldown(undated, NOW, 24 * HOUR));
+ok("withinCooldown: an unparseable date is never inside it", !withinCooldown(garbage, NOW, 24 * HOUR));
 
 if (failed > 0) {
   process.exitCode = 1;
