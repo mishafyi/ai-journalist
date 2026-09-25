@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Dossier (`presets/dossier-research.ts`): the time budget also stops a
+  document mid-open — the download, the retry waits and every pdfinfo,
+  pdftotext, pdftoppm and tesseract process. **Breaking:** `openDoc` takes an
+  `AbortSignal`.
 - Parallels (`parallels.ts`): `ParallelCandidate` checks shape only; an empty
   actor, event, era or similarity is dropped by `shapeCandidates` instead of
   failing the parse, which ended the run.

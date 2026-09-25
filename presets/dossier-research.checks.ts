@@ -1,6 +1,10 @@
 /** Dossier research, the pure parts: the catalogue parsers, the call checker,
  *  and split-never-cut. Run: npx tsx presets/dossier-research.checks.ts */
-import { budgetSpent, groupsUnder, itemCount, normQuote, parseEndpoints, parseGuide, partBudget, refListed, splitText, unsupportedInDoc, validCall } from "./dossier-research";
+import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import type { DatagodClient } from "../clients/datagod";
+import { budgetSpent, groupsUnder, itemCount, normQuote, openDoc, parseEndpoints, parseGuide, partBudget, refListed, splitText, unsupportedInDoc, validCall } from "./dossier-research";
 
 let failed = 0;
 const ok = (cond: boolean, msg: string, detail = ""): void => {
@@ -99,6 +103,57 @@ ok(budgetSpent(DEADLINE, DEADLINE - 1) === "", "budgetSpent: a millisecond left 
 ok(budgetSpent(DEADLINE, DEADLINE) !== "", "budgetSpent: the deadline itself is spent");
 ok(budgetSpent(DEADLINE, DEADLINE + 60_000) !== "", "budgetSpent: past it stays spent");
 ok(/budget is spent/.test(budgetSpent(DEADLINE, DEADLINE)), "budgetSpent: says why, for the log", budgetSpent(DEADLINE, DEADLINE));
+
+// The budget reaches INSIDE a document. Checked only between documents, one
+// scanned NARA volume (246 MB, every page rendered, then OCR'd) held the
+// dossier past the desk's 90-minute cap, twice on 2026-09-24.
+/** A PDF of `pages` blank pages: no text layer, so openDoc takes the OCR path. */
+function blankPdf(pages: number): Buffer {
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${Array.from({ length: pages }, (_, i) => `${i + 3} 0 R`).join(" ")}] /Count ${pages} >>`,
+    ...Array.from({ length: pages }, () => "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>"),
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = objs.map((o, i) => {
+    const at = pdf.length;
+    pdf += `${i + 1} 0 obj\n${o}\nendobj\n`;
+    return at;
+  });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}`;
+  pdf += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf, "latin1");
+}
+if (spawnSync("pdftoppm", ["-v"]).error !== undefined) {
+  console.log("SKIP openDoc budget: poppler is not installed");
+} else {
+  const scan = blankPdf(300);
+  // /scan.pdf answers at once; /stalled.pdf never answers.
+  const server = createServer((req, res) => {
+    if (req.url === "/scan.pdf") res.end(scan);
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const port = (server.address() as AddressInfo).port;
+  const nara = (url: string): DatagodClient => ({
+    get: async () => ({ body: { hits: { hits: [{ _source: { record: { title: "Scan", naId: 1, digitalObjects: [{ objectUrl: url }] } } }] } } }),
+    getText: async () => "",
+  });
+  for (const [what, path] of [["a scanned PDF's render and OCR", "/scan.pdf"], ["a download that never answers", "/stalled.pdf"]] as const) {
+    const started = Date.now();
+    const outcome = await Promise.race([
+      openDoc({ source: "NARA", ref: "1", title: "Scan", why: "" }, nara(`http://127.0.0.1:${port}${path}`), AbortSignal.timeout(1_500)).then(
+        () => "opened",
+        (err: unknown) => `stopped: ${String(err).slice(0, 90)}`,
+      ),
+      new Promise<string>((done) => setTimeout(() => done("still running"), 20_000).unref()),
+    ]);
+    const secs = (Date.now() - started) / 1000;
+    ok(outcome.startsWith("stopped") && secs < 10, `openDoc: a 1.5 s budget stops ${what}`, `${outcome} after ${secs.toFixed(1)}s`);
+  }
+  server.closeAllConnections();
+  server.close();
+}
 
 if (failed > 0) {
   console.log(`dossier-research checks: ${failed} FAILED`);

@@ -24,6 +24,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import * as cheerio from "cheerio";
 import { z } from "zod";
@@ -422,22 +423,23 @@ function htmlText(html: string): string {
 /** A document fetched from its publisher. A rate limit or a gateway error is
  *  waited out — the server's Retry-After when it gives one (at most a minute),
  *  else 5 s, then 10 s — before the third failure is thrown (the Federal
- *  Register answered 429 on the first live run, 2026-09-19). */
-async function fetchDoc(url: string, timeoutMs: number): Promise<Response> {
+ *  Register answered 429 on the first live run, 2026-09-19). `budget` ends the
+ *  request, the body and the wait alike. */
+async function fetchDoc(url: string, timeoutMs: number, budget: AbortSignal): Promise<Response> {
   let last = "";
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const res = await fetch(url, { headers: { "User-Agent": UA }, redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetch(url, { headers: { "User-Agent": UA }, redirect: "follow", signal: AbortSignal.any([budget, AbortSignal.timeout(timeoutMs)]) });
     if (res.ok) return res;
     last = `${url}: HTTP ${res.status}`;
     if (![408, 425, 429, 500, 502, 503, 504].includes(res.status) || attempt === 3) break;
     const after = Number(res.headers.get("retry-after") ?? "");
-    await new Promise((r) => setTimeout(r, Number.isFinite(after) && after > 0 ? Math.min(after, 60) * 1000 : attempt * 5000));
+    await sleep(Number.isFinite(after) && after > 0 ? Math.min(after, 60) * 1000 : attempt * 5000, undefined, { signal: budget });
   }
   throw new Error(last);
 }
 
-async function webText(url: string): Promise<string> {
-  const res = await fetchDoc(url, 90_000);
+async function webText(url: string, budget: AbortSignal): Promise<string> {
+  const res = await fetchDoc(url, 90_000, budget);
   const type = res.headers.get("content-type") ?? "";
   const body = await res.text();
   // By what the server says it sent: an HTML fragment has no <html> tag to sniff.
@@ -448,24 +450,25 @@ async function webText(url: string): Promise<string> {
 
 /** A PDF's whole text. A text layer carries hundreds of characters a page; a
  *  scan carries none, and then EVERY page is read by OCR (Tesseract at 200 dpi,
- *  four pages at a time). */
-async function pdfText(url: string): Promise<{ text: string; label: string }> {
-  const res = await fetchDoc(url, 180_000);
+ *  four pages at a time). `budget` kills whichever tool is running when it
+ *  ends: rendering a 246 MB scan alone outlasted the whole dossier. */
+async function pdfText(url: string, budget: AbortSignal): Promise<{ text: string; label: string }> {
+  const res = await fetchDoc(url, 180_000, budget);
   const dir = await mkdtemp(join(tmpdir(), "dossier-pdf-"));
   try {
     const file = join(dir, "doc.pdf");
     await writeFile(file, Buffer.from(await res.arrayBuffer()));
-    const info = (await run("pdfinfo", [file], { encoding: "utf8" })).stdout;
+    const info = (await run("pdfinfo", [file], { encoding: "utf8", signal: budget })).stdout;
     const pages = Number((info.match(/^Pages:\s+(\d+)/m) ?? [])[1] ?? 0);
-    const text = (await run("pdftotext", ["-enc", "UTF-8", file, "-"], { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 })).stdout;
+    const text = (await run("pdftotext", ["-enc", "UTF-8", file, "-"], { encoding: "utf8", maxBuffer: 512 * 1024 * 1024, signal: budget })).stdout;
     if (text.replace(/\s/g, "").length >= pages * 100) return { text, label: `PDF, ${pages} pages` };
-    await run("pdftoppm", ["-r", "200", "-gray", "-png", file, join(dir, "p")], { maxBuffer: 64 * 1024 * 1024 });
+    await run("pdftoppm", ["-r", "200", "-gray", "-png", file, join(dir, "p")], { maxBuffer: 64 * 1024 * 1024, signal: budget });
     const images = (await readdir(dir)).filter((f) => f.endsWith(".png")).sort();
     const pageTexts: string[] = [];
     for (let i = 0; i < images.length; i += OCR_CONCURRENCY) {
       const batch = images.slice(i, i + OCR_CONCURRENCY);
       const read = await Promise.all(
-        batch.map(async (img) => (await run("tesseract", [join(dir, img), "stdout", "-l", "eng"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })).stdout),
+        batch.map(async (img) => (await run("tesseract", [join(dir, img), "stdout", "-l", "eng"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, signal: budget })).stdout),
       );
       pageTexts.push(...read);
     }
@@ -490,8 +493,9 @@ export interface OpenedDoc {
   text: string;
 }
 
-/** One picked document, opened as far as its source allows. */
-export async function openDoc(pick: Pick, datagod: DatagodClient): Promise<OpenedDoc> {
+/** One picked document, opened as far as its source allows, until `budget`
+ *  ends — then it rejects and whatever it was running is stopped. */
+export async function openDoc(pick: Pick, datagod: DatagodClient, budget: AbortSignal): Promise<OpenedDoc> {
   const ref = String(pick.ref ?? "").trim();
   const dg = async (path: string): Promise<Record<string, unknown>> => (await datagod.get(path, {})) as Record<string, unknown>;
   const s = (v: unknown): string => (typeof v === "string" ? v : v === undefined || v === null ? "" : String(v));
@@ -508,7 +512,7 @@ export async function openDoc(pick: Pick, datagod: DatagodClient): Promise<Opene
       let president = "";
       if (s(d.type) === "Presidential Document") {
         try {
-          const res = await fetchDoc(`https://www.federalregister.gov/api/v1/documents/${encodeURIComponent(ref)}.json?fields[]=president`, 30_000);
+          const res = await fetchDoc(`https://www.federalregister.gov/api/v1/documents/${encodeURIComponent(ref)}.json?fields[]=president`, 30_000, budget);
           president = s(((await res.json()) as { president?: { name?: string } }).president?.name);
         } catch (err: unknown) {
           // Not fatal to the document — and said in its header, where the notes and the trace read it.
@@ -529,13 +533,13 @@ export async function openDoc(pick: Pick, datagod: DatagodClient): Promise<Opene
       for (const [field, kind] of [["body_html_url", "full text (HTML)"], ["full_text_xml_url", "full text (XML)"], ["raw_text_url", "full text"]] as const) {
         if (s(d[field]) === "") continue;
         try {
-          return { title: s(d.title), date: s(d.publication_date), url: s(d.html_url), kind, text: `${meta}\n\n${await webText(s(d[field]))}` };
+          return { title: s(d.title), date: s(d.publication_date), url: s(d.html_url), kind, text: `${meta}\n\n${await webText(s(d[field]), budget)}` };
         } catch (err: unknown) {
           failures.push(String(err));
         }
       }
       if (s(d.pdf_url) !== "") {
-        const pdf = await pdfText(s(d.pdf_url));
+        const pdf = await pdfText(s(d.pdf_url), budget);
         return { title: s(d.title), date: s(d.publication_date), url: s(d.html_url), kind: pdf.label, text: `${meta}\n\n${pdf.text}` };
       }
       throw new Error(`Federal Register ${ref}: no full text served — ${failures.join("; ")}`);
@@ -543,7 +547,7 @@ export async function openDoc(pick: Pick, datagod: DatagodClient): Promise<Opene
     case "NSArchive": {
       const d = await dg(`/nsarchive/document/${ref}`);
       if (s(d.pdf_url) !== "") {
-        const pdf = await pdfText(s(d.pdf_url));
+        const pdf = await pdfText(s(d.pdf_url), budget);
         return { title: s(d.title), date: s(d.date ?? d.date_text), url: s(d.url), kind: pdf.label, text: `${s(d.description)}\n\n${pdf.text}` };
       }
       return { title: s(d.title), date: s(d.date), url: s(d.url), kind: "page text (no PDF)", text: `${s(d.description)}\n\n${s(d.body)}` };
@@ -578,7 +582,7 @@ export async function openDoc(pick: Pick, datagod: DatagodClient): Promise<Opene
       const pdfs = all.filter((o) => /\.pdf$/i.test(o.objectUrl ?? ""));
       if (pdfs.length === 0) return { title: s(rec.title), date: "", url, kind: "catalogue record (no PDF)", text: JSON.stringify(rec, null, 1) };
       const read: { text: string; label: string }[] = [];
-      for (const o of pdfs) read.push(await pdfText(s(o.objectUrl)));
+      for (const o of pdfs) read.push(await pdfText(s(o.objectUrl), budget));
       return { title: s(rec.title), date: "", url, kind: `${read.map((r) => r.label).join(" + ")} (${pdfs.length} of ${all.length} files are PDFs)`, text: read.map((r) => r.text).join("\n\n") };
     }
     case "Wilson Center": {
@@ -595,7 +599,7 @@ export async function openDoc(pick: Pick, datagod: DatagodClient): Promise<Opene
       const d = await dg(`/cia/document/${ref}`);
       const pdfUrl = s(d.pdf_archived_url) !== "" ? s(d.pdf_archived_url) : s(d.pdf_url);
       if (pdfUrl !== "") {
-        const pdf = await pdfText(pdfUrl);
+        const pdf = await pdfText(pdfUrl, budget);
         return { title: s(d.title), date: "", url: s(d.url), kind: pdf.label, text: pdf.text };
       }
       return { title: s(d.title), date: "", url: s(d.url), kind: "page text (no PDF)", text: s(d.body) };
@@ -604,7 +608,7 @@ export async function openDoc(pick: Pick, datagod: DatagodClient): Promise<Opene
       const d = await dg(`/fas/page/${ref}`);
       const pdfs = (d.pdfs ?? []) as { url?: string }[];
       if (s(d.text).length < 1500 && pdfs.length > 0) {
-        const pdf = await pdfText(s(pdfs[0].url));
+        const pdf = await pdfText(s(pdfs[0].url), budget);
         return { title: s(d.title), date: "", url: s(pdfs[0].url), kind: pdf.label, text: pdf.text };
       }
       return { title: s(d.title), date: "", url: s(d.url), kind: "page text", text: s(d.text) };
@@ -806,6 +810,8 @@ export async function researchOne(args: {
     return true;
   });
   const docs: { id: string; pick: Pick; doc: OpenedDoc }[] = [];
+  // The deadline also stops a document mid-open: a download, a render, an OCR pass.
+  const openBudget = AbortSignal.timeout(Math.max(0, args.deadline - Date.now()));
   for (const pick of unique.slice(0, MAX_DOCS)) {
     // Opening is where the time goes — a catalogue record can be hundreds of
     // thousands of characters, and a scan is OCR'd page by page.
@@ -822,7 +828,7 @@ export async function researchOne(args: {
     }
     const id = args.nextDocId();
     try {
-      const doc = await openDoc(pick, datagod);
+      const doc = await openDoc(pick, datagod, openBudget);
       const kept = { ...doc, text: doc.text.trim() };
       if (kept.text === "") throw new Error("the document carried no text");
       args.opened.set(key, { id, doc: kept });
