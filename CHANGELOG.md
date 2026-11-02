@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Firecrawl client (`clients/firecrawl-search.ts`): pages are requested with
+  `onlyMainContent` and ARIA-role `excludeTags`, and a new `proxy` option takes
+  `"basic"` for a self-hosted Firecrawl, which has no enhanced proxies for the
+  default `auto`. A page answering HTTP 400 or above throws `ScrapeRefusedError`
+  from `scrape()` and has no `content` in `search()`, so a block page never passes
+  as an article. Scraped text reaches the models without link addresses or images
+  (`withoutLinks` in `text.ts`), and the content floor measures that text; the
+  client still returns links, because the primary-source chase reads them.
 - Covered-check (`presets/covered.ts`, `rules/covered.md`): the recent columns
   are listed newest first with each column's age, rule 5 asks for the most
   recent column on the story, and a FOLLOWUP of a column younger than

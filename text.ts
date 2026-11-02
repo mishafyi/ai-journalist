@@ -59,6 +59,30 @@ export interface RelativeLink {
   position: { start: number; end: number };
 }
 
+/** The Markdown with each link replaced by its text and each image dropped, cut along the
+ *  parser's spans so escaped brackets and code stay text. For text going to a model. */
+export function withoutLinks(md: string): string {
+  const cuts: [number, number][] = [];
+  visit(parseMd(md), (node) => {
+    if (node.type !== "link" && node.type !== "image") return;
+    const start = node.position?.start.offset;
+    const end = node.position?.end.offset;
+    // GFM adds literal URLs and emails as links with no position: already plain text.
+    if (start === undefined || end === undefined) return;
+    const first = node.type === "link" ? node.children.at(0)?.position?.start.offset : undefined;
+    const last = node.type === "link" ? node.children.at(-1)?.position?.end.offset : undefined;
+    if (first === undefined || last === undefined) cuts.push([start, end]);
+    else cuts.push([start, first], [last, end]);
+  });
+  let out = "";
+  let at = 0;
+  for (const [from, to] of cuts.sort((a, b) => a[0] - b[0])) {
+    out += md.slice(at, from);
+    at = to;
+  }
+  return out + md.slice(at);
+}
+
 /**
  * Every relative link (`[text](/path…)`) in document order, via mdast `link`
  * nodes. Replaces RELATIVE_LINK_RE scanning. Deliberate deltas vs the regex,

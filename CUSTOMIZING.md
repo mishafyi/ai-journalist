@@ -122,6 +122,7 @@ import { createFirecrawlSearch } from "ai-journalist/clients/firecrawl-search";
 const fc = createFirecrawlSearch({
   apiKey: process.env.FIRECRAWL_API_KEY,
   apiUrl: process.env.FIRECRAWL_API_URL,
+  proxy: "basic", // self-hosted only: it has no enhanced proxies for the default "auto"
 });
 
 // SearXNG (a separate self-hosted metasearch, NOT a Firecrawl backend):

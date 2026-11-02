@@ -9,6 +9,7 @@ import { readRules } from "./rules";
 import pLimit from "p-limit";
 import type { LlmClient, SearchClient, SearchResult } from "./ports";
 import { DEFAULT_BLOCKED_HOSTS, isBlockedHost } from "./news";
+import { withoutLinks } from "./text";
 
 const DOUBLE_QUOTES = /[„“”«»]/g;
 const SINGLE_QUOTES = /[‚‘’‹›]/g;
@@ -217,10 +218,12 @@ export function createResearchStack(opts: ResearchStackOpts): ResearchStack {
   };
   /** Per-document ceiling — chased, ranked, and thin-retry bodies all get the
    *  same cap (zerog R7C3: an 878k-char PDF ballooned every downstream prompt). */
-  const capBody = (text: string, kind: "document" | "chased document"): string =>
-    text.length > knobs.primaryChaseMaxChars
+  const capBody = (body: string, kind: "document" | "chased document"): string => {
+    const text = withoutLinks(body);
+    return text.length > knobs.primaryChaseMaxChars
       ? `${text.slice(0, knobs.primaryChaseMaxChars)}\n\n[... truncated: ${kind} continues]`
       : text;
+  };
 
   /** Memoized, gated, 2-attempt scrape — the ONE path every scrape (primary
    *  chase, thin retry, facade) routes through. Serialized through the same
@@ -658,11 +661,12 @@ export function createExtractiveResearch(opts: {
           continue;
         }
       }
-      if (isTeaserContent(content, minContentChars)) {
+      const text = withoutLinks(content);
+      if (isTeaserContent(text, minContentChars)) {
         log?.(
           `        deep-scrape THIN ${hit.url} (${
-            content.length < minContentChars
-              ? `${content.length} chars < ${minContentChars}`
+            text.length < minContentChars
+              ? `${text.length} chars < ${minContentChars}`
               : "teaser/paywall markers"
           }) — using snippet`,
         );
@@ -672,7 +676,7 @@ export function createExtractiveResearch(opts: {
       const parts = await extractEvidence({
         llm,
         topic,
-        page: { url: hit.url, title: hit.title, content },
+        page: { url: hit.url, title: hit.title, content: text },
         chunkChars,
         maxChunksPerPage,
         log,

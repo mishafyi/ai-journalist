@@ -6,6 +6,7 @@
  */
 import { mentionsName, namesEvent, NO_PARALLEL_PHRASE } from "../gates";
 import { createHeadlineMatcher } from "../matching";
+import { withoutLinks } from "../text";
 import { pickLeadImage } from "../sources/lead-image";
 import type { ImageSearchConfig } from "../sources/lead-image";
 import type { LeadImage } from "../sources/lead-image";
@@ -1888,7 +1889,7 @@ export function createNewsDesk(opts: {
         for (const { item } of resolved) {
           let content: string;
           try {
-            content = await scrape(item.url);
+            content = withoutLinks(await scrape(item.url));
           } catch (err: unknown) {
             log?.(`news-desk: dropped ${item.outlet} (${item.url}) — scrape failed: ${String(err)}`);
             recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\nDROPPED — scrape failed: ${String(err)}`);

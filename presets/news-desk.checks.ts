@@ -58,7 +58,7 @@ async function orchestrationChecks(): Promise<void> {
     `${outlet} full article body. The central bank raised its policy rate by 50 basis points to a twenty-year high. "We will stay the course," the chair said. Markets fell 2 percent on the announcement. `.repeat(2);
   const PAGES: Record<string, string> = {
     "https://wire.example/rates": REAL("Wire"),
-    "https://beacon.example/rates": REAL("Beacon"),
+    "https://beacon.example/rates": `${REAL("Beacon")} See [the filing](https://beacon.example/filing) for details.`,
     "https://teaser.example/rates": "Subscribe to continue reading. Create a free account to unlock this article and get unlimited access.",
     "https://www.bloomberg.com/rates": REAL("Blocked Times"),
     "https://hunt-a.example/story": REAL("Hunt A"),
@@ -327,6 +327,11 @@ async function orchestrationChecks(): Promise<void> {
   ok("scrape artifacts carry the scraped text itself, not just a length marker",
     artifacts.some((a) => a.label === "scrape: Wire" && a.content.includes("full article body")),
     artifacts.filter((a) => a.label.startsWith("scrape: ")).map((a) => a.content.slice(0, 60)).join(" | "));
+  ok("a scraped page reaches the desk with its link text, not its link targets",
+    artifacts.some((a) => a.label === "scrape: Beacon" && a.content.includes("See the filing for details.")) &&
+      prompts.some((p) => p.includes("See the filing for details.")) &&
+      !prompts.some((p) => p.includes("(https://beacon.example/filing)")),
+    artifacts.filter((a) => a.label === "scrape: Beacon").map((a) => a.content.slice(-120)).join(" | "));
   ok("default path verified the parallel through the encyclopedia seam",
     parallelFetches.some((u) => u.includes("action=opensearch")) && parallelFetches.some((u) => u.includes("/page/summary/")),
     parallelFetches.join(","));

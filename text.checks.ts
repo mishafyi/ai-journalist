@@ -23,6 +23,7 @@ import {
   extractFigureSpans,
   figureGrounded,
   findUngroundedFigureRaws,
+  withoutLinks,
 } from "./text";
 
 let failures = 0;
@@ -768,6 +769,55 @@ eq(
   "cosineSimilarity: opposite vectors → -1",
   cosineSimilarity([3, 4], [-3, -4]),
   -1,
+);
+
+// ── withoutLinks ──────────────────────────────────────────────────────────────
+eq(
+  "withoutLinks: each link becomes its text, each image goes, the rest stays",
+  withoutLinks(
+    [
+      "# Triomics nabs $22M",
+      "",
+      "[Triomics](https://triomics.com/), a startup, raised a [$15 million Series A](https://tc.com/a) in 2024.",
+      "",
+      "![Founders](https://tc.com/founders.jpg)",
+      "",
+      "- [Venture](https://tc.com/venture)",
+      "",
+      "\u201cWe have seen medical records \\[with\\] thousands of pages,\u201d Khan said.",
+    ].join("\n"),
+  ),
+  [
+    "# Triomics nabs $22M",
+    "",
+    "Triomics, a startup, raised a $15 million Series A in 2024.",
+    "",
+    "",
+    "",
+    "- Venture",
+    "",
+    "\u201cWe have seen medical records \\[with\\] thousands of pages,\u201d Khan said.",
+  ].join("\n"),
+);
+eq(
+  "withoutLinks: a bare URL stays as the text it is",
+  withoutLinks("Read it at https://example.com/a today."),
+  "Read it at https://example.com/a today.",
+);
+eq(
+  "withoutLinks: an image inside a link goes, and a dollar sign in link text stays as written",
+  withoutLinks("[![Logo](https://x.com/l.png)](https://x.com) and [$& more](https://x.com/m)"),
+  " and $& more",
+);
+eq(
+  "withoutLinks: a link inside code is not a link",
+  withoutLinks("Run `[a](https://x.com)` first."),
+  "Run `[a](https://x.com)` first.",
+);
+eq(
+  "withoutLinks: an email address or www address on a page stays as text",
+  withoutLinks("Write to reporter@example.com or see www.example.com today."),
+  "Write to reporter@example.com or see www.example.com today.",
 );
 
 // ── summary ──────────────────────────────────────────────────────────────────

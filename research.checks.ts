@@ -162,6 +162,23 @@ const instant = { sleep: async (): Promise<void> => {}, now: (): number => 0 };
     String(sources.length));
 }
 {
+  // Links leave what the models read, never what the chase reads.
+  const results: SearchResult[] = [
+    { title: "Blog", url: "https://some-blog.io/p", snippet: "s",
+      content: `Retold from [the wire report](https://apnews.com/orig/story) with commentary ${"x".repeat(500)}` },
+  ];
+  const sc = {
+    async search(): Promise<SearchResult[]> { return results; },
+    async scrape(url: string): Promise<string> { return `PRIMARY BODY [a footnote](https://example.org/note) ${"y".repeat(600)} (${url})`; },
+  } as SearchClient;
+  const { block } = await createResearchStack({ search: sc, ...instant }).gatherResearch("link topic");
+  ok("primary chase still finds a link in the scraped text",
+    block.includes("PRIMARY SOURCE (chased from some-blog.io)"), block.slice(0, 200));
+  ok("the research block keeps link text and drops link targets",
+    block.includes("Retold from the wire report with") && block.includes("PRIMARY BODY a footnote") && !block.includes("]("),
+    block.slice(0, 300));
+}
+{
   // skip-hosted chase candidate lands in the dropped pool instead
   const sc2 = {
     async search(): Promise<SearchResult[]> {
@@ -345,6 +362,30 @@ function fakeLlm(
   ok("sub-minContentChars scrape degrades to the snippet line (no LLM calls)",
     block === "- Thin: thin snippet" && llm.prompts.length === 0 && sources.length === 1,
     `${block} | prompts=${llm.prompts.length}`);
+}
+{
+  // The floor measures the page's own words; the model reads them without link targets.
+  const linkFarm = Array.from({ length: 40 }, (_, i) => `[a](https://ft.com/very/long/path/${i})`).join(" ");
+  const sc: SearchClient = {
+    async search(): Promise<SearchResult[]> {
+      return [
+        { title: "Farm", url: "https://ft.com/farm", snippet: "farm snippet" },
+        { title: "Real", url: "https://ft.com/real", snippet: "real snippet" },
+      ];
+    },
+    async scrape(url: string): Promise<string> {
+      return url.endsWith("farm") ? linkFarm : `Real [report](https://ft.com/r) ${"z".repeat(500)}`;
+    },
+  };
+  const llm = fakeLlm(() => "- fact: 42");
+  const research = createExtractiveResearch({ llm, search: sc, pagesPerTopic: 3,
+    chunkChars: 24_000, maxChunksPerPage: 4, minContentChars: 400 });
+  const { block } = await research("link floor topic");
+  ok("a page that is only links falls below the content floor",
+    block.includes("- Farm: farm snippet"), block);
+  ok("the extraction prompt carries link text, not link targets",
+    llm.prompts.length === 1 && llm.prompts[0].includes("Real report") && !llm.prompts[0].includes("]("),
+    JSON.stringify(llm.prompts.map((p) => p.slice(0, 120))));
 }
 {
   // reuse rule: hit.content ?? scrape — pre-scraped hits never re-hit the backend

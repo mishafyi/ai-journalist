@@ -10,7 +10,7 @@
  * Response mapping (the SDK's field names differ from the port's):
  *   SDK `SearchResultWeb.description` → port `SearchResult.snippet`
  *   SDK `Document.markdown`          → port `SearchResult.content`
- *   SDK `Document.markdown`          → `scrape()` return
+ *   SDK `Document.markdown`          → `scrape()` return, links intact
  *
  * `SearchData.web` entries are `SearchResultWeb | Document`: a plain SERP hit
  * carries `description`; a scraped hit (when `scrapeOptions` is set) is a
@@ -36,6 +36,26 @@ interface FirecrawlWebHit {
   title?: string;
   description?: string;
   markdown?: string;
+  metadata?: { statusCode?: number };
+}
+
+type ScrapeOptions = NonNullable<Parameters<Firecrawl["scrape"]>[1]>;
+
+/** A page that answered HTTP 400 or above: Firecrawl got the publisher's block or
+ *  error page, whose text must not pass as the article. */
+export class ScrapeRefusedError extends Error {
+  readonly url: string;
+  readonly status: number;
+  constructor(url: string, status: number) {
+    super(`HTTP ${status} for ${url}`);
+    this.name = "ScrapeRefusedError";
+    this.url = url;
+    this.status = status;
+  }
+}
+
+function isRefusal(status: number | undefined): status is number {
+  return status !== undefined && status >= 400;
 }
 
 /**
@@ -83,6 +103,9 @@ export function createFirecrawlSearch(opts: {
    *  to the publisher, not to the search backend, and is not rate-limited the
    *  same way. See `createPacer` for why this is needed at all. */
   minIntervalMs?: number;
+  /** Omit for Firecrawl's own default, `auto`. A self-hosted Firecrawl has no enhanced
+   *  proxies, so `auto` fails a blocked page as "Engines tried: [pdf, document]": pass "basic". */
+  proxy?: ScrapeOptions["proxy"];
   /** When set, every search and scrape is recorded into its pipeline STEP's
    *  file — query, merged options and the complete results (a scrape keeps
    *  its full page text). Share one tracer with the LLM client so a step's
@@ -103,6 +126,12 @@ export function createFirecrawlSearch(opts: {
   });
   const searchDefaults = opts.searchDefaults;
   const pace = createPacer(opts.minIntervalMs ?? 0);
+  const pageOptions: ScrapeOptions = {
+    formats: ["markdown"],
+    onlyMainContent: true,
+    excludeTags: ["[role=navigation]", "[role=banner]", "[role=contentinfo]"],
+    ...(opts.proxy === undefined ? {} : { proxy: opts.proxy }),
+  };
 
   return {
     async search(
@@ -121,9 +150,7 @@ export function createFirecrawlSearch(opts: {
           limit: merged.limit,
           sources: merged.sources ?? ["web"],
           tbs: merged.tbs,
-          scrapeOptions: merged.scrape
-            ? { formats: ["markdown"], onlyMainContent: true }
-            : undefined,
+          scrapeOptions: merged.scrape ? pageOptions : undefined,
         });
       } catch (err: unknown) {
         opts.trace?.search({ query, op: "search", options: merged, error: describeError(err) });
@@ -134,7 +161,7 @@ export function createFirecrawlSearch(opts: {
         title: r.title ?? "",
         url: r.url,
         snippet: r.description ?? "",
-        content: r.markdown,
+        content: isRefusal(r.metadata?.statusCode) ? undefined : r.markdown,
       }));
       opts.trace?.search({
         query,
@@ -151,7 +178,9 @@ export function createFirecrawlSearch(opts: {
     },
     async scrape(url): Promise<string> {
       try {
-        const doc = await fc.scrape(url, { formats: ["markdown"] });
+        const doc = await fc.scrape(url, pageOptions);
+        const status = doc.metadata?.statusCode;
+        if (isRefusal(status)) throw new ScrapeRefusedError(url, status);
         const markdown = doc.markdown ?? "";
         opts.trace?.search({ query: url, op: "scrape", content: markdown });
         return markdown;
