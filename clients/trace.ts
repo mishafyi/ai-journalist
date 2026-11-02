@@ -93,6 +93,8 @@ function stepForLlm(entry: LlmTrace): string {
       return "17-headline-translation";
     case "covered_check":
       return "02-covered-check";
+    case "page_clean":
+      return "04a-page-clean";
     case "voice_pick":
       return "04b-voice-pick";
     case "data_play_pick":

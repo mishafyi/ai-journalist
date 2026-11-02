@@ -7,6 +7,8 @@
 import { mentionsName, namesEvent, NO_PARALLEL_PHRASE } from "../gates";
 import { createHeadlineMatcher } from "../matching";
 import { withoutLinks } from "../text";
+import { cleanPage } from "./clean";
+import type { CleanedPage } from "./clean";
 import { pickLeadImage } from "../sources/lead-image";
 import type { ImageSearchConfig } from "../sources/lead-image";
 import type { LeadImage } from "../sources/lead-image";
@@ -1895,17 +1897,36 @@ export function createNewsDesk(opts: {
             recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\nDROPPED — scrape failed: ${String(err)}`);
             continue;
           }
-          if (isTeaserContent(content, knobs.minContentChars)) {
+          const underFloor = (text: string): boolean => {
+            if (!isTeaserContent(text, knobs.minContentChars)) return false;
             log?.(
-              `news-desk: dropped ${item.outlet} (${item.url}) — content-quality floor (teaser/paywall marker or under ${knobs.minContentChars} chars; got ${content.length})`,
+              `news-desk: dropped ${item.outlet} (${item.url}) — content-quality floor (teaser/paywall marker or under ${knobs.minContentChars} chars; got ${text.length})`,
             );
-            recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\nDROPPED — content-quality floor (${content.length} chars)`);
+            recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\nDROPPED — content-quality floor (${text.length} chars)`);
+            return true;
+          };
+          if (underFloor(content)) continue;
+          let cleaned: CleanedPage;
+          try {
+            cleaned = await cleanPage({
+              llm: opts.llm,
+              page: { url: item.url, title: item.title, source: item.outlet, markdown: content },
+            });
+          } catch (err: unknown) {
+            log?.(`news-desk: dropped ${item.outlet} (${item.url}) — clean failed: ${String(err)}`);
+            recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\nDROPPED — clean failed: ${String(err)}`);
             continue;
           }
+          if (!cleaned.isArticle) {
+            log?.(`news-desk: dropped ${item.outlet} (${item.url}) — no article on the page`);
+            recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\nDROPPED — no article on the page`);
+            continue;
+          }
+          if (underFloor(cleaned.text)) continue;
           // Artifact carries the scraped text itself (capped), not just a
           // length marker — provenance a reader can actually inspect.
-          recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\n${content.length} chars\n${content.slice(0, 20_000)}`);
-          pages.push({ outlet: item.outlet, title: item.title, url: item.url, content });
+          recordArtifact?.(`scrape: ${item.outlet}`, `${item.url}\n${cleaned.text.length} chars\n${cleaned.text.slice(0, 20_000)}`);
+          pages.push({ outlet: item.outlet, title: item.title, url: item.url, content: cleaned.text });
         }
         if (pages.length < knobs.minSources) {
           log?.(

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- News desk: every scraped page that clears the content floor is cut down to its
+  article by a Flash-Lite call (`presets/clean.ts`, `rules/clean.md`) before any
+  later step reads it. A page the model says holds no article, whose cleaning
+  fails, or whose cleaned text falls under the floor is dropped like any other
+  failed source, logged and recorded.
 - Firecrawl client (`clients/firecrawl-search.ts`): pages are requested with
   `onlyMainContent` and ARIA-role `excludeTags`, and a new `proxy` option takes
   `"basic"` for a self-hosted Firecrawl, which has no enhanced proxies for the

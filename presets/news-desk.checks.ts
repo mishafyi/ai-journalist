@@ -58,7 +58,7 @@ async function orchestrationChecks(): Promise<void> {
     `${outlet} full article body. The central bank raised its policy rate by 50 basis points to a twenty-year high. "We will stay the course," the chair said. Markets fell 2 percent on the announcement. `.repeat(2);
   const PAGES: Record<string, string> = {
     "https://wire.example/rates": REAL("Wire"),
-    "https://beacon.example/rates": `${REAL("Beacon")} See [the filing](https://beacon.example/filing) for details.`,
+    "https://beacon.example/rates": `${REAL("Beacon")} See [the filing](https://beacon.example/filing) for details. Sign up for our newsletter.`,
     "https://teaser.example/rates": "Subscribe to continue reading. Create a free account to unlock this article and get unlimited access.",
     "https://www.bloomberg.com/rates": REAL("Blocked Times"),
     "https://hunt-a.example/story": REAL("Hunt A"),
@@ -141,6 +141,10 @@ async function orchestrationChecks(): Promise<void> {
       return COLUMN;
     },
     async completeStructured<T>(args: { schemaName?: string; messages?: { content: string }[] }): Promise<T> {
+      if (args.schemaName === "page_clean") {
+        const { page } = JSON.parse(args.messages?.at(-1)?.content ?? "{}") as { page: { markdown: string } };
+        return { isArticle: true, text: page.markdown.replace(" Sign up for our newsletter.", "") } as unknown as T;
+      }
       if (args.schemaName === "covered_check") {
         const user = (args.messages ?? []).map((m) => m.content).join("\n");
         const trending = /^TRENDING: (.+)$/m.exec(user)?.[1] ?? "";
@@ -362,6 +366,55 @@ async function orchestrationChecks(): Promise<void> {
   }
   ok("≥3-source floor: no surviving story → loud throw with N interpolated",
     threw.includes("news-desk: no trending story resolved ≥3 scrapable sources"), threw);
+
+  ok("the desk reads the cleaned page, not the scraped one",
+    artifacts.some((a) => a.label === "scrape: Beacon" && a.content.includes("See the filing for details.") && !a.content.includes("Sign up for our newsletter")) &&
+      prompts.some((p) => p.includes("See the filing for details.")) &&
+      !prompts.some((p) => p.includes("Sign up for our newsletter")),
+    artifacts.filter((a) => a.label === "scrape: Beacon").map((a) => a.content.slice(-90)).join(" | "));
+
+  // The cleaner's answer drops a page like the other floors do. With minSources 2,
+  // Wire and Beacon are the survivors, so losing Beacon ends the story with a loud throw.
+  const cleanRun = async (verdict: (page: { url: string; markdown: string }) => { isArticle: boolean; text: string }): Promise<{ logs: string[]; artifacts: { label: string; content: string }[]; asked: string[]; thrown: string }> => {
+    const run = { logs: [] as string[], artifacts: [] as { label: string; content: string }[], asked: [] as string[], thrown: "" };
+    const cleanLlm = {
+      ...llm,
+      async completeStructured<T>(args: { schemaName?: string; messages?: { content: string }[] }): Promise<T> {
+        if (args.schemaName !== "page_clean") return llm.completeStructured(args as never);
+        const { page } = JSON.parse(args.messages?.at(-1)?.content ?? "{}") as { page: { url: string; markdown: string } };
+        run.asked.push(page.url);
+        return verdict(page) as unknown as T;
+      },
+    } as unknown as LlmClient;
+    await createNewsDesk({
+      llm: cleanLlm, search, feeds: [], roster: [PERSONAS.historian], brand, sink, knobs,
+      coveredTopics: async () => [{ title: STORY1 }],
+      log: (line) => run.logs.push(line),
+      recordArtifact: (label, content) => run.artifacts.push({ label, content }),
+      trendingImpl: async () => trending,
+      indexImpl: async () => index,
+      internalsFactory,
+      parallelFetchImpl,
+    }).run().catch((err: unknown) => { run.thrown = String(err); });
+    return run;
+  };
+  const beacon = "https://beacon.example/rates";
+  const keep = (page: { markdown: string }): { isArticle: boolean; text: string } => ({ isArticle: true, text: page.markdown });
+  const noArticle = await cleanRun((p) => (p.url === beacon ? { isArticle: false, text: "" } : keep(p)));
+  ok("a page the cleaner says holds no article is dropped, logged and recorded",
+    noArticle.logs.some((l) => l.includes(`dropped Beacon (${beacon}) — no article on the page`)) &&
+      noArticle.artifacts.some((a) => a.label === "scrape: Beacon" && a.content.includes("DROPPED — no article on the page")),
+    noArticle.logs.join(" | "));
+  ok("that page counts against the source floor", noArticle.thrown.includes("no trending story resolved"), noArticle.thrown);
+  ok("a page already under the floor costs no cleaner call",
+    !noArticle.asked.includes("https://teaser.example/rates") && noArticle.asked.includes(beacon), noArticle.asked.join(","));
+  const failedClean = await cleanRun((p) => { if (p.url === beacon) throw new Error("every key spent"); return keep(p); });
+  ok("a cleaner failure drops that page and says why, without ending the run's other pages",
+    failedClean.logs.some((l) => l.includes(`dropped Beacon (${beacon}) — clean failed: Error: every key spent`)) && failedClean.asked.includes("https://wire.example/rates"),
+    failedClean.logs.join(" | "));
+  const thinClean = await cleanRun((p) => (p.url === beacon ? { isArticle: true, text: "Too short." } : keep(p)));
+  ok("cleaned text under the floor is dropped too",
+    thinClean.logs.some((l) => l.includes("Beacon") && l.includes("content-quality floor")), thinClean.logs.join(" | "));
 
   // Scenario 3 — the recentParallels guard (operator, 2026-07-24: the desk
   // kept reaching for the Panic of 1907 week after week). With the just-used
