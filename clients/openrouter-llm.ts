@@ -179,7 +179,7 @@ async function fetchRankedModels(client: OpenRouter): Promise<string[]> {
     inputModalities: "text",
     outputModalities: "text",
   });
-  const ids = res.data
+  const ids = res.result.data
     .map((m) => m.id)
     .filter((id): id is string => typeof id === "string" && id.length > 0);
   if (ids.length === 0) {

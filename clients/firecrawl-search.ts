@@ -24,7 +24,7 @@
  * fails strict tsc against firecrawl's literal-union `Array<"web"|"news"|
  * "images"|…>`.
  */
-import { Firecrawl } from "firecrawl";
+import { Firecrawl, type ScrapeOptions } from "firecrawl";
 import type { SearchClient, SearchResult } from "../ports";
 import { describeError } from "./trace";
 import type { Tracer } from "./trace";
@@ -38,8 +38,6 @@ interface FirecrawlWebHit {
   markdown?: string;
   metadata?: { statusCode?: number };
 }
-
-type ScrapeOptions = NonNullable<Parameters<Firecrawl["scrape"]>[1]>;
 
 /** A page that answered HTTP 400 or above: Firecrawl got the publisher's block or
  *  error page, whose text must not pass as the article. */
