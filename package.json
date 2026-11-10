@@ -99,14 +99,14 @@
     "test": "npm run test:checks && npm run test:example"
   },
   "dependencies": {
-    "@clack/prompts": "^1.8.1",
+    "@clack/prompts": "^1.9.0",
     "@google/genai": "^2.32.0",
     "@openrouter/sdk": "^0.13.67",
     "cheerio": "^1.2.0",
-    "commander": "^15.0.0",
+    "commander": "^15.1.0",
     "date-fns": "^4.4.0",
     "dotenv": "^17.4.2",
-    "firecrawl": "^4.51.0",
+    "firecrawl": "^4.52.0",
     "ollama": "^0.6.4",
     "p-limit": "^7.3.3",
     "remark": "^15.0.1",
